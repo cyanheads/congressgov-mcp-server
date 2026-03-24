@@ -229,7 +229,7 @@ export class CongressApiService {
       `/committee-report/${params.congress}/${params.reportType}/${params.reportNumber}`,
     );
     const reports = data.committeeReports;
-    return { report: Array.isArray(reports) ? reports[0] : reports ?? data };
+    return { report: Array.isArray(reports) ? reports[0] : (reports ?? data) };
   }
 
   async getCommitteeReportText(params: GetCommitteeReportParams): Promise<{ text: unknown }> {
@@ -287,7 +287,7 @@ export class CongressApiService {
     const items: unknown[] = Array.isArray(raw)
       ? raw
       : raw && typeof raw === 'object'
-        ? (Object.values(raw).find(Array.isArray) as unknown[]) ?? []
+        ? ((Object.values(raw).find(Array.isArray) as unknown[]) ?? [])
         : [];
     const pagination = this.extractPagination(data.pagination, items.length, params);
     return { [listKey]: items, data: items, pagination };

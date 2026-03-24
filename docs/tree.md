@@ -1,6 +1,6 @@
 # congressgov-mcp-server - Directory Structure
 
-Generated on: 2026-03-24 09:06:37
+Generated on: 2026-03-24 09:50:35
 
 ```text
 congressgov-mcp-server/
@@ -104,6 +104,33 @@ congressgov-mcp-server/
 │   │       └── types.ts
 │   └── index.ts
 ├── tests/
+│   ├── mcp-server/
+│   │   ├── prompts/
+│   │   │   └── definitions/
+│   │   │       ├── bill-analysis.prompt.test.ts
+│   │   │       └── legislative-research.prompt.test.ts
+│   │   ├── resources/
+│   │   │   └── definitions/
+│   │   │       ├── bill-types.resource.test.ts
+│   │   │       ├── bill.resource.test.ts
+│   │   │       ├── committee.resource.test.ts
+│   │   │       ├── current-congress.resource.test.ts
+│   │   │       └── member.resource.test.ts
+│   │   └── tools/
+│   │       └── definitions/
+│   │           ├── bill-lookup.tool.test.ts
+│   │           ├── bill-summaries.tool.test.ts
+│   │           ├── committee-lookup.tool.test.ts
+│   │           ├── committee-reports.tool.test.ts
+│   │           ├── crs-reports.tool.test.ts
+│   │           ├── daily-record.tool.test.ts
+│   │           ├── enacted-laws.tool.test.ts
+│   │           ├── member-lookup.tool.test.ts
+│   │           ├── roll-votes.tool.test.ts
+│   │           └── senate-nominations.tool.test.ts
+│   └── services/
+│       └── congress-api/
+│           └── congress-api-service.test.ts
 ├── .dockerignore
 ├── .env.example
 ├── .gitignore

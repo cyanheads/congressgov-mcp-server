@@ -70,12 +70,10 @@ Partitioned nominations (e.g., PN230-1, PN230-2) occur when nominees within one 
           "The 'nominees' operation requires 'ordinal' — the position number within the nomination. Use 'get' first to see available ordinals in the nominees array.",
         );
       }
-      const result = await api.getNominee(
-        input.congress,
-        input.nominationNumber,
-        input.ordinal,
-        { limit: input.limit, offset: input.offset },
-      );
+      const result = await api.getNominee(input.congress, input.nominationNumber, input.ordinal, {
+        limit: input.limit,
+        offset: input.offset,
+      });
       ctx.log.info('Nominee retrieved', {
         congress: input.congress,
         nominationNumber: input.nominationNumber,

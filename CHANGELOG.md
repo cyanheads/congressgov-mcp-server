@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.1] - 2026-03-24
+
+### Added
+
+- Full test suite: 10 tool tests, 5 resource tests, 2 prompt tests, and congress-api-service tests using `createMockContext` and Vitest
+- Updated `docs/tree.md` to reflect new `tests/` directory structure
+
+### Fixed
+
+- Operator precedence parentheses in `congress-api-service.ts` for nullish coalescing expressions
+- Formatting in `senate-nominations.tool.ts`
+
 ## [0.2.0] - 2026-03-24
 
 ### Fixed
