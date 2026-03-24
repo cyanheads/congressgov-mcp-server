@@ -12,7 +12,7 @@ export const rollVotesTool = tool('congressgov_roll_votes', {
 NOTE: Covers House votes only — Senate vote data is not yet in the Congress.gov API.
 
 Use 'list' to find votes by congress and session, 'get' for vote details (question, result, associated bill), and 'members' for how each representative voted.`,
-  annotations: { readOnlyHint: true, openWorldHint: true },
+  annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
   input: z.object({
     operation: z.enum(['list', 'get', 'members']).describe('Which data to retrieve.'),
     congress: z.number().int().positive().describe('Congress number.'),
@@ -53,15 +53,19 @@ Use 'list' to find votes by congress and session, 'get' for vote details (questi
       );
     }
 
-    const result = await api.getVote({
+    const voteParams = {
       congress: input.congress,
       session: input.session,
       voteNumber: input.voteNumber,
-    });
+    };
+
+    const result =
+      input.operation === 'members'
+        ? await api.getVoteMembers(voteParams)
+        : await api.getVote(voteParams);
     ctx.log.info('Vote retrieved', {
-      congress: input.congress,
-      session: input.session,
-      voteNumber: input.voteNumber,
+      ...voteParams,
+      operation: input.operation,
     });
     return result;
   },

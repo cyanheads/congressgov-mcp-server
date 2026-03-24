@@ -12,7 +12,7 @@ export const senateNominationsTool = tool('congressgov_senate_nominations', {
 Nominations use 'PN' (Presidential Nomination) numbering. A single nomination may contain multiple nominees — use 'nominees' to see individual appointees.
 
 Partitioned nominations (e.g., PN230-1, PN230-2) occur when nominees within one nomination follow different confirmation paths.`,
-  annotations: { readOnlyHint: true, openWorldHint: true },
+  annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
   input: z.object({
     operation: z
       .enum(['list', 'get', 'nominees', 'actions', 'committees', 'hearings'])
@@ -55,11 +55,31 @@ Partitioned nominations (e.g., PN230-1, PN230-2) occur when nominees within one 
       );
     }
 
-    if (input.operation === 'get' || input.operation === 'nominees') {
+    if (input.operation === 'get') {
       const result = await api.getNomination(input.congress, input.nominationNumber);
       ctx.log.info('Nomination retrieved', {
         congress: input.congress,
         nominationNumber: input.nominationNumber,
+      });
+      return result;
+    }
+
+    if (input.operation === 'nominees') {
+      if (!input.ordinal) {
+        throw new Error(
+          "The 'nominees' operation requires 'ordinal' — the position number within the nomination. Use 'get' first to see available ordinals in the nominees array.",
+        );
+      }
+      const result = await api.getNominee(
+        input.congress,
+        input.nominationNumber,
+        input.ordinal,
+        { limit: input.limit, offset: input.offset },
+      );
+      ctx.log.info('Nominee retrieved', {
+        congress: input.congress,
+        nominationNumber: input.nominationNumber,
+        ordinal: input.ordinal,
       });
       return result;
     }
