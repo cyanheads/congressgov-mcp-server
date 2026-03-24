@@ -1,10 +1,17 @@
 # Changelog
 
+## [0.3.2] - 2026-03-24
+
+### Changed
+
+- Restored explicit `idempotentHint: true` on all tool annotations
+- Removed Cloudflare KV/R2/D1 from README storage backends list
+- Updated 5xx retry test to verify retry count and mock `text()` method
+
 ## [0.3.1] - 2026-03-24
 
 ### Changed
 
-- Removed explicit `idempotentHint` from all tool annotations — the framework infers it from `readOnlyHint`
 - Added retry with exponential backoff for 5xx API errors (3 attempts with 1s/2s/4s delays)
 
 ### Fixed

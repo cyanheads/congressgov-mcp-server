@@ -1,6 +1,6 @@
 {
   "name": "@cyanheads/congressgov-mcp-server",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "MCP server for the Congress.gov API v3 — browse bills, members, committees, votes, nominations, and more.",
   "mcpName": "io.github.cyanheads/congressgov-mcp-server",
   "type": "module",
