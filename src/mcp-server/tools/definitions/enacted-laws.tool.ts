@@ -14,7 +14,7 @@ Use 'list' to browse laws by congress. Each law references its origin bill — u
 Law types:
 - pub: Public laws (general application, most common)
 - priv: Private laws (specific individuals or entities)`,
-  annotations: { readOnlyHint: true, openWorldHint: true },
+  annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
   input: z.object({
     operation: z.enum(['list', 'get']).describe('Which data to retrieve.'),
     congress: z.number().int().positive().describe('Congress number.'),
