@@ -12,7 +12,7 @@ export const billSummariesTool = tool('congressgov_bill_summaries', {
 This is the best tool for answering "what's happening in Congress?" — CRS analysts write plain-language summaries of bills at each legislative stage.
 
 By default, returns summaries from the last 7 days. Specify fromDateTime/toDateTime for custom ranges. Each summary includes the associated bill reference (congress, type, number) for follow-up with congressgov_bill_lookup.`,
-  annotations: { readOnlyHint: true, openWorldHint: true },
+  annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
   input: z.object({
     congress: z
       .number()
@@ -46,7 +46,7 @@ By default, returns summaries from the last 7 days. Specify fromDateTime/toDateT
     const fromDateTime =
       input.fromDateTime ??
       (!input.toDateTime
-        ? new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
+        ? new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z')
         : undefined);
 
     const api = getCongressApi();

@@ -79,7 +79,7 @@ export class CongressApiService {
     const path = params.lawType
       ? `/law/${params.congress}/${params.lawType}`
       : `/law/${params.congress}`;
-    return this.fetchList(path, 'laws', params);
+    return this.fetchList(path, 'bills', params);
   }
 
   async getLaw(params: GetLawParams): Promise<{ law: unknown }> {
@@ -140,14 +140,25 @@ export class CongressApiService {
   // --- Votes ---
 
   listVotes(params: ListVotesParams): Promise<FetchListResult> {
-    return this.fetchList(`/house-vote/${params.congress}/${params.session}`, 'houseVotes', params);
+    return this.fetchList(
+      `/house-vote/${params.congress}/${params.session}`,
+      'houseRollCallVotes',
+      params,
+    );
   }
 
   async getVote(params: GetVoteParams): Promise<{ vote: unknown }> {
     const data = await this.get(
       `/house-vote/${params.congress}/${params.session}/${params.voteNumber}`,
     );
-    return { vote: data.houseVote ?? data['house-vote'] ?? data };
+    return { vote: data.houseRollCallVote ?? data };
+  }
+
+  async getVoteMembers(params: GetVoteParams): Promise<{ vote: unknown }> {
+    const data = await this.get(
+      `/house-vote/${params.congress}/${params.session}/${params.voteNumber}/members`,
+    );
+    return { vote: data.houseRollCallVoteMemberVotes ?? data };
   }
 
   // --- Nominations ---
@@ -162,6 +173,19 @@ export class CongressApiService {
   ): Promise<{ nomination: unknown }> {
     const data = await this.get(`/nomination/${congress}/${nominationNumber}`);
     return { nomination: data.nomination };
+  }
+
+  getNominee(
+    congress: number,
+    nominationNumber: string,
+    ordinal: number,
+    params?: PaginationParams,
+  ): Promise<FetchListResult> {
+    return this.fetchList(
+      `/nomination/${congress}/${nominationNumber}/${ordinal}`,
+      'nominees',
+      params,
+    );
   }
 
   getNominationSubResource(params: NominationSubResourceParams): Promise<FetchListResult> {
@@ -183,12 +207,12 @@ export class CongressApiService {
   // --- CRS Reports ---
 
   listCrsReports(params?: PaginationParams): Promise<FetchListResult> {
-    return this.fetchList('/crs-report', 'CRSReports', params);
+    return this.fetchList('/crsreport', 'CRSReports', params);
   }
 
   async getCrsReport(params: GetCrsReportParams): Promise<{ report: unknown }> {
-    const data = await this.get(`/crs-report/${params.reportNumber}`);
-    return { report: data.crsReport ?? data.CRSReport ?? data };
+    const data = await this.get(`/crsreport/${params.reportNumber}`);
+    return { report: data.CRSReport ?? data };
   }
 
   // --- Committee Reports ---
@@ -197,14 +221,15 @@ export class CongressApiService {
     const path = params.reportType
       ? `/committee-report/${params.congress}/${params.reportType}`
       : `/committee-report/${params.congress}`;
-    return this.fetchList(path, 'committeeReports', params);
+    return this.fetchList(path, 'reports', params);
   }
 
   async getCommitteeReport(params: GetCommitteeReportParams): Promise<{ report: unknown }> {
     const data = await this.get(
       `/committee-report/${params.congress}/${params.reportType}/${params.reportNumber}`,
     );
-    return { report: data.committeeReport ?? data };
+    const reports = data.committeeReports;
+    return { report: Array.isArray(reports) ? reports[0] : reports ?? data };
   }
 
   async getCommitteeReportText(params: GetCommitteeReportParams): Promise<{ text: unknown }> {
@@ -257,7 +282,13 @@ export class CongressApiService {
     if (params?.toDateTime) query.toDateTime = params.toDateTime;
 
     const data = await this.get(path, query);
-    const items: unknown[] = data[listKey] ?? [];
+    const raw = data[listKey];
+    // Some endpoints (e.g. committee-bills) nest the array inside an object — unwrap it.
+    const items: unknown[] = Array.isArray(raw)
+      ? raw
+      : raw && typeof raw === 'object'
+        ? (Object.values(raw).find(Array.isArray) as unknown[]) ?? []
+        : [];
     const pagination = this.extractPagination(data.pagination, items.length, params);
     return { [listKey]: items, data: items, pagination };
   }
@@ -331,7 +362,7 @@ export class CongressApiService {
       actions: 'actions',
       amendments: 'amendments',
       articles: 'articles',
-      bills: 'bills',
+      bills: 'committee-bills',
       committees: 'committees',
       cosponsors: 'cosponsors',
       hearings: 'hearings',
