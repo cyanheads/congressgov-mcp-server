@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.3.1] - 2026-03-24
+
+### Changed
+
+- Removed explicit `idempotentHint` from all tool annotations — the framework infers it from `readOnlyHint`
+- Added retry with exponential backoff for 5xx API errors (3 attempts with 1s/2s/4s delays)
+
+### Fixed
+
+- npm badge URL now points to scoped package `@cyanheads/congressgov-mcp-server`
+
 ## [0.3.0] - 2026-03-24
 
 ### Changed
