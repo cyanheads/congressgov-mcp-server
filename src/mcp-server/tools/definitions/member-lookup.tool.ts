@@ -17,7 +17,7 @@ The API does not support name search. To find a member:
 - By current status: use 'list' with currentMember=true
 
 Once you have a bioguideId, use 'get' for full profile or 'sponsored'/'cosponsored' for legislative portfolio. The bioguideId also works with the congress://member/{bioguideId} resource.`,
-  annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
+  annotations: { readOnlyHint: true, openWorldHint: true },
   input: z.object({
     operation: z
       .enum(['list', 'get', 'sponsored', 'cosponsored'])

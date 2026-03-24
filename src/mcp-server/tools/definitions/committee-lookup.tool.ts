@@ -14,7 +14,7 @@ export const committeeLookupTool = tool('congressgov_committee_lookup', {
 Committee codes follow the pattern: chamber prefix (h/s/j) + abbreviation + number. Use 'list' to discover codes, then drill into bills, reports, or nominations.
 
 The 'nominations' operation is available for Senate committees only. The committeeCode also works with the congress://committee/{committeeCode} resource.`,
-  annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
+  annotations: { readOnlyHint: true, openWorldHint: true },
   input: z.object({
     operation: z
       .enum(['list', 'get', 'bills', 'reports', 'nominations'])

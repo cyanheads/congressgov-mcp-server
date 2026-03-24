@@ -38,6 +38,8 @@ interface FetchListResult {
   [key: string]: unknown;
 }
 
+const MAX_RETRIES = 3;
+const BASE_BACKOFF_MS = 1000;
 const RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000;
 const RATE_LIMIT_MAX = 5000;
 
@@ -326,36 +328,42 @@ export class CongressApiService {
       }
     }
 
-    const res = await fetch(url.toString(), {
-      headers: { Accept: 'application/json' },
-    });
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+      const res = await fetch(url.toString(), {
+        headers: { Accept: 'application/json' },
+      });
 
-    if (res.status === 429) {
-      throw rateLimited(
-        'Congress.gov API rate limit reached (5,000 requests/hour). Wait before retrying — the limit resets hourly.',
-      );
-    }
-
-    if (res.status >= 500) {
-      const body = await res.text().catch(() => '');
-      // The API returns 500 instead of 404 for some nonexistent entities —
-      // these have structured JSON error bodies vs. empty/HTML for real outages
-      if (body.includes('"error"')) {
-        throw new Error(`Congress.gov API returned HTTP ${res.status}: ${body}`);
+      if (res.status === 429) {
+        throw rateLimited(
+          'Congress.gov API rate limit reached (5,000 requests/hour). Wait before retrying — the limit resets hourly.',
+        );
       }
-      throw serviceUnavailable(
-        `Congress.gov API returned HTTP ${res.status}. The service may be temporarily unavailable — retry after a brief wait.`,
-        { status: res.status },
-      );
-    }
 
-    if (!res.ok) {
-      const body = await res.text().catch(() => '');
-      throw new Error(`Congress.gov API returned HTTP ${res.status}: ${body || res.statusText}`);
-    }
+      if (res.status >= 500) {
+        const body = await res.text().catch(() => '');
+        // The API returns 500 instead of 404 for some nonexistent entities —
+        // these have structured JSON error bodies vs. empty/HTML for real outages
+        if (body.includes('"error"')) {
+          throw new Error(`Congress.gov API returned HTTP ${res.status}: ${body}`);
+        }
+        if (attempt < MAX_RETRIES - 1) {
+          await sleep(BASE_BACKOFF_MS * 2 ** attempt);
+          continue;
+        }
+        throw serviceUnavailable(
+          `Congress.gov API returned HTTP ${res.status} after ${MAX_RETRIES} attempts.`,
+          { status: res.status },
+        );
+      }
 
-    this.requestCount++;
-    return res.json();
+      if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        throw new Error(`Congress.gov API returned HTTP ${res.status}: ${body || res.statusText}`);
+      }
+
+      this.requestCount++;
+      return res.json();
+    }
   }
 
   private checkRateLimit(): void {
@@ -390,6 +398,10 @@ export class CongressApiService {
     };
     return mapping[subResource] ?? subResource;
   }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 let _service: CongressApiService | undefined;

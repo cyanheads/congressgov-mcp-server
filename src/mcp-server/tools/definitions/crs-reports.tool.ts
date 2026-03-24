@@ -14,7 +14,7 @@ export const crsReportsTool = tool('congressgov_crs_reports', {
 CRS reports cover policy areas, legislative proposals, and legal questions. Report IDs use letter-number codes (e.g., R40097, RL33612, IF12345).
 
 Use 'list' to browse available reports, 'get' for full detail including authors, topics, summary, and available download formats.`,
-  annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
+  annotations: { readOnlyHint: true, openWorldHint: true },
   input: z.object({
     operation: z.enum(['list', 'get']).describe('Which data to retrieve.'),
     reportNumber: z
