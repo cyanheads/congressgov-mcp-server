@@ -1,12 +1,15 @@
 <div align="center">
-  <h1>congressgov-mcp-server</h1>
-  <p><b>MCP server for the Congress.gov API v3 — the official machine-readable interface to U.S. legislative data maintained by the Library of Congress. Browse bills, members, committees, votes, nominations, and more. STDIO & Streamable HTTP.</b></p>
-  <p><b>10 Tools · 5 Resources · 2 Prompts</b></p>
+  <h1>@cyanheads/congressgov-mcp-server</h1>
+  <p><b>MCP server for the Congress.gov API v3 — the official machine-readable interface to U.S. legislative data maintained by the Library of Congress. Browse bills, members, committees, votes, nominations, and more. STDIO & Streamable HTTP.</b>
+  <div>10 Tools • 5 Resources • 2 Prompts</div>
+  </p>
 </div>
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-0.2.1-blue.svg?style=flat-square)](./CHANGELOG.md) [![Framework](https://img.shields.io/badge/Built%20on-@cyanheads/mcp--ts--core-259?style=flat-square)](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.27.1-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![TypeScript](https://img.shields.io/badge/TypeScript-^5.9.3-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/)
+[![npm](https://img.shields.io/npm/v/congressgov-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/congressgov-mcp-server) [![Version](https://img.shields.io/badge/Version-0.3.0-blue.svg?style=flat-square)](./CHANGELOG.md) [![Framework](https://img.shields.io/badge/Built%20on-@cyanheads/mcp--ts--core-259?style=flat-square)](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.27.1-green.svg?style=flat-square)](https://modelcontextprotocol.io/)
+
+[![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![TypeScript](https://img.shields.io/badge/TypeScript-^6.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.2-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -16,18 +19,18 @@
 
 Ten read-only tools for querying U.S. legislative data:
 
-| Tool Name | Description |
-|:----------|:------------|
-| `congressgov_bill_lookup` | Browse and retrieve U.S. legislative bill data — actions, sponsors, summaries, text, related bills. |
-| `congressgov_enacted_laws` | Browse enacted public and private laws by congress. |
-| `congressgov_member_lookup` | Discover congressional members by state/district/congress, retrieve legislative portfolios. |
-| `congressgov_committee_lookup` | Browse congressional committees and their legislation, reports, and nominations. |
-| `congressgov_roll_votes` | Retrieve House roll call vote data and individual member voting positions. |
-| `congressgov_senate_nominations` | Browse presidential nominations to federal positions and track the Senate confirmation process. |
-| `congressgov_bill_summaries` | Browse recent CRS bill summaries — the "what's happening" feed. |
-| `congressgov_crs_reports` | Browse and retrieve nonpartisan CRS policy analysis reports. |
-| `congressgov_committee_reports` | Browse and retrieve committee reports accompanying legislation. |
-| `congressgov_daily_record` | Browse the daily Congressional Record — floor speeches, debates, and proceedings. |
+| Tool | Description |
+|:---|:---|
+| `congressgov_bill_lookup` | Browse and retrieve U.S. legislative bill data — actions, sponsors, summaries, text, related bills |
+| `congressgov_enacted_laws` | Browse enacted public and private laws by congress |
+| `congressgov_member_lookup` | Discover congressional members by state/district/congress, retrieve legislative portfolios |
+| `congressgov_committee_lookup` | Browse congressional committees and their legislation, reports, and nominations |
+| `congressgov_roll_votes` | Retrieve House roll call vote data and individual member voting positions |
+| `congressgov_senate_nominations` | Browse presidential nominations to federal positions and track the Senate confirmation process |
+| `congressgov_bill_summaries` | Browse recent CRS bill summaries — the "what's happening" feed |
+| `congressgov_crs_reports` | Browse and retrieve nonpartisan CRS policy analysis reports |
+| `congressgov_committee_reports` | Browse and retrieve committee reports accompanying legislation |
+| `congressgov_daily_record` | Browse the daily Congressional Record — floor speeches, debates, and proceedings |
 
 ### `congressgov_bill_lookup`
 
@@ -96,19 +99,19 @@ Browse the daily Congressional Record — floor speeches, debates, and legislati
 ## Resources
 
 | URI Pattern | Description |
-|:------------|:------------|
-| `congress://current` | Current congress number, session dates, chamber info. |
-| `congress://bill-types` | Reference table of valid bill type codes. |
-| `congress://member/{bioguideId}` | Member profile by bioguide ID. |
-| `congress://bill/{congress}/{billType}/{billNumber}` | Bill detail by congress, type, and number. |
-| `congress://committee/{committeeCode}` | Committee detail by committee code. |
+|:---|:---|
+| `congress://current` | Current congress number, session dates, chamber info |
+| `congress://bill-types` | Reference table of valid bill type codes |
+| `congress://member/{bioguideId}` | Member profile by bioguide ID |
+| `congress://bill/{congress}/{billType}/{billNumber}` | Bill detail by congress, type, and number |
+| `congress://committee/{committeeCode}` | Committee detail by committee code |
 
 ## Prompts
 
 | Prompt | Description |
-|:-------|:------------|
-| `congressgov_bill_analysis` | Structured framework for analyzing a bill. |
-| `congressgov_legislative_research` | Research framework for a policy area across Congress. |
+|:---|:---|
+| `congressgov_bill_analysis` | Structured framework for analyzing a bill |
+| `congressgov_legislative_research` | Research framework for a policy area across Congress |
 
 ## Features
 
@@ -129,11 +132,11 @@ Congress.gov-specific:
 - Rate limiting awareness (5,000 requests/hour per key)
 - All tools are read-only and idempotent
 
-## Getting Started
+## Getting started
 
-### MCP Client Configuration
+### MCP client configuration
 
-Add to your MCP client config (e.g., `claude_desktop_config.json`):
+Add the following to your MCP client configuration file.
 
 ```json
 {
@@ -141,7 +144,7 @@ Add to your MCP client config (e.g., `claude_desktop_config.json`):
     "congressgov": {
       "type": "stdio",
       "command": "bunx",
-      "args": ["congressgov-mcp-server@latest"],
+      "args": ["@cyanheads/congressgov-mcp-server@latest"],
       "env": {
         "CONGRESS_API_KEY": "your-api-key"
       }
@@ -150,67 +153,107 @@ Add to your MCP client config (e.g., `claude_desktop_config.json`):
 }
 ```
 
+Or with npx (no Bun required):
+
+```json
+{
+  "mcpServers": {
+    "congressgov": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@cyanheads/congressgov-mcp-server@latest"],
+      "env": {
+        "CONGRESS_API_KEY": "your-api-key"
+      }
+    }
+  }
+}
+```
+
+Or with Docker:
+
+```json
+{
+  "mcpServers": {
+    "congressgov": {
+      "type": "stdio",
+      "command": "docker",
+      "args": ["run", "-i", "--rm", "-e", "CONGRESS_API_KEY=your-api-key", "-e", "MCP_TRANSPORT_TYPE=stdio", "ghcr.io/cyanheads/congressgov-mcp-server:latest"]
+    }
+  }
+}
+```
+
+For Streamable HTTP, set the transport and start the server:
+
+```sh
+MCP_TRANSPORT_TYPE=http MCP_HTTP_PORT=3010 bun run start:http
+# Server listens at http://localhost:3010/mcp
+```
+
 Get a free API key at [api.data.gov/signup](https://api.data.gov/signup/) (5,000 requests/hour).
 
 ### Prerequisites
 
-- [Bun v1.2.0](https://bun.sh/) or higher
+- [Bun v1.3.2](https://bun.sh/) or higher.
 
 ### Installation
 
 1. **Clone the repository:**
-   ```sh
-   git clone https://github.com/cyanheads/congressgov-mcp-server.git
-   ```
+
+```sh
+git clone https://github.com/cyanheads/congressgov-mcp-server.git
+```
 
 2. **Navigate into the directory:**
-   ```sh
-   cd congressgov-mcp-server
-   ```
+
+```sh
+cd congressgov-mcp-server
+```
 
 3. **Install dependencies:**
-   ```sh
-   bun install
-   ```
+
+```sh
+bun install
+```
 
 4. **Configure environment:**
-   ```sh
-   cp .env.example .env
-   # Edit .env and add your CONGRESS_API_KEY
-   ```
+
+```sh
+cp .env.example .env
+# Edit .env and add your CONGRESS_API_KEY
+```
 
 ## Configuration
 
+All configuration is validated at startup via Zod schemas in `src/config/server-config.ts`. Key environment variables:
+
 | Variable | Description | Default |
-|:---------|:------------|:--------|
-| `CONGRESS_API_KEY` | **Required.** API key from [api.data.gov](https://api.data.gov/signup/). | — |
-| `CONGRESS_API_BASE_URL` | Congress.gov API base URL. | `https://api.congress.gov/v3` |
-| `MCP_TRANSPORT_TYPE` | Transport: `stdio` or `http`. | `stdio` |
-| `MCP_HTTP_PORT` | Port for HTTP server. | `3010` |
-| `MCP_AUTH_MODE` | Auth mode: `none`, `jwt`, or `oauth`. | `none` |
-| `MCP_LOG_LEVEL` | Log level (RFC 5424). | `info` |
-| `STORAGE_PROVIDER_TYPE` | Storage backend. | `in-memory` |
-| `OTEL_ENABLED` | Enable OpenTelemetry. | `false` |
+|:---|:---|:---|
+| `CONGRESS_API_KEY` | **Required.** API key from [api.data.gov](https://api.data.gov/signup/) | — |
+| `CONGRESS_API_BASE_URL` | Congress.gov API base URL | `https://api.congress.gov/v3` |
+| `MCP_TRANSPORT_TYPE` | Transport: `stdio` or `http` | `stdio` |
+| `MCP_HTTP_PORT` | HTTP server port | `3010` |
+| `MCP_AUTH_MODE` | Authentication: `none`, `jwt`, or `oauth` | `none` |
+| `MCP_LOG_LEVEL` | Log level (`debug`, `info`, `warning`, `error`, etc.) | `info` |
+| `STORAGE_PROVIDER_TYPE` | Storage backend | `in-memory` |
+| `OTEL_ENABLED` | Enable OpenTelemetry | `false` |
 
-## Running the Server
+## Running the server
 
-### Local Development
+### Local development
 
 - **Build and run the production version:**
-  ```sh
-  bun run build
-  bun run start:stdio   # or start:http
-  ```
 
-- **Run in development mode (auto-reload):**
   ```sh
-  bun run dev:stdio     # or dev:http
+  bun run rebuild
+  bun run start:http   # or start:stdio
   ```
 
 - **Run checks and tests:**
   ```sh
   bun run devcheck     # Lints, formats, type-checks
-  bun test             # Runs test suite
+  bun run test         # Runs test suite
   ```
 
 ### Docker
@@ -220,17 +263,18 @@ docker build -t congressgov-mcp-server .
 docker run -e CONGRESS_API_KEY=your-api-key -p 3010:3010 congressgov-mcp-server
 ```
 
-## Project Structure
+## Project structure
 
 | Directory | Purpose |
-|:----------|:--------|
-| `src/mcp-server/tools/definitions/` | Tool definitions (`*.tool.ts`). |
-| `src/mcp-server/resources/definitions/` | Resource definitions (`*.resource.ts`). |
-| `src/mcp-server/prompts/definitions/` | Prompt definitions (`*.prompt.ts`). |
+|:---|:---|
+| `src/mcp-server/tools/definitions/` | Tool definitions (`*.tool.ts`). Ten Congress.gov tools. |
+| `src/mcp-server/resources/definitions/` | Resource definitions. Congress, bill, member, and committee resources. |
+| `src/mcp-server/prompts/definitions/` | Prompt definitions. Bill analysis and legislative research prompts. |
 | `src/services/congress-api/` | Congress.gov API client — auth, pagination, rate limiting. |
-| `src/config/` | Environment variable parsing and validation with Zod. |
+| `src/config/` | Server-specific environment variable parsing and validation with Zod. |
+| `tests/` | Unit and integration tests, mirroring the `src/` structure. |
 
-## Development Guide
+## Development guide
 
 See [`CLAUDE.md`](./CLAUDE.md) for development guidelines and architectural rules. The short version:
 
@@ -240,13 +284,13 @@ See [`CLAUDE.md`](./CLAUDE.md) for development guidelines and architectural rule
 
 ## Contributing
 
-Issues and pull requests are welcome. Run checks before submitting:
+Issues and pull requests are welcome. Run checks and tests before submitting:
 
 ```sh
 bun run devcheck
-bun test
+bun run test
 ```
 
 ## License
 
-Apache-2.0 — see [LICENSE](LICENSE) for details.
+This project is licensed under the Apache 2.0 License. See the [LICENSE](./LICENSE) file for details.

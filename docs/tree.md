@@ -1,6 +1,6 @@
 # congressgov-mcp-server - Directory Structure
 
-Generated on: 2026-03-24 09:50:35
+Generated on: 2026-03-24 10:51:49
 
 ```text
 congressgov-mcp-server/
@@ -87,17 +87,18 @@ congressgov-mcp-server/
 │   │   │       ├── current-congress.resource.ts
 │   │   │       └── member.resource.ts
 │   │   └── tools/
-│   │       └── definitions/
-│   │           ├── bill-lookup.tool.ts
-│   │           ├── bill-summaries.tool.ts
-│   │           ├── committee-lookup.tool.ts
-│   │           ├── committee-reports.tool.ts
-│   │           ├── crs-reports.tool.ts
-│   │           ├── daily-record.tool.ts
-│   │           ├── enacted-laws.tool.ts
-│   │           ├── member-lookup.tool.ts
-│   │           ├── roll-votes.tool.ts
-│   │           └── senate-nominations.tool.ts
+│   │       ├── definitions/
+│   │       │   ├── bill-lookup.tool.ts
+│   │       │   ├── bill-summaries.tool.ts
+│   │       │   ├── committee-lookup.tool.ts
+│   │       │   ├── committee-reports.tool.ts
+│   │       │   ├── crs-reports.tool.ts
+│   │       │   ├── daily-record.tool.ts
+│   │       │   ├── enacted-laws.tool.ts
+│   │       │   ├── member-lookup.tool.ts
+│   │       │   ├── roll-votes.tool.ts
+│   │       │   └── senate-nominations.tool.ts
+│   │       └── format-helpers.ts
 │   ├── services/
 │   │   └── congress-api/
 │   │       ├── congress-api-service.ts
