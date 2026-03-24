@@ -13,6 +13,12 @@
 
 </div>
 
+<div align="center">
+
+**Public Hosted Server:** [https://congressgov.caseyjhand.com/mcp](https://congressgov.caseyjhand.com/mcp)
+
+</div>
+
 ---
 
 ## Tools
@@ -134,14 +140,29 @@ Congress.gov-specific:
 
 ## Getting started
 
-### MCP client configuration
+### Public Hosted Instance
+
+A public instance is available at `https://congressgov.caseyjhand.com/mcp` — no installation required. Point any MCP client at it via Streamable HTTP:
+
+```json
+{
+  "mcpServers": {
+    "congressgov-mcp-server": {
+      "type": "streamable-http",
+      "url": "https://congressgov.caseyjhand.com/mcp"
+    }
+  }
+}
+```
+
+### Self-Hosted / Local
 
 Add the following to your MCP client configuration file.
 
 ```json
 {
   "mcpServers": {
-    "congressgov": {
+    "congressgov-mcp-server": {
       "type": "stdio",
       "command": "bunx",
       "args": ["@cyanheads/congressgov-mcp-server@latest"],
@@ -158,7 +179,7 @@ Or with npx (no Bun required):
 ```json
 {
   "mcpServers": {
-    "congressgov": {
+    "congressgov-mcp-server": {
       "type": "stdio",
       "command": "npx",
       "args": ["-y", "@cyanheads/congressgov-mcp-server@latest"],
@@ -168,27 +189,6 @@ Or with npx (no Bun required):
     }
   }
 }
-```
-
-Or with Docker:
-
-```json
-{
-  "mcpServers": {
-    "congressgov": {
-      "type": "stdio",
-      "command": "docker",
-      "args": ["run", "-i", "--rm", "-e", "CONGRESS_API_KEY=your-api-key", "-e", "MCP_TRANSPORT_TYPE=stdio", "ghcr.io/cyanheads/congressgov-mcp-server:latest"]
-    }
-  }
-}
-```
-
-For Streamable HTTP, set the transport and start the server:
-
-```sh
-MCP_TRANSPORT_TYPE=http MCP_HTTP_PORT=3010 bun run start:http
-# Server listens at http://localhost:3010/mcp
 ```
 
 Get a free API key at [api.data.gov/signup](https://api.data.gov/signup/) (5,000 requests/hour).
@@ -215,13 +215,6 @@ cd congressgov-mcp-server
 
 ```sh
 bun install
-```
-
-4. **Configure environment:**
-
-```sh
-cp .env.example .env
-# Edit .env and add your CONGRESS_API_KEY
 ```
 
 ## Configuration
