@@ -12,7 +12,7 @@ export const dailyRecordTool = tool('congressgov_daily_record', {
   description: `Browse the daily Congressional Record — floor speeches, debates, and legislative text published each day Congress is in session.
 
 Navigation is hierarchical: list → volumes, issues → individual articles. Use 'list' to find recent volumes, 'issues' to see what's in a volume, and 'articles' to access individual speeches and debate sections.`,
-  annotations: { readOnlyHint: true, openWorldHint: true },
+  annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
   input: z.object({
     operation: z.enum(['list', 'issues', 'articles']).describe('Which data to retrieve.'),
     volumeNumber: z

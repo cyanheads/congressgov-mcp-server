@@ -17,7 +17,7 @@ Report types:
 - hrpt: House reports
 - srpt: Senate reports
 - erpt: Executive reports`,
-  annotations: { readOnlyHint: true, openWorldHint: true },
+  annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
   input: z.object({
     operation: z.enum(['list', 'get', 'text']).describe('Which data to retrieve.'),
     congress: z.number().int().positive().describe('Congress number.'),

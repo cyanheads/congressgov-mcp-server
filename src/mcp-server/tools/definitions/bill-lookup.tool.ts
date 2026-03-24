@@ -40,7 +40,7 @@ Operations:
 - actions/amendments/cosponsors/committees/subjects/summaries/text/titles/related: Sub-resources for a specific bill. Require congress + billType + billNumber.
 
 For enacted laws, use 'congressgov_enacted_laws' instead.`,
-  annotations: { readOnlyHint: true, openWorldHint: true },
+  annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
   input: z.object({
     operation: OperationEnum.describe('Which data to retrieve.'),
     congress: z.number().int().positive().describe('Congress number (e.g., 118, 119).'),

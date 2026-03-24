@@ -14,7 +14,7 @@ export const rollVotesTool = tool('congressgov_roll_votes', {
 NOTE: Covers House votes only — Senate vote data is not yet in the Congress.gov API.
 
 Use 'list' to find votes by congress and session, 'get' for vote details (question, result, associated bill), and 'members' for how each representative voted.`,
-  annotations: { readOnlyHint: true, openWorldHint: true },
+  annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
   input: z.object({
     operation: z.enum(['list', 'get', 'members']).describe('Which data to retrieve.'),
     congress: z.number().int().positive().describe('Congress number.'),

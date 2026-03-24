@@ -75,9 +75,10 @@ describe('CongressApiService', () => {
       await expect(service.getCurrentCongress()).rejects.toThrow(/rate limit/i);
     });
 
-    it('throws service-unavailable error on 5xx', async () => {
-      mockFetch.mockResolvedValue({ ok: false, status: 503 });
+    it('throws service-unavailable error on 5xx after retries', async () => {
+      mockFetch.mockResolvedValue({ ok: false, status: 503, text: async () => '' });
       await expect(service.getCurrentCongress()).rejects.toThrow(/HTTP 503/);
+      expect(mockFetch).toHaveBeenCalledTimes(3);
     });
 
     it('throws on non-ok response with body', async () => {
