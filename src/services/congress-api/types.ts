@@ -156,7 +156,7 @@ export interface GetCommitteeReportParams {
 
 export interface ListDailyRecordParams extends PaginationParams {}
 
-export interface GetDailyIssuesParams {
+export interface GetDailyIssuesParams extends PaginationParams {
   volumeNumber: number;
 }
 

@@ -4,6 +4,8 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
+
+import { formatResult } from '@/mcp-server/tools/format-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 
 export const crsReportsTool = tool('congressgov_crs_reports', {
@@ -23,6 +25,7 @@ Use 'list' to browse available reports, 'get' for full detail including authors,
     offset: z.number().int().min(0).default(0).describe('Pagination offset.'),
   }),
   output: z.object({}).passthrough().describe('CRS report data from Congress.gov API.'),
+  format: formatResult,
 
   async handler(input, ctx) {
     const api = getCongressApi();

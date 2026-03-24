@@ -4,6 +4,8 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
+
+import { formatResult } from '@/mcp-server/tools/format-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 
 export const committeeLookupTool = tool('congressgov_committee_lookup', {
@@ -30,6 +32,7 @@ The 'nominations' operation is available for Senate committees only. The committ
     offset: z.number().int().min(0).default(0).describe('Pagination offset.'),
   }),
   output: z.object({}).passthrough().describe('Committee data from Congress.gov API.'),
+  format: formatResult,
 
   async handler(input, ctx) {
     const api = getCongressApi();

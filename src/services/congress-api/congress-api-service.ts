@@ -3,7 +3,7 @@
  * @module services/congress-api/congress-api-service
  */
 
-import { rateLimited, serviceUnavailable } from '@cyanheads/mcp-ts-core/errors';
+import { notFound, rateLimited, serviceUnavailable } from '@cyanheads/mcp-ts-core/errors';
 import { getServerConfig } from '@/config/server-config.js';
 import type {
   BillSubResourceParams,
@@ -107,13 +107,10 @@ export class CongressApiService {
     return { member: data.member };
   }
 
-  async getMemberLegislation(
-    params: GetMemberLegislationParams,
-  ): Promise<{ legislation: unknown[]; pagination: Pagination }> {
+  getMemberLegislation(params: GetMemberLegislationParams): Promise<FetchListResult> {
     const path = `/member/${params.bioguideId}/${params.type}`;
     const key = params.type.replace('-legislation', 'Legislation');
-    const result = await this.fetchList(path, key, params);
-    return { legislation: result.data, pagination: result.pagination };
+    return this.fetchList(path, key, params);
   }
 
   // --- Committees ---
@@ -229,7 +226,15 @@ export class CongressApiService {
       `/committee-report/${params.congress}/${params.reportType}/${params.reportNumber}`,
     );
     const reports = data.committeeReports;
-    return { report: Array.isArray(reports) ? reports[0] : (reports ?? data) };
+    const report = Array.isArray(reports) ? reports[0] : (reports ?? data);
+    if (!report || (typeof report === 'object' && Object.keys(report).length === 0)) {
+      throw notFound('Committee report not found', {
+        congress: params.congress,
+        reportType: params.reportType,
+        reportNumber: params.reportNumber,
+      });
+    }
+    return { report };
   }
 
   async getCommitteeReportText(params: GetCommitteeReportParams): Promise<{ text: unknown }> {
@@ -245,9 +250,12 @@ export class CongressApiService {
     return this.fetchList('/daily-congressional-record', 'dailyCongressionalRecord', params);
   }
 
-  async getDailyIssues(params: GetDailyIssuesParams): Promise<{ issues: unknown[] }> {
-    const data = await this.get(`/daily-congressional-record/${params.volumeNumber}`);
-    return { issues: data.dailyCongressionalRecord ?? data.issues ?? [] };
+  getDailyIssues(params: GetDailyIssuesParams): Promise<FetchListResult> {
+    return this.fetchList(
+      `/daily-congressional-record/${params.volumeNumber}`,
+      'dailyCongressionalRecord',
+      params,
+    );
   }
 
   getDailyArticles(params: GetDailyArticlesParams): Promise<FetchListResult> {
@@ -290,7 +298,7 @@ export class CongressApiService {
         ? ((Object.values(raw).find(Array.isArray) as unknown[]) ?? [])
         : [];
     const pagination = this.extractPagination(data.pagination, items.length, params);
-    return { [listKey]: items, data: items, pagination };
+    return { data: items, pagination };
   }
 
   private extractPagination(
@@ -329,6 +337,12 @@ export class CongressApiService {
     }
 
     if (res.status >= 500) {
+      const body = await res.text().catch(() => '');
+      // The API returns 500 instead of 404 for some nonexistent entities —
+      // these have structured JSON error bodies vs. empty/HTML for real outages
+      if (body.includes('"error"')) {
+        throw new Error(`Congress.gov API returned HTTP ${res.status}: ${body}`);
+      }
       throw serviceUnavailable(
         `Congress.gov API returned HTTP ${res.status}. The service may be temporarily unavailable — retry after a brief wait.`,
         { status: res.status },

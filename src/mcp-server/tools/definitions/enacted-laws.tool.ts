@@ -4,6 +4,8 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
+
+import { formatResult } from '@/mcp-server/tools/format-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 
 export const enactedLawsTool = tool('congressgov_enacted_laws', {
@@ -24,6 +26,7 @@ Law types:
     offset: z.number().int().min(0).default(0).describe('Pagination offset.'),
   }),
   output: z.object({}).passthrough().describe('Law data from Congress.gov API.'),
+  format: formatResult,
 
   async handler(input, ctx) {
     const api = getCongressApi();

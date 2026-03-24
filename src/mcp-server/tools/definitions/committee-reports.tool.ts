@@ -4,6 +4,8 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
+
+import { formatResult } from '@/mcp-server/tools/format-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 
 export const committeeReportsTool = tool('congressgov_committee_reports', {
@@ -33,6 +35,7 @@ Report types:
     offset: z.number().int().min(0).default(0).describe('Pagination offset.'),
   }),
   output: z.object({}).passthrough().describe('Committee report data from Congress.gov API.'),
+  format: formatResult,
 
   async handler(input, ctx) {
     const api = getCongressApi();

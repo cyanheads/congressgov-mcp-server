@@ -4,6 +4,8 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
+
+import { formatResult } from '@/mcp-server/tools/format-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 
 export const memberLookupTool = tool('congressgov_member_lookup', {
@@ -46,6 +48,7 @@ Once you have a bioguideId, use 'get' for full profile or 'sponsored'/'cosponsor
     offset: z.number().int().min(0).default(0).describe('Pagination offset.'),
   }),
   output: z.object({}).passthrough().describe('Member data from Congress.gov API.'),
+  format: formatResult,
 
   async handler(input, ctx) {
     const api = getCongressApi();
