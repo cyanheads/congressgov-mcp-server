@@ -1,9 +1,9 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "congressgov-mcp-server",
-  "description": "",
+  "name": "io.github.cyanheads/congressgov-mcp-server",
+  "description": "MCP server for the Congress.gov API v3 — browse bills, members, committees, votes, nominations, and more.",
   "repository": {
-    "url": "",
+    "url": "https://github.com/cyanheads/congressgov-mcp-server",
     "source": "github"
   },
   "version": "0.1.0",
@@ -12,7 +12,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "congressgov-mcp-server",
-      "runtimeHint": "node",
+      "runtimeHint": "bun",
       "version": "0.1.0",
       "packageArguments": [
         {
@@ -25,6 +25,12 @@
         }
       ],
       "environmentVariables": [
+        {
+          "name": "CONGRESS_API_KEY",
+          "description": "API key from api.data.gov for the Congress.gov API.",
+          "format": "string",
+          "isRequired": true
+        },
         {
           "name": "MCP_LOG_LEVEL",
           "description": "Sets the minimum log level for output (e.g., 'debug', 'info', 'warn').",
@@ -41,7 +47,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "congressgov-mcp-server",
-      "runtimeHint": "node",
+      "runtimeHint": "bun",
       "version": "0.1.0",
       "packageArguments": [
         {
@@ -54,6 +60,12 @@
         }
       ],
       "environmentVariables": [
+        {
+          "name": "CONGRESS_API_KEY",
+          "description": "API key from api.data.gov for the Congress.gov API.",
+          "format": "string",
+          "isRequired": true
+        },
         {
           "name": "MCP_HTTP_HOST",
           "description": "The hostname for the HTTP server.",
