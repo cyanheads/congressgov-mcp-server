@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.3] - 2026-03-24
+
+### Changed
+
+- Refreshed package description across package.json, server.json, Dockerfile, and README
+- Added `typescript` keyword to package.json
+
 ## [0.3.2] - 2026-03-24
 
 ### Changed
