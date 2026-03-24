@@ -1,19 +1,19 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.cyanheads/congressgov-mcp-server",
-  "description": "MCP server for the Congress.gov API v3 — browse bills, members, committees, votes, nominations, and more.",
+  "description": "Access U.S. congressional data - bills, votes, members, committees - through MCP. STDIO & Streamable HTTP.",
   "repository": {
     "url": "https://github.com/cyanheads/congressgov-mcp-server",
     "source": "github"
   },
-  "version": "0.3.2",
+  "version": "0.3.3",
   "packages": [
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@cyanheads/congressgov-mcp-server",
       "runtimeHint": "bun",
-      "version": "0.3.2",
+      "version": "0.3.3",
       "packageArguments": [
         {
           "type": "positional",
@@ -48,7 +48,7 @@
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@cyanheads/congressgov-mcp-server",
       "runtimeHint": "bun",
-      "version": "0.3.2",
+      "version": "0.3.3",
       "packageArguments": [
         {
           "type": "positional",

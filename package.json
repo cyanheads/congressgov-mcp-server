@@ -1,7 +1,7 @@
 {
   "name": "@cyanheads/congressgov-mcp-server",
-  "version": "0.3.2",
-  "description": "MCP server for the Congress.gov API v3 — browse bills, members, committees, votes, nominations, and more.",
+  "version": "0.3.3",
+  "description": "Access U.S. congressional data - bills, votes, members, committees - through MCP. STDIO & Streamable HTTP.",
   "mcpName": "io.github.cyanheads/congressgov-mcp-server",
   "type": "module",
   "main": "dist/index.js",
@@ -33,6 +33,7 @@
     "legislation",
     "bills",
     "legislative-data",
+    "typescript",
     "us-government"
   ],
   "author": "Casey Hand <casey@cyanheads.dev> (https://github.com/cyanheads)",
