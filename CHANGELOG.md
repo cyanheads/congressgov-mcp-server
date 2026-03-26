@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.3.4] - 2026-03-26
+
+### Added
+
+- `list` handlers on `congress://current` and `congress://bill-types` resources for MCP resource discovery
+
+### Fixed
+
+- CRS report lookup now returns `notFound` when the upstream API responds with HTTP 500 for nonexistent report IDs
+
+### Changed
+
+- Bumped `@cyanheads/mcp-ts-core` to ^0.1.29, `@biomejs/biome` to ^2.4.9, `vitest` to ^4.1.2
+
 ## [0.3.3] - 2026-03-24
 
 ### Changed
