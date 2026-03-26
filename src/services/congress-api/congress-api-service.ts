@@ -210,7 +210,16 @@ export class CongressApiService {
   }
 
   async getCrsReport(params: GetCrsReportParams): Promise<{ report: unknown }> {
-    const data = await this.get(`/crsreport/${params.reportNumber}`);
+    let data: Record<string, unknown>;
+    try {
+      data = await this.get(`/crsreport/${params.reportNumber}`);
+    } catch (err) {
+      // Upstream API returns 500 instead of 404 for nonexistent report IDs
+      if (err instanceof Error && err.message.includes('HTTP 500')) {
+        throw notFound('CRS report not found', { reportNumber: params.reportNumber });
+      }
+      throw err;
+    }
     return { report: data.CRSReport ?? data };
   }
 
