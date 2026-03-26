@@ -36,6 +36,12 @@ export const billTypesResource = resource('congress://bill-types', {
   description: 'Reference table of valid bill type codes (hr, s, hjres, etc.) with descriptions.',
   mimeType: 'application/json',
 
+  list: async () => ({
+    resources: [
+      { uri: 'congress://bill-types', name: 'Bill Type Codes', mimeType: 'application/json' },
+    ],
+  }),
+
   handler() {
     return { billTypes: BILL_TYPES };
   },

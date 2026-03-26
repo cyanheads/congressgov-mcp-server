@@ -12,6 +12,12 @@ export const currentCongressResource = resource('congress://current', {
     'Current congress number, session dates, and chamber info. Baseline context for queries.',
   mimeType: 'application/json',
 
+  list: async () => ({
+    resources: [
+      { uri: 'congress://current', name: 'Current Congress', mimeType: 'application/json' },
+    ],
+  }),
+
   async handler(_params, ctx) {
     const api = getCongressApi();
     const congress = await api.getCurrentCongress();
