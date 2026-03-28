@@ -1,7 +1,7 @@
 # Agent Protocol
 
 **Server:** congressgov-mcp-server
-**Version:** 0.3.4
+**Version:** 0.3.5
 **Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core)
 
 > **Read the framework docs first:** `node_modules/@cyanheads/mcp-ts-core/CLAUDE.md` contains the full API reference — builders, Context, error codes, exports, patterns. This file covers server-specific conventions only.
@@ -210,6 +210,8 @@ Available skills:
 | `devcheck` | Lint, format, typecheck, audit |
 | `polish-docs-meta` | Finalize docs, README, metadata, and agent protocol for shipping |
 | `maintenance` | Sync skills and dependencies after updates |
+| `report-issue-framework` | File bugs/features against `@cyanheads/mcp-ts-core` |
+| `report-issue-local` | File bugs/features against this server's repo |
 | `api-auth` | Auth modes, scopes, JWT/OAuth |
 | `api-config` | AppConfig, parseConfig, env vars |
 | `api-context` | Context interface, logger, state, progress |
