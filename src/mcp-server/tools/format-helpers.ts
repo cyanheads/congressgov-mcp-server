@@ -1,73 +1,23 @@
 /**
- * @fileoverview Shared formatting for tool output — lists, details, HTML stripping.
+ * @fileoverview Rich formatting for MCP tool output.
+ *
+ * content[] is the only field most LLM clients forward to the model —
+ * structuredContent (from output schemas) is for programmatic use and is
+ * NOT reliably forwarded. These formatters render complete, structured
+ * markdown so the LLM can reason about all returned data.
+ *
+ * See: https://github.com/cyanheads/mcp-ts-core/issues/19
+ *
  * @module mcp-server/tools/format-helpers
  */
 
 type TextBlock = { type: 'text'; text: string };
+type ItemRenderer = (item: Record<string, unknown>, index: number) => string;
 
-/** Format any tool result into readable text content blocks. */
-export function formatResult(result: Record<string, unknown>): TextBlock[] {
-  return [{ type: 'text', text: render(result) }];
-}
+// ── Primitives ──────────────────────────────────────────────────────
 
-function render(obj: Record<string, unknown>): string {
-  // Paginated list: { data: [...], pagination: {...} }
-  if (Array.isArray(obj.data) && obj.pagination) {
-    const p = obj.pagination as { count: number; nextOffset: number | null };
-    const items = obj.data as Record<string, unknown>[];
-    const header = `${p.count} total${p.nextOffset != null ? ` | next offset: ${p.nextOffset}` : ''}`;
-    if (items.length === 0) return header;
-    return [header, '', ...items.map((item, i) => `${i + 1}. ${summarize(item)}`)].join('\n');
-  }
-
-  // Single-key wrapper: { bill: {...} }, { issues: [...] }, etc.
-  const keys = Object.keys(obj);
-  if (keys.length === 1 && keys[0] !== undefined) {
-    const val = obj[keys[0]];
-    if (Array.isArray(val)) {
-      if (val.length === 0) return `No ${keys[0]}.`;
-      return val
-        .map(
-          (item: unknown, i: number) =>
-            `${i + 1}. ${typeof item === 'object' && item ? summarize(item as Record<string, unknown>) : String(item)}`,
-        )
-        .join('\n');
-    }
-  }
-
-  // Detail object or fallback
-  return cleanJson(obj);
-}
-
-function summarize(item: Record<string, unknown>): string {
-  const parts: string[] = [];
-
-  // Identifier
-  if (item.type && item.number) parts.push(`${item.type} ${item.number}`);
-  else if (item.citation) parts.push(String(item.citation));
-  else if (item.id) parts.push(String(item.id));
-
-  // Name
-  const name = item.title ?? item.name ?? item.fullName ?? item.directOrderName ?? item.description;
-  if (name) parts.push(stripHtml(String(name)).slice(0, 200));
-
-  // Status
-  if (typeof item.latestAction === 'object' && item.latestAction) {
-    const a = item.latestAction as Record<string, unknown>;
-    parts.push(`[${a.actionDate}: ${a.text}]`);
-  } else if (item.actionDate && item.text) {
-    parts.push(`${item.actionDate}: ${stripHtml(String(item.text)).slice(0, 150)}`);
-  }
-
-  return parts.join(' — ') || JSON.stringify(item).slice(0, 300);
-}
-
-function cleanJson(value: unknown): string {
-  return JSON.stringify(
-    value,
-    (_key, val) => (typeof val === 'string' && val.includes('<') ? stripHtml(val) : val),
-    2,
-  );
+function tb(content: string): TextBlock[] {
+  return [{ type: 'text', text: content }];
 }
 
 function stripHtml(html: string): string {
@@ -82,3 +32,384 @@ function stripHtml(html: string): string {
     .replace(/\s+/g, ' ')
     .trim();
 }
+
+/** Safe deep access with HTML stripping. Handles string and number values. */
+function s(obj: unknown, ...path: string[]): string | undefined {
+  let cur = obj;
+  for (const key of path) {
+    if (cur == null || typeof cur !== 'object') return;
+    cur = (cur as Record<string, unknown>)[key];
+  }
+  if (typeof cur === 'string') return stripHtml(cur);
+  if (typeof cur === 'number') return String(cur);
+  return;
+}
+
+/** "**Label:** value" if value is truthy, otherwise undefined. */
+function f(label: string, val: string | number | undefined | null): string | undefined {
+  return val != null && val !== '' ? `**${label}:** ${val}` : undefined;
+}
+
+/** Join truthy values with separator. */
+function join(values: (string | undefined | null | false)[], sep = ' | '): string {
+  return values.filter(Boolean).join(sep);
+}
+
+function isApiUrl(val: unknown): boolean {
+  return typeof val === 'string' && val.includes('api.congress.gov');
+}
+
+// ── Rendering Core ──────────────────────────────────────────────────
+
+function pagHeader(result: Record<string, unknown>): string {
+  const p = result.pagination as Record<string, unknown> | undefined;
+  const items = result.data as unknown[] | undefined;
+  const count = (p?.count as number) ?? items?.length ?? 0;
+  const next = p?.nextOffset as number | null | undefined;
+  return `**${count} result${count !== 1 ? 's' : ''}**${next != null ? ` | next offset: ${next}` : ''}`;
+}
+
+/** Render a paginated list with header and per-item rendering. */
+function renderList(result: Record<string, unknown>, renderItem?: ItemRenderer): string {
+  const items = (result.data ?? []) as unknown[];
+  const header = pagHeader(result);
+  if (items.length === 0) return header;
+  const renderer = renderItem ?? renderGenericItem;
+  const rendered = items.map((item, i) =>
+    typeof item === 'object' && item !== null
+      ? renderer(item as Record<string, unknown>, i)
+      : `${i + 1}. ${String(item)}`,
+  );
+  return [header, '', ...rendered].join('\n\n');
+}
+
+/** Render any object as structured markdown. Used for detail views. */
+function renderDetail(obj: unknown): string {
+  if (obj == null) return 'No data.';
+  if (typeof obj !== 'object') return String(obj);
+  if (Array.isArray(obj)) {
+    if (obj.length === 0) return 'No items.';
+    return obj
+      .map((item, i) =>
+        typeof item === 'object' && item
+          ? renderGenericItem(item as Record<string, unknown>, i)
+          : `${i + 1}. ${String(item)}`,
+      )
+      .join('\n\n');
+  }
+
+  const record = obj as Record<string, unknown>;
+  const lines: string[] = [];
+
+  for (const [key, val] of Object.entries(record)) {
+    if (val == null || val === '') continue;
+    if (isApiUrl(val)) continue;
+
+    if (typeof val === 'string') {
+      const cleaned = stripHtml(val);
+      if (cleaned.length > 300) {
+        lines.push(`**${key}:**`);
+        lines.push(cleaned);
+      } else {
+        lines.push(`**${key}:** ${cleaned}`);
+      }
+    } else if (typeof val === 'number' || typeof val === 'boolean') {
+      lines.push(`**${key}:** ${val}`);
+    } else if (Array.isArray(val)) {
+      if (val.length === 0) continue;
+      lines.push(`\n**${key}** (${val.length}):`);
+      for (const item of val.slice(0, 20)) {
+        if (typeof item === 'object' && item) {
+          lines.push(`- ${renderInline(item as Record<string, unknown>)}`);
+        } else {
+          lines.push(`- ${String(item)}`);
+        }
+      }
+      if (val.length > 20) lines.push(`- _...${val.length - 20} more_`);
+    } else if (typeof val === 'object') {
+      const nested = val as Record<string, unknown>;
+      const nKeys = Object.keys(nested);
+
+      // Sub-resource reference: { count, url } → "N available"
+      if (nKeys.length <= 2 && 'count' in nested) {
+        const count = nested.count as number;
+        if (count > 0) lines.push(`**${key}:** ${count} available`);
+        continue;
+      }
+
+      // latestAction: { actionDate, text }
+      if (key === 'latestAction') {
+        const date = s(nested, 'actionDate');
+        const text = s(nested, 'text');
+        lines.push(`**Latest Action:** ${[date, text].filter(Boolean).join(' — ')}`);
+        continue;
+      }
+
+      // Small objects inline, larger ones nested
+      if (nKeys.length <= 3) {
+        lines.push(`**${key}:** ${renderInline(nested)}`);
+      } else {
+        lines.push(`\n**${key}:**`);
+        for (const [k2, v2] of Object.entries(nested)) {
+          if (v2 == null || v2 === '' || isApiUrl(v2)) continue;
+          if (typeof v2 === 'string') lines.push(`  **${k2}:** ${stripHtml(v2)}`);
+          else if (typeof v2 === 'number' || typeof v2 === 'boolean')
+            lines.push(`  **${k2}:** ${v2}`);
+          else if (typeof v2 === 'object' && v2)
+            lines.push(`  **${k2}:** ${renderInline(v2 as Record<string, unknown>)}`);
+        }
+      }
+    }
+  }
+
+  return lines.join('\n');
+}
+
+/** Render any list item with all its fields. */
+function renderGenericItem(item: Record<string, unknown>, index: number): string {
+  // Build heading from common identifier fields
+  const id =
+    item.type && item.number != null
+      ? `${String(item.type).toUpperCase()} ${item.number}`
+      : (s(item, 'citation') ?? s(item, 'bioguideId') ?? s(item, 'systemCode'));
+
+  const name =
+    s(item, 'title') ??
+    s(item, 'name') ??
+    s(item, 'fullName') ??
+    s(item, 'directOrderName') ??
+    s(item, 'description') ??
+    s(item, 'question');
+
+  const heading = [id, name].filter(Boolean).join(': ') || 'Item';
+  const lines = [`### ${index + 1}. ${heading}`];
+
+  for (const [key, val] of Object.entries(item)) {
+    if (val == null || val === '') continue;
+    if (HEADING_FIELDS.has(key)) continue;
+    if (isApiUrl(val)) continue;
+
+    if (typeof val === 'string') {
+      const cleaned = stripHtml(val);
+      if (cleaned.length > 300) {
+        lines.push(`**${key}:**`);
+        lines.push(cleaned);
+      } else {
+        lines.push(`**${key}:** ${cleaned}`);
+      }
+    } else if (typeof val === 'number' || typeof val === 'boolean') {
+      lines.push(`**${key}:** ${val}`);
+    } else if (typeof val === 'object' && !Array.isArray(val) && val !== null) {
+      if (key === 'latestAction') {
+        const date = s(val, 'actionDate');
+        const text = s(val, 'text');
+        lines.push(`**Latest Action:** ${[date, text].filter(Boolean).join(' — ')}`);
+      } else {
+        lines.push(`**${key}:** ${renderInline(val as Record<string, unknown>)}`);
+      }
+    } else if (Array.isArray(val) && val.length > 0) {
+      if (typeof val[0] === 'string' || typeof val[0] === 'number') {
+        lines.push(`**${key}:** ${val.join(', ')}`);
+      } else {
+        lines.push(`**${key}:** ${val.length} items`);
+        for (const sub of val.slice(0, 5)) {
+          if (typeof sub === 'object' && sub !== null)
+            lines.push(`  - ${renderInline(sub as Record<string, unknown>)}`);
+        }
+      }
+    }
+  }
+
+  return lines.join('\n');
+}
+
+const HEADING_FIELDS = new Set([
+  'type',
+  'number',
+  'citation',
+  'bioguideId',
+  'systemCode',
+  'title',
+  'name',
+  'fullName',
+  'directOrderName',
+  'description',
+  'question',
+]);
+
+/** Compact inline render of a small object. */
+function renderInline(obj: Record<string, unknown>): string {
+  const parts: string[] = [];
+  for (const [key, val] of Object.entries(obj)) {
+    if (val == null || val === '' || isApiUrl(val)) continue;
+    if (typeof val === 'string') parts.push(stripHtml(val).slice(0, 120));
+    else if (typeof val === 'number' || typeof val === 'boolean') parts.push(`${key}: ${val}`);
+  }
+  return parts.join(', ') || JSON.stringify(obj).slice(0, 200);
+}
+
+// ── Domain-Specific Item Renderers ──────────────────────────────────
+
+function renderBillItem(item: Record<string, unknown>, i: number): string {
+  const type = s(item, 'type')?.toUpperCase() ?? '';
+  const number = s(item, 'number') ?? '';
+  const title = s(item, 'title') ?? 'Untitled';
+  const id = type && number ? `${type} ${number}: ` : '';
+
+  const lines = [`### ${i + 1}. ${id}${title}`];
+
+  const meta = join([
+    f('Congress', s(item, 'congress')),
+    f('Chamber', s(item, 'originChamber')),
+    f('Policy Area', s(item, 'policyArea', 'name')),
+  ]);
+  if (meta) lines.push(meta);
+
+  if (Array.isArray(item.sponsors) && item.sponsors.length > 0) {
+    const sponsors = (item.sponsors as Record<string, unknown>[]).map((sp) => {
+      const name = s(sp, 'fullName') ?? s(sp, 'firstName') ?? '?';
+      const party = s(sp, 'party') ?? '';
+      const state = s(sp, 'state') ?? '';
+      return party || state ? `${name} (${[party, state].filter(Boolean).join('-')})` : name;
+    });
+    lines.push(`**Sponsor:** ${sponsors.join(', ')}`);
+  }
+
+  const actionDate = s(item, 'latestAction', 'actionDate');
+  const actionText = s(item, 'latestAction', 'text');
+  if (actionDate || actionText)
+    lines.push(`**Latest Action:** ${[actionDate, actionText].filter(Boolean).join(' — ')}`);
+
+  const updated = s(item, 'updateDate');
+  if (updated) lines.push(`**Updated:** ${updated}`);
+
+  return lines.join('\n');
+}
+
+function renderMemberItem(item: Record<string, unknown>, i: number): string {
+  const name =
+    s(item, 'name') ?? s(item, 'directOrderName') ?? s(item, 'fullName') ?? 'Unknown Member';
+  const lines = [`### ${i + 1}. ${name}`];
+
+  const meta = join([
+    f('ID', s(item, 'bioguideId')),
+    f('Party', s(item, 'partyName') ?? s(item, 'party')),
+    f('State', s(item, 'state')),
+    item.district != null ? f('District', s(item, 'district')) : undefined,
+  ]);
+  if (meta) lines.push(meta);
+
+  // terms may be a direct array or nested as { item: [...] }
+  const rawTerms = item.terms;
+  const termsArr: Record<string, unknown>[] | undefined = Array.isArray(rawTerms)
+    ? rawTerms
+    : rawTerms &&
+        typeof rawTerms === 'object' &&
+        Array.isArray((rawTerms as Record<string, unknown>).item)
+      ? ((rawTerms as Record<string, unknown>).item as Record<string, unknown>[])
+      : undefined;
+
+  if (termsArr && termsArr.length > 0) {
+    const latest = termsArr.at(-1);
+    const chamber = s(latest, 'chamber');
+    const start = s(latest, 'startYear');
+    const end = s(latest, 'endYear');
+    const termRange = start && end ? `${start}–${end}` : start;
+    lines.push(
+      `**Latest Term:** ${[chamber, termRange].filter(Boolean).join(', ')}` +
+        (termsArr.length > 1 ? ` (${termsArr.length} total)` : ''),
+    );
+  }
+
+  return lines.join('\n');
+}
+
+function renderSummaryItem(item: Record<string, unknown>, i: number): string {
+  const billType = s(item, 'bill', 'type')?.toUpperCase() ?? '';
+  const billNum = s(item, 'bill', 'number') ?? '';
+  const congress = s(item, 'bill', 'congress') ?? '';
+  const version = s(item, 'actionDesc') ?? s(item, 'versionCode') ?? '';
+  const date = s(item, 'actionDate') ?? '';
+  const text = s(item, 'text') ?? '';
+
+  const ref = billType && billNum ? `${billType} ${billNum}` : 'Bill';
+  const heading = congress ? `${ref}, Congress ${congress}` : ref;
+  const lines = [`### ${i + 1}. ${heading}`];
+
+  const meta = join([f('Version', version), f('Date', date)]);
+  if (meta) lines.push(meta);
+
+  const billTitle = s(item, 'bill', 'title');
+  if (billTitle) lines.push(`**Bill Title:** ${billTitle}`);
+
+  // The summary text is the critical data — the whole point of this tool
+  if (text) {
+    lines.push('');
+    lines.push(text);
+  }
+
+  return lines.join('\n');
+}
+
+// ── Per-Tool Format Exports ─────────────────────────────────────────
+
+function makeFormatter(
+  detailKeys: string[],
+  itemRenderer?: ItemRenderer,
+): (result: Record<string, unknown>) => TextBlock[] {
+  return (result) => {
+    if (Array.isArray(result.data)) return tb(renderList(result, itemRenderer));
+    for (const key of detailKeys) {
+      if (result[key] != null) return tb(renderDetail(result[key]));
+    }
+    return tb(renderDetail(result));
+  };
+}
+
+/** Bill browse, detail, and sub-resources (actions, amendments, cosponsors, etc.). */
+export function formatBills(result: Record<string, unknown>): TextBlock[] {
+  if (Array.isArray(result.data)) {
+    const first = (result.data as Record<string, unknown>[])[0];
+    const isBills = first && 'title' in first && 'number' in first;
+    return tb(renderList(result, isBills ? renderBillItem : undefined));
+  }
+  if (result.bill != null) return tb(renderDetail(result.bill));
+  return tb(renderDetail(result));
+}
+
+/** CRS bill summaries — "what's happening in Congress". */
+export const formatSummaries = makeFormatter([], renderSummaryItem);
+
+/** Member browse, detail, and sponsored/cosponsored legislation. */
+export function formatMembers(result: Record<string, unknown>): TextBlock[] {
+  if (Array.isArray(result.data)) {
+    const first = (result.data as Record<string, unknown>[])[0];
+    if (first && 'bioguideId' in first) return tb(renderList(result, renderMemberItem));
+    if (first && 'number' in first && 'title' in first)
+      return tb(renderList(result, renderBillItem));
+    return tb(renderList(result));
+  }
+  if (result.member != null) return tb(renderDetail(result.member));
+  return tb(renderDetail(result));
+}
+
+/** Committee browse, detail, and sub-resources (bills, reports, nominations). */
+export const formatCommittees = makeFormatter(['committee']);
+
+/** Committee reports — list, detail, and text. */
+export const formatCommitteeReports = makeFormatter(['report', 'text']);
+
+/** CRS policy analysis reports. */
+export const formatCrsReports = makeFormatter(['report']);
+
+/** Daily Congressional Record — volumes, issues, articles. */
+export const formatDailyRecord = makeFormatter([]);
+
+/** Enacted public and private laws. */
+export const formatLaws = makeFormatter(['law'], renderBillItem);
+
+/** House roll call votes and member voting positions. */
+export const formatVotes = makeFormatter(['vote']);
+
+/** Presidential nominations and Senate confirmation pipeline. */
+export const formatNominations = makeFormatter(['nomination']);

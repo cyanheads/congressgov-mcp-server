@@ -5,7 +5,7 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 
-import { formatResult } from '@/mcp-server/tools/format-helpers.js';
+import { formatNominations } from '@/mcp-server/tools/format-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 
 export const senateNominationsTool = tool('congressgov_senate_nominations', {
@@ -34,7 +34,7 @@ Partitioned nominations (e.g., PN230-1, PN230-2) occur when nominees within one 
     offset: z.number().int().min(0).default(0).describe('Pagination offset.'),
   }),
   output: z.object({}).passthrough().describe('Nomination data from Congress.gov API.'),
-  format: formatResult,
+  format: formatNominations,
 
   async handler(input, ctx) {
     const api = getCongressApi();

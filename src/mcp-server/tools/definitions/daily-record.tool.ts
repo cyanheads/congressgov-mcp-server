@@ -5,7 +5,7 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 
-import { formatResult } from '@/mcp-server/tools/format-helpers.js';
+import { formatDailyRecord } from '@/mcp-server/tools/format-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 
 export const dailyRecordTool = tool('congressgov_daily_record', {
@@ -31,7 +31,7 @@ Navigation is hierarchical: list → volumes, issues → individual articles. Us
     offset: z.number().int().min(0).default(0).describe('Pagination offset.'),
   }),
   output: z.object({}).passthrough().describe('Congressional Record data from Congress.gov API.'),
-  format: formatResult,
+  format: formatDailyRecord,
 
   async handler(input, ctx) {
     const api = getCongressApi();

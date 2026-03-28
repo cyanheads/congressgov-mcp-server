@@ -5,7 +5,7 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 
-import { formatResult } from '@/mcp-server/tools/format-helpers.js';
+import { formatSummaries } from '@/mcp-server/tools/format-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 
 export const billSummariesTool = tool('congressgov_bill_summaries', {
@@ -37,7 +37,7 @@ By default, returns summaries from the last 7 days. Specify fromDateTime/toDateT
     offset: z.number().int().min(0).default(0).describe('Pagination offset.'),
   }),
   output: z.object({}).passthrough().describe('Bill summary data from Congress.gov API.'),
-  format: formatResult,
+  format: formatSummaries,
 
   async handler(input, ctx) {
     if (input.billType && !input.congress) {
