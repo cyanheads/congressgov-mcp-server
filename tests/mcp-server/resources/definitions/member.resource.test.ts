@@ -31,6 +31,6 @@ describe('memberResource', () => {
     const params = memberResource.params!.parse({ bioguideId: 'P000197' });
     const result = await memberResource.handler(params, ctx);
     expect(result).toEqual(memberData);
-    expect(mockApi.getMember).toHaveBeenCalledWith('P000197');
+    expect(mockApi.getMember).toHaveBeenCalledWith('P000197', ctx);
   });
 });

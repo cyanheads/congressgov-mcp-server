@@ -9,11 +9,7 @@ import { formatCommittees } from '@/mcp-server/tools/format-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 
 export const committeeLookupTool = tool('congressgov_committee_lookup', {
-  description: `Browse congressional committees and their legislation, reports, and nominations.
-
-Committee codes follow the pattern: chamber prefix (h/s/j) + abbreviation + number. Use 'list' to discover codes, then drill into bills, reports, or nominations.
-
-The 'nominations' operation is available for Senate committees only. The committeeCode also works with the congress://committee/{committeeCode} resource.`,
+  description: `Browse congressional committees and their legislation, reports, and nominations. Committee codes follow the pattern chamber-prefix (h/s/j) + abbreviation + number — use 'list' to discover codes, then 'get' or drill into 'bills', 'reports', or 'nominations' ('nominations' is Senate-only). The committeeCode also works with the congress://committee/{committeeCode} resource.`,
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
   input: z.object({
     operation: z
@@ -38,12 +34,15 @@ The 'nominations' operation is available for Senate committees only. The committ
     const api = getCongressApi();
 
     if (input.operation === 'list') {
-      const result = await api.listCommittees({
-        congress: input.congress,
-        chamber: input.chamber,
-        limit: input.limit,
-        offset: input.offset,
-      });
+      const result = await api.listCommittees(
+        {
+          congress: input.congress,
+          chamber: input.chamber,
+          limit: input.limit,
+          offset: input.offset,
+        },
+        ctx,
+      );
       ctx.log.info('Committees listed', { count: result.data.length });
       return result;
     }
@@ -55,7 +54,7 @@ The 'nominations' operation is available for Senate committees only. The committ
     }
 
     if (input.operation === 'get') {
-      const result = await api.getCommittee(input.chamber, input.committeeCode);
+      const result = await api.getCommittee(input.chamber, input.committeeCode, ctx);
       ctx.log.info('Committee retrieved', { committeeCode: input.committeeCode });
       return result;
     }
@@ -66,13 +65,16 @@ The 'nominations' operation is available for Senate committees only. The committ
       );
     }
 
-    const result = await api.getCommitteeSubResource({
-      chamber: input.chamber,
-      committeeCode: input.committeeCode,
-      subResource: input.operation,
-      limit: input.limit,
-      offset: input.offset,
-    });
+    const result = await api.getCommitteeSubResource(
+      {
+        chamber: input.chamber,
+        committeeCode: input.committeeCode,
+        subResource: input.operation,
+        limit: input.limit,
+        offset: input.offset,
+      },
+      ctx,
+    );
     ctx.log.info('Committee sub-resource retrieved', {
       committeeCode: input.committeeCode,
       subResource: input.operation,

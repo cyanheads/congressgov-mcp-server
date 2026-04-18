@@ -51,6 +51,7 @@ describe('committeeReportsTool', () => {
     await committeeReportsTool.handler(input, ctx);
     expect(mockApi.listCommitteeReports).toHaveBeenCalledWith(
       expect.objectContaining({ reportType: 'hrpt' }),
+      ctx,
     );
   });
 
@@ -65,6 +66,10 @@ describe('committeeReportsTool', () => {
     });
     const result = await committeeReportsTool.handler(input, ctx);
     expect(result.report).toEqual({ title: 'Report' });
+    expect(mockApi.getCommitteeReport).toHaveBeenCalledWith(
+      expect.objectContaining({ congress: 118, reportType: 'hrpt', reportNumber: 100 }),
+      ctx,
+    );
   });
 
   it('gets committee report text', async () => {
@@ -78,6 +83,10 @@ describe('committeeReportsTool', () => {
     });
     const result = await committeeReportsTool.handler(input, ctx);
     expect(result.text).toBe('Full text...');
+    expect(mockApi.getCommitteeReportText).toHaveBeenCalledWith(
+      expect.objectContaining({ congress: 118, reportType: 'srpt', reportNumber: 50 }),
+      ctx,
+    );
   });
 
   it('throws when get/text is missing reportType or reportNumber', async () => {

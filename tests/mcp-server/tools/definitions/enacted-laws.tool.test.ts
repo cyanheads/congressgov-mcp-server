@@ -34,7 +34,7 @@ describe('enactedLawsTool', () => {
     const input = enactedLawsTool.input.parse({ operation: 'list', congress: 118 });
     const result = await enactedLawsTool.handler(input, ctx);
     expect(result.data).toHaveLength(1);
-    expect(mockApi.listLaws).toHaveBeenCalledWith(expect.objectContaining({ congress: 118 }));
+    expect(mockApi.listLaws).toHaveBeenCalledWith(expect.objectContaining({ congress: 118 }), ctx);
   });
 
   it('lists laws filtered by type', async () => {
@@ -49,7 +49,7 @@ describe('enactedLawsTool', () => {
       lawType: 'pub',
     });
     await enactedLawsTool.handler(input, ctx);
-    expect(mockApi.listLaws).toHaveBeenCalledWith(expect.objectContaining({ lawType: 'pub' }));
+    expect(mockApi.listLaws).toHaveBeenCalledWith(expect.objectContaining({ lawType: 'pub' }), ctx);
   });
 
   it('gets a specific law', async () => {
@@ -63,6 +63,10 @@ describe('enactedLawsTool', () => {
     });
     const result = await enactedLawsTool.handler(input, ctx);
     expect(result.law).toEqual({ title: 'Public Law 118-1' });
+    expect(mockApi.getLaw).toHaveBeenCalledWith(
+      expect.objectContaining({ congress: 118, lawType: 'pub', lawNumber: 1 }),
+      ctx,
+    );
   });
 
   it('throws when get is missing lawType or lawNumber', async () => {

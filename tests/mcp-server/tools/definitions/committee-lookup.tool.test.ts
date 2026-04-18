@@ -51,6 +51,7 @@ describe('committeeLookupTool', () => {
     await committeeLookupTool.handler(input, ctx);
     expect(mockApi.listCommittees).toHaveBeenCalledWith(
       expect.objectContaining({ congress: 118, chamber: 'senate' }),
+      ctx,
     );
   });
 
@@ -64,6 +65,7 @@ describe('committeeLookupTool', () => {
     });
     const result = await committeeLookupTool.handler(input, ctx);
     expect(result.committee).toEqual({ name: 'Judiciary' });
+    expect(mockApi.getCommittee).toHaveBeenCalledWith('house', 'hsju00', ctx);
   });
 
   it('throws when get is missing chamber or committeeCode', async () => {
@@ -96,6 +98,7 @@ describe('committeeLookupTool', () => {
     await committeeLookupTool.handler(input, ctx);
     expect(mockApi.getCommitteeSubResource).toHaveBeenCalledWith(
       expect.objectContaining({ subResource: 'bills' }),
+      ctx,
     );
   });
 });

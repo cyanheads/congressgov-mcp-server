@@ -37,6 +37,7 @@ describe('billSummariesTool', () => {
       expect.objectContaining({
         fromDateTime: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
       }),
+      ctx,
     );
   });
 
@@ -56,6 +57,7 @@ describe('billSummariesTool', () => {
         fromDateTime: '2024-01-01T00:00:00Z',
         toDateTime: '2024-01-31T23:59:59Z',
       }),
+      ctx,
     );
   });
 
@@ -72,6 +74,7 @@ describe('billSummariesTool', () => {
     await billSummariesTool.handler(input, ctx);
     expect(mockApi.listSummaries).toHaveBeenCalledWith(
       expect.objectContaining({ congress: 118, billType: 'hr' }),
+      ctx,
     );
   });
 
@@ -79,5 +82,32 @@ describe('billSummariesTool', () => {
     const ctx = createMockContext();
     const input = billSummariesTool.input.parse({ billType: 'hr' });
     await expect(billSummariesTool.handler(input, ctx)).rejects.toThrow(/congress/);
+  });
+
+  it('treats empty-string dates from form-based clients as omitted', async () => {
+    const ctx = createMockContext();
+    mockApi.listSummaries.mockResolvedValue({
+      data: [],
+      pagination: { count: 0, nextOffset: null },
+    });
+    const input = billSummariesTool.input.parse({
+      fromDateTime: '',
+      toDateTime: '',
+    });
+    await billSummariesTool.handler(input, ctx);
+    const [paramsArg, passedCtx] = mockApi.listSummaries.mock.calls[0];
+    expect(paramsArg.fromDateTime).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(paramsArg.toDateTime).toBeUndefined();
+    expect(passedCtx).toBe(ctx);
+  });
+
+  it('formats sparse upstream summaries without inventing missing facts', () => {
+    const output = billSummariesTool.output.parse({
+      data: [{ bill: { congress: 118, type: 'hr', number: '1' } }],
+      pagination: { count: 1, nextOffset: null },
+    });
+    const blocks = billSummariesTool.format!(output);
+    expect((blocks[0] as { text: string }).text).toContain('Bill Title:** Not available');
+    expect((blocks[0] as { text: string }).text).toContain('Summary text not available');
   });
 });

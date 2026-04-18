@@ -35,11 +35,14 @@ describe('billResource', () => {
     });
     const result = await billResource.handler(params, ctx);
     expect(result).toEqual(billData);
-    expect(mockApi.getBill).toHaveBeenCalledWith({
-      congress: 118,
-      billType: 'hr',
-      billNumber: 3076,
-    });
+    expect(mockApi.getBill).toHaveBeenCalledWith(
+      {
+        congress: 118,
+        billType: 'hr',
+        billNumber: 3076,
+      },
+      ctx,
+    );
   });
 
   it('converts string params to numbers for API call', async () => {
@@ -51,10 +54,13 @@ describe('billResource', () => {
       billNumber: '1',
     });
     await billResource.handler(params, ctx);
-    expect(mockApi.getBill).toHaveBeenCalledWith({
-      congress: 119,
-      billType: 's',
-      billNumber: 1,
-    });
+    expect(mockApi.getBill).toHaveBeenCalledWith(
+      {
+        congress: 119,
+        billType: 's',
+        billNumber: 1,
+      },
+      ctx,
+    );
   });
 });

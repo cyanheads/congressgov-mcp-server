@@ -37,6 +37,7 @@ describe('billLookupTool', () => {
     expect(result.data).toHaveLength(2);
     expect(mockApi.listBills).toHaveBeenCalledWith(
       expect.objectContaining({ congress: 118, limit: 20, offset: 0 }),
+      ctx,
     );
   });
 
@@ -54,6 +55,7 @@ describe('billLookupTool', () => {
     await billLookupTool.handler(input, ctx);
     expect(mockApi.listBills).toHaveBeenCalledWith(
       expect.objectContaining({ congress: 118, billType: 'hr' }),
+      ctx,
     );
   });
 
@@ -68,11 +70,14 @@ describe('billLookupTool', () => {
     });
     const result = await billLookupTool.handler(input, ctx);
     expect(result.bill).toEqual({ title: 'Test Bill' });
-    expect(mockApi.getBill).toHaveBeenCalledWith({
-      congress: 118,
-      billType: 'hr',
-      billNumber: 1234,
-    });
+    expect(mockApi.getBill).toHaveBeenCalledWith(
+      {
+        congress: 118,
+        billType: 'hr',
+        billNumber: 1234,
+      },
+      ctx,
+    );
   });
 
   it('throws when get is missing billType or billNumber', async () => {
@@ -97,6 +102,7 @@ describe('billLookupTool', () => {
     expect(result.data).toHaveLength(1);
     expect(mockApi.getBillSubResource).toHaveBeenCalledWith(
       expect.objectContaining({ subResource: 'actions' }),
+      ctx,
     );
   });
 
@@ -115,7 +121,27 @@ describe('billLookupTool', () => {
     await billLookupTool.handler(input, ctx);
     expect(mockApi.getBillSubResource).toHaveBeenCalledWith(
       expect.objectContaining({ subResource: 'relatedbills' }),
+      ctx,
     );
+  });
+
+  it('ignores empty-string date filters from form-based clients', async () => {
+    const ctx = createMockContext();
+    mockApi.listBills.mockResolvedValue({
+      data: [],
+      pagination: { count: 0, nextOffset: null },
+    });
+    const input = billLookupTool.input.parse({
+      operation: 'list',
+      congress: 118,
+      fromDateTime: '',
+      toDateTime: '',
+    });
+    await billLookupTool.handler(input, ctx);
+    const [paramsArg, passedCtx] = mockApi.listBills.mock.calls[0];
+    expect(paramsArg.fromDateTime).toBeUndefined();
+    expect(paramsArg.toDateTime).toBeUndefined();
+    expect(passedCtx).toBe(ctx);
   });
 
   it('applies default limit and offset', () => {

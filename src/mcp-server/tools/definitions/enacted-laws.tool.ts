@@ -9,13 +9,7 @@ import { formatLaws } from '@/mcp-server/tools/format-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 
 export const enactedLawsTool = tool('congressgov_enacted_laws', {
-  description: `Browse enacted public and private laws from Congress.gov.
-
-Use 'list' to browse laws by congress. Each law references its origin bill — use 'congressgov_bill_lookup' with that reference for the full legislative history.
-
-Law types:
-- pub: Public laws (general application, most common)
-- priv: Private laws (specific individuals or entities)`,
+  description: `Browse enacted public and private laws from Congress.gov. Use 'list' to browse laws by congress. Each law references its origin bill — use 'congressgov_bill_lookup' with that reference for the full legislative history. Law types: pub: Public laws (general application, most common); priv: Private laws (specific individuals or entities)`,
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
   input: z.object({
     operation: z.enum(['list', 'get']).describe('Which data to retrieve.'),
@@ -32,12 +26,15 @@ Law types:
     const api = getCongressApi();
 
     if (input.operation === 'list') {
-      const result = await api.listLaws({
-        congress: input.congress,
-        lawType: input.lawType,
-        limit: input.limit,
-        offset: input.offset,
-      });
+      const result = await api.listLaws(
+        {
+          congress: input.congress,
+          lawType: input.lawType,
+          limit: input.limit,
+          offset: input.offset,
+        },
+        ctx,
+      );
       ctx.log.info('Laws listed', { congress: input.congress, count: result.data.length });
       return result;
     }
@@ -46,11 +43,14 @@ Law types:
       throw new Error("The 'get' operation requires lawType ('pub' or 'priv') and lawNumber.");
     }
 
-    const result = await api.getLaw({
-      congress: input.congress,
-      lawType: input.lawType,
-      lawNumber: input.lawNumber,
-    });
+    const result = await api.getLaw(
+      {
+        congress: input.congress,
+        lawType: input.lawType,
+        lawNumber: input.lawNumber,
+      },
+      ctx,
+    );
     ctx.log.info('Law retrieved', {
       congress: input.congress,
       lawType: input.lawType,

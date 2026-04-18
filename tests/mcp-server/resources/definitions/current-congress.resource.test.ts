@@ -37,5 +37,6 @@ describe('currentCongressResource', () => {
     const result = await currentCongressResource.handler({}, ctx);
     expect(result).toEqual(congressData);
     expect(result.congress).toBe(119);
+    expect(mockApi.getCurrentCongress).toHaveBeenCalledWith(ctx);
   });
 });

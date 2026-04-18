@@ -19,11 +19,14 @@ export const billResource = resource('congress://bill/{congress}/{billType}/{bil
 
   async handler(params, ctx) {
     const api = getCongressApi();
-    const result = await api.getBill({
-      congress: Number(params.congress),
-      billType: params.billType as BillType,
-      billNumber: Number(params.billNumber),
-    });
+    const result = await api.getBill(
+      {
+        congress: Number(params.congress),
+        billType: params.billType as BillType,
+        billNumber: Number(params.billNumber),
+      },
+      ctx,
+    );
     ctx.log.info('Bill resource fetched', {
       congress: params.congress,
       billType: params.billType,

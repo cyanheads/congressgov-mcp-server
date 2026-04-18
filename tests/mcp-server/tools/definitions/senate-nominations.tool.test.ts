@@ -96,6 +96,7 @@ describe('senateNominationsTool', () => {
     await senateNominationsTool.handler(input, ctx);
     expect(mockApi.getNominationSubResource).toHaveBeenCalledWith(
       expect.objectContaining({ subResource: 'actions' }),
+      ctx,
     );
   });
 });

@@ -48,13 +48,28 @@ describe('memberLookupTool', () => {
       stateCode: 'CA',
     });
     await memberLookupTool.handler(input, ctx);
-    expect(mockApi.listMembers).toHaveBeenCalledWith(expect.objectContaining({ stateCode: 'CA' }));
+    expect(mockApi.listMembers).toHaveBeenCalledWith(
+      expect.objectContaining({ stateCode: 'CA' }),
+      ctx,
+    );
   });
 
   it('throws when district is provided without stateCode', async () => {
     const ctx = createMockContext();
     const input = memberLookupTool.input.parse({ operation: 'list', district: 5 });
     await expect(memberLookupTool.handler(input, ctx)).rejects.toThrow(/stateCode/);
+  });
+
+  it('throws when congress is combined with state filters', async () => {
+    const ctx = createMockContext();
+    const input = memberLookupTool.input.parse({
+      operation: 'list',
+      congress: 118,
+      stateCode: 'CA',
+    });
+    await expect(memberLookupTool.handler(input, ctx)).rejects.toThrow(
+      /does not support combining/i,
+    );
   });
 
   it('gets a member by bioguideId', async () => {
@@ -66,6 +81,7 @@ describe('memberLookupTool', () => {
     });
     const result = await memberLookupTool.handler(input, ctx);
     expect(result.member).toEqual({ name: 'Pelosi' });
+    expect(mockApi.getMember).toHaveBeenCalledWith('P000197', ctx);
   });
 
   it('throws when get/sponsored/cosponsored is missing bioguideId', async () => {
@@ -87,6 +103,7 @@ describe('memberLookupTool', () => {
     await memberLookupTool.handler(input, ctx);
     expect(mockApi.getMemberLegislation).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'sponsored-legislation' }),
+      ctx,
     );
   });
 
@@ -103,6 +120,7 @@ describe('memberLookupTool', () => {
     await memberLookupTool.handler(input, ctx);
     expect(mockApi.getMemberLegislation).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'cosponsored-legislation' }),
+      ctx,
     );
   });
 });

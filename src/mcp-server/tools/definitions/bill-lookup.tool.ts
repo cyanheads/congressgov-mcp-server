@@ -6,8 +6,44 @@
 import { tool, z } from '@cyanheads/mcp-ts-core';
 
 import { formatBills } from '@/mcp-server/tools/format-helpers.js';
+import {
+  createPaginationSchema,
+  normalizeOptionalString,
+  StringOrNumberSchema,
+} from '@/mcp-server/tools/tool-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 import type { BillSubResource } from '@/services/congress-api/types.js';
+
+const PaginationSchema = createPaginationSchema('Total number of matching records.');
+
+const BillDetailSchema = z
+  .object({
+    congress: StringOrNumberSchema.optional().describe(
+      'Congress number when Congress.gov includes it.',
+    ),
+    type: z.string().optional().describe('Bill type code when provided by Congress.gov.'),
+    number: StringOrNumberSchema.optional().describe('Bill number when provided by Congress.gov.'),
+    title: z
+      .string()
+      .optional()
+      .describe('Bill title when provided by Congress.gov. Omitted when unknown.'),
+    updateDate: z
+      .string()
+      .optional()
+      .describe('Last update timestamp when provided by Congress.gov.'),
+    latestAction: z
+      .object({
+        actionDate: z
+          .string()
+          .optional()
+          .describe('Latest action date when provided by Congress.gov.'),
+        text: z.string().optional().describe('Latest action text when provided by Congress.gov.'),
+      })
+      .passthrough()
+      .optional()
+      .describe('Latest action summary when provided by Congress.gov.'),
+  })
+  .passthrough();
 
 const BillTypeEnum = z.enum(['hr', 's', 'hjres', 'sjres', 'hconres', 'sconres', 'hres', 'sres']);
 
@@ -30,16 +66,7 @@ const SUB_RESOURCE_MAP: Record<string, string> = {
 };
 
 export const billLookupTool = tool('congressgov_bill_lookup', {
-  description: `Browse and retrieve U.S. legislative bill data from Congress.gov.
-
-IMPORTANT: This API has no keyword search. To find bills, filter by congress number, bill type, and/or date range. Use 'congressgov_bill_summaries' to discover recently summarized legislation, or 'congressgov_member_lookup' to find bills via their sponsor.
-
-Operations:
-- list: Browse bills. Requires 'congress'. Add 'billType' to narrow by chamber/type.
-- get: Full bill detail including sponsor, policy area, CBO estimates, and law info.
-- actions/amendments/cosponsors/committees/subjects/summaries/text/titles/related: Sub-resources for a specific bill. Require congress + billType + billNumber.
-
-For enacted laws, use 'congressgov_enacted_laws' instead.`,
+  description: `Browse and retrieve U.S. legislative bill data from Congress.gov. The API has no keyword search — discover bills by filtering on congress, bill type, and date range, or cross-reference via 'congressgov_bill_summaries' (recent CRS summaries) and 'congressgov_member_lookup' (bills by sponsor). Use 'list' to browse (requires congress), 'get' for full bill detail (sponsor, policy area, CBO estimates, law info), or drill into a specific bill with 'actions', 'amendments', 'cosponsors', 'committees', 'subjects', 'summaries', 'text', 'titles', or 'related' (each requires congress + billType + billNumber). For enacted laws, use 'congressgov_enacted_laws'.`,
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
   input: z.object({
     operation: OperationEnum.describe('Which data to retrieve.'),
@@ -61,21 +88,47 @@ For enacted laws, use 'congressgov_enacted_laws' instead.`,
     limit: z.number().int().min(1).max(250).default(20).describe('Results per page (1-250).'),
     offset: z.number().int().min(0).default(0).describe('Pagination offset.'),
   }),
-  output: z.object({}).passthrough().describe('Bill data from Congress.gov API.'),
+  output: z
+    .object({
+      data: z
+        .array(z.unknown())
+        .optional()
+        .describe(
+          'List or sub-resource records for list and drill-down operations. Preserves upstream item shapes instead of narrowing them.',
+        ),
+      pagination: PaginationSchema.optional().describe(
+        'Pagination metadata for list and sub-resource operations.',
+      ),
+      bill: BillDetailSchema.optional().describe('Bill detail for operation="get".'),
+      rawResponse: z
+        .unknown()
+        .optional()
+        .describe('Full upstream Congress.gov response envelope before normalization.'),
+    })
+    .passthrough()
+    .refine((result) => (Array.isArray(result.data) && !!result.pagination) || !!result.bill, {
+      message: 'Expected either paginated list data or a bill detail object.',
+    })
+    .describe('Bill data from Congress.gov API.'),
   format: formatBills,
 
   async handler(input, ctx) {
     const api = getCongressApi();
+    const fromDateTime = normalizeOptionalString(input.fromDateTime);
+    const toDateTime = normalizeOptionalString(input.toDateTime);
 
     if (input.operation === 'list') {
-      const result = await api.listBills({
-        congress: input.congress,
-        billType: input.billType,
-        fromDateTime: input.fromDateTime,
-        toDateTime: input.toDateTime,
-        limit: input.limit,
-        offset: input.offset,
-      });
+      const result = await api.listBills(
+        {
+          congress: input.congress,
+          billType: input.billType,
+          fromDateTime,
+          toDateTime,
+          limit: input.limit,
+          offset: input.offset,
+        },
+        ctx,
+      );
       ctx.log.info('Bills listed', { congress: input.congress, count: result.data.length });
       return result;
     }
@@ -87,11 +140,14 @@ For enacted laws, use 'congressgov_enacted_laws' instead.`,
     }
 
     if (input.operation === 'get') {
-      const result = await api.getBill({
-        congress: input.congress,
-        billType: input.billType,
-        billNumber: input.billNumber,
-      });
+      const result = await api.getBill(
+        {
+          congress: input.congress,
+          billType: input.billType,
+          billNumber: input.billNumber,
+        },
+        ctx,
+      );
       ctx.log.info('Bill retrieved', {
         congress: input.congress,
         billType: input.billType,
@@ -101,14 +157,17 @@ For enacted laws, use 'congressgov_enacted_laws' instead.`,
     }
 
     const subResource = SUB_RESOURCE_MAP[input.operation] ?? input.operation;
-    const result = await api.getBillSubResource({
-      congress: input.congress,
-      billType: input.billType,
-      billNumber: input.billNumber,
-      subResource: subResource as BillSubResource,
-      limit: input.limit,
-      offset: input.offset,
-    });
+    const result = await api.getBillSubResource(
+      {
+        congress: input.congress,
+        billType: input.billType,
+        billNumber: input.billNumber,
+        subResource: subResource as BillSubResource,
+        limit: input.limit,
+        offset: input.offset,
+      },
+      ctx,
+    );
     ctx.log.info('Bill sub-resource retrieved', {
       congress: input.congress,
       billType: input.billType,
