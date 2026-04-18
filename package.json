@@ -1,6 +1,6 @@
 {
   "name": "@cyanheads/congressgov-mcp-server",
-  "version": "0.3.7",
+  "version": "0.3.8",
   "description": "Access U.S. congressional data - bills, votes, members, committees - through MCP. STDIO & Streamable HTTP.",
   "mcpName": "io.github.cyanheads/congressgov-mcp-server",
   "type": "module",
