@@ -335,7 +335,8 @@ function renderSummaryItem(item: Record<string, unknown>, i: number): string {
   const billNum = s(item, 'bill', 'number') ?? '';
   const congress = s(item, 'bill', 'congress') ?? '';
   const version = s(item, 'actionDesc') ?? s(item, 'versionCode') ?? '';
-  const date = s(item, 'actionDate') ?? '';
+  const actionDate = s(item, 'actionDate') ?? '';
+  const summaryUpdate = s(item, 'lastSummaryUpdateDate') ?? s(item, 'updateDate') ?? '';
   const text = s(item, 'text') ?? '';
   const url = s(item, 'url') ?? s(item, 'bill', 'url');
 
@@ -343,7 +344,11 @@ function renderSummaryItem(item: Record<string, unknown>, i: number): string {
   const heading = congress ? `${ref}, Congress ${congress}` : ref;
   const lines = [`### ${i + 1}. ${heading}`];
 
-  const meta = join([f('Version', version), f('Date', date)]);
+  const meta = join([
+    f('Version', version),
+    f('Action Date', actionDate),
+    f('Summary Updated', summaryUpdate),
+  ]);
   if (meta) lines.push(meta);
 
   const billTitle = s(item, 'bill', 'title');
@@ -359,9 +364,9 @@ function renderSummaryItem(item: Record<string, unknown>, i: number): string {
 
 function renderCrsReportItem(item: Record<string, unknown>, i: number): string {
   const reportNumber =
-    s(item, 'reportNumber') ?? s(item, 'number') ?? 'Report number not available';
+    s(item, 'reportNumber') ?? s(item, 'number') ?? s(item, 'id') ?? 'Report number not available';
   const title = s(item, 'title') ?? 'Title not available';
-  const updated = s(item, 'updateDate') ?? s(item, 'date') ?? '';
+  const updated = s(item, 'updateDate') ?? s(item, 'publishDate') ?? s(item, 'date') ?? '';
   const summary = s(item, 'summary') ?? s(item, 'abstract') ?? '';
   const url = s(item, 'url');
 
@@ -370,6 +375,108 @@ function renderCrsReportItem(item: Record<string, unknown>, i: number): string {
   lines.push(summary || '_Summary not available._');
   if (url) lines.push(`**URL:** ${url}`);
 
+  return lines.join('\n');
+}
+
+/** Daily Congressional Record volumes and issues. */
+function renderDailyRecordItem(item: Record<string, unknown>, i: number): string {
+  const volume = s(item, 'volumeNumber');
+  const issue = s(item, 'issueNumber');
+  const issueDate = s(item, 'issueDate')?.slice(0, 10);
+  const congress = s(item, 'congress');
+  const session = s(item, 'sessionNumber');
+  const url = s(item, 'url');
+
+  const parts: string[] = [];
+  if (volume) parts.push(`Volume ${volume}`);
+  if (issue) parts.push(`Issue ${issue}`);
+  const idPart = parts.join(', ');
+  const heading = idPart && issueDate ? `${idPart} — ${issueDate}` : idPart || issueDate || 'Item';
+  const lines = [`### ${i + 1}. ${heading}`];
+
+  const meta = join([f('Congress', congress), session ? f('Session', session) : undefined]);
+  if (meta) lines.push(meta);
+  if (url) lines.push(`**URL:** ${url}`);
+
+  return lines.join('\n');
+}
+
+/** House roll call votes. */
+function renderRollVoteItem(item: Record<string, unknown>, i: number): string {
+  const roll = s(item, 'rollCallNumber');
+  const legType = s(item, 'legislationType')?.toUpperCase();
+  const legNum = s(item, 'legislationNumber');
+  const result = s(item, 'result');
+  const voteType = s(item, 'voteType');
+  const startDate = s(item, 'startDate');
+  const congress = s(item, 'congress');
+  const session = s(item, 'sessionNumber');
+  const url = s(item, 'url');
+
+  const legRef = legType && legNum ? `${legType} ${legNum}` : undefined;
+  const rollLabel = roll ? `Roll ${roll}` : 'Roll call';
+  const headingLeft = legRef ? `${rollLabel}: ${legRef}` : rollLabel;
+  const heading = result ? `${headingLeft} — ${result}` : headingLeft;
+  const lines = [`### ${i + 1}. ${heading}`];
+
+  const meta = join([
+    f('Congress', congress),
+    session ? f('Session', session) : undefined,
+    f('Type', voteType),
+    f('Date', startDate),
+  ]);
+  if (meta) lines.push(meta);
+  if (url) lines.push(`**URL:** ${url}`);
+
+  return lines.join('\n');
+}
+
+/** Bill legislative actions. */
+function renderBillActionItem(item: Record<string, unknown>, i: number): string {
+  const actionDate = s(item, 'actionDate');
+  const text = s(item, 'text') ?? 'No text';
+  const type = s(item, 'type');
+  const actionCode = s(item, 'actionCode');
+  const source = s(item, 'sourceSystem', 'name');
+
+  const heading = actionDate ? `${actionDate} — ${text}` : text;
+  const lines = [`### ${i + 1}. ${heading}`];
+
+  const meta = join([f('Type', type), f('Action Code', actionCode), f('Source', source)]);
+  if (meta) lines.push(meta);
+
+  const committees = item.committees;
+  if (Array.isArray(committees)) {
+    const names = committees.map((c) => s(c, 'name')).filter(Boolean);
+    if (names.length > 0) lines.push(`**Committees:** ${names.join(', ')}`);
+  }
+
+  return lines.join('\n');
+}
+
+/** Committee report text — items wrap a `formats` array of {type, url, isErrata}. */
+function renderCommitteeReportTextItem(item: Record<string, unknown>, i: number): string {
+  const formats = item.formats;
+  if (!Array.isArray(formats) || formats.length === 0) {
+    return renderGenericItem(item, i);
+  }
+
+  const entries = (formats as Record<string, unknown>[])
+    .map((fmt) => ({
+      type: s(fmt, 'type') ?? 'Unknown format',
+      url: s(fmt, 'url'),
+      isErrata: s(fmt, 'isErrata') === 'Y',
+    }))
+    .filter((e) => !!e.url);
+
+  if (entries.length === 0) return renderGenericItem(item, i);
+
+  const heading = entries.map((e) => (e.isErrata ? `${e.type} (Errata)` : e.type)).join(' / ');
+  const lines = [`### ${i + 1}. ${heading}`];
+  for (const e of entries) {
+    const label = e.isErrata ? `${e.type} (Errata)` : e.type;
+    lines.push(`**${label}:** ${e.url}`);
+  }
   return lines.join('\n');
 }
 
@@ -394,11 +501,22 @@ export function formatBills(result: Record<string, unknown>): TextBlock[] {
     const first = result.data[0];
     const firstRecord =
       typeof first === 'object' && first !== null ? (first as Record<string, unknown>) : undefined;
-    const isBills = !!firstRecord && 'title' in firstRecord && 'number' in firstRecord;
-    return tb(renderList(result, isBills ? renderBillItem : undefined));
+    const renderer = firstRecord ? pickBillListRenderer(firstRecord) : undefined;
+    return tb(renderList(result, renderer));
   }
   if (result.bill != null) return tb(renderDetail(result.bill));
   return tb(renderDetail(result));
+}
+
+function pickBillListRenderer(first: Record<string, unknown>): ItemRenderer | undefined {
+  if ('title' in first && 'number' in first) return renderBillItem;
+  // Actions always ship a `text` body; most also carry actionDate/actionCode/sourceSystem.
+  if (
+    'text' in first &&
+    ('actionDate' in first || 'actionCode' in first || 'sourceSystem' in first)
+  )
+    return renderBillActionItem;
+  return;
 }
 
 /** CRS bill summaries — "what's happening in Congress". */
@@ -419,11 +537,38 @@ export function formatMembers(result: Record<string, unknown>): TextBlock[] {
   return tb(renderDetail(result));
 }
 
+/** Pull the committee's display name from nested history when the top-level `name` is missing. */
+function extractCommitteeName(committee: Record<string, unknown>): string | undefined {
+  const direct = s(committee, 'name');
+  if (direct) return direct;
+  const history = committee.history;
+  if (!Array.isArray(history)) return;
+  return s(history[0], 'officialName') ?? s(history[0], 'libraryOfCongressName');
+}
+
 /** Committee browse, detail, and sub-resources (bills, reports, nominations). */
-export const formatCommittees = makeFormatter(['committee']);
+export function formatCommittees(result: Record<string, unknown>): TextBlock[] {
+  if (Array.isArray(result.data)) return tb(renderList(result));
+  if (result.committee != null) {
+    const committee = result.committee as Record<string, unknown>;
+    const name = extractCommitteeName(committee);
+    const body = renderDetail(committee);
+    return tb(name ? `# ${name}\n\n${body}` : body);
+  }
+  return tb(renderDetail(result));
+}
 
 /** Committee reports — list, detail, and text. */
-export const formatCommitteeReports = makeFormatter(['report', 'text']);
+export function formatCommitteeReports(result: Record<string, unknown>): TextBlock[] {
+  if (Array.isArray(result.data)) return tb(renderList(result));
+  if (Array.isArray(result.text)) {
+    const textResult = { data: result.text, pagination: { count: result.text.length } };
+    return tb(renderList(textResult, renderCommitteeReportTextItem));
+  }
+  if (result.report != null) return tb(renderDetail(result.report));
+  if (result.text != null) return tb(renderDetail(result.text));
+  return tb(renderDetail(result));
+}
 
 /** CRS policy analysis reports. */
 export function formatCrsReports(result: Record<string, unknown>): TextBlock[] {
@@ -433,13 +578,13 @@ export function formatCrsReports(result: Record<string, unknown>): TextBlock[] {
 }
 
 /** Daily Congressional Record — volumes, issues, articles. */
-export const formatDailyRecord = makeFormatter([]);
+export const formatDailyRecord = makeFormatter([], renderDailyRecordItem);
 
 /** Enacted public and private laws. */
 export const formatLaws = makeFormatter(['law'], renderBillItem);
 
 /** House roll call votes and member voting positions. */
-export const formatVotes = makeFormatter(['vote']);
+export const formatVotes = makeFormatter(['vote'], renderRollVoteItem);
 
 /** Presidential nominations and Senate confirmation pipeline. */
 export const formatNominations = makeFormatter(['nomination']);
