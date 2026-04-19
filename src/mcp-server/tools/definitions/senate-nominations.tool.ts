@@ -25,7 +25,9 @@ export const senateNominationsTool = tool('congressgov_senate_nominations', {
       .int()
       .positive()
       .optional()
-      .describe('Position ordinal within a nomination (for multi-nominee nominations).'),
+      .describe(
+        "Batch ordinal within a multi-nominee nomination. Each ordinal addresses a group of nominees; the 'nominees' operation returns every individual in that batch. Use 'get' first to see available ordinals on the nomination's `nominees` array.",
+      ),
     limit: z.number().int().min(1).max(250).default(20).describe('Results per page (1-250).'),
     offset: z.number().int().min(0).default(0).describe('Pagination offset.'),
   }),
