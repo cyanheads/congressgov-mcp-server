@@ -226,12 +226,25 @@ export class CongressApiService {
     return { vote: (data.houseRollCallVote ?? data) as ApiRecord };
   }
 
-  async getVoteMembers(params: GetVoteParams, ctx?: Context): Promise<EntityResult<'vote'>> {
+  async getVoteMembers(
+    params: GetVoteParams & PaginationParams,
+    ctx?: Context,
+  ): Promise<EntityResult<'vote'> & { pagination: Pagination }> {
+    /** Congress.gov returns the full member list in a single response — the `members` endpoint ignores limit/offset query params — so paginate client-side. */
     const data = await this.get(
       `/house-vote/${params.congress}/${params.session}/${params.voteNumber}/members`,
       ctx,
     );
-    return { vote: (data.houseRollCallVoteMemberVotes ?? data) as ApiRecord };
+    const voteRaw = (data.houseRollCallVoteMemberVotes ?? data) as ApiRecord;
+    const allResults = Array.isArray(voteRaw.results) ? voteRaw.results : [];
+    const limit = params.limit ?? 20;
+    const offset = params.offset ?? 0;
+    const paged = allResults.slice(offset, offset + limit);
+    const nextOffset = offset + paged.length < allResults.length ? offset + paged.length : null;
+    return {
+      vote: { ...voteRaw, results: paged },
+      pagination: { count: allResults.length, nextOffset },
+    };
   }
 
   // --- Nominations ---
@@ -475,9 +488,9 @@ export class CongressApiService {
   }
 
   private buildUrl(path: string, query?: Record<string, string>): URL {
+    /** api_key is sent as X-Api-Key header in fetchResponse() — keeping it out of the URL prevents leakage via upstream error messages. */
     const url = new URL(`${this.baseUrl}${path}`);
     url.searchParams.set('format', 'json');
-    url.searchParams.set('api_key', this.apiKey);
     if (query) {
       for (const [k, v] of Object.entries(query)) {
         if (v !== undefined && v !== '') url.searchParams.set(k, v);
@@ -528,7 +541,7 @@ export class CongressApiService {
   ): Promise<Response> {
     try {
       return await fetchWithTimeout(url, REQUEST_TIMEOUT_MS, requestContext, {
-        headers: { Accept: 'application/json' },
+        headers: { Accept: 'application/json', 'X-Api-Key': this.apiKey },
         ...(signal ? { signal } : {}),
       });
     } catch (error) {

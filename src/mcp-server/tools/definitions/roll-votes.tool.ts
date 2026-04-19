@@ -63,7 +63,7 @@ export const rollVotesTool = tool('congressgov_roll_votes', {
 
     const result =
       input.operation === 'members'
-        ? await api.getVoteMembers(voteParams, ctx)
+        ? await api.getVoteMembers({ ...voteParams, limit: input.limit, offset: input.offset }, ctx)
         : await api.getVote(voteParams, ctx);
     ctx.log.info('Vote retrieved', {
       ...voteParams,
