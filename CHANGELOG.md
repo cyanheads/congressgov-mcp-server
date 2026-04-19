@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.3.10] - 2026-04-19
+
+### Added
+
+- Added an `order` input to `congressgov_committee_lookup` for the `bills` sub-resource (`'recent'` default, `'oldest'` alternative). `'recent'` surfaces newest-activity bills directly — the tool handles the count probe + tail fetch internally so callers no longer need the `offset = count - limit` workaround
+
+### Changed
+
+- Bumped `@cyanheads/mcp-ts-core` from `^0.3.5` to `^0.3.7`
+- Cleaned tool descriptions — removed cross-references to sibling tools and resource URIs, and dropped internal API/implementation notes from `congressgov_bill_lookup`, `congressgov_bill_summaries`, `congressgov_committee_lookup`, `congressgov_enacted_laws`, and `congressgov_member_lookup`
+
 ## [0.3.9] - 2026-04-19
 
 ### Fixed
