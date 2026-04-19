@@ -1,6 +1,6 @@
 # congressgov-mcp-server - Directory Structure
 
-Generated on: 2026-04-18 13:10:23
+Generated on: 2026-04-19 16:33:54
 
 ```text
 congressgov-mcp-server/
@@ -104,7 +104,8 @@ congressgov-mcp-server/
 │   │       │   ├── member-lookup.tool.ts
 │   │       │   ├── roll-votes.tool.ts
 │   │       │   └── senate-nominations.tool.ts
-│   │       └── format-helpers.ts
+│   │       ├── format-helpers.ts
+│   │       └── tool-helpers.ts
 │   ├── services/
 │   │   └── congress-api/
 │   │       ├── congress-api-service.ts
@@ -124,17 +125,18 @@ congressgov-mcp-server/
 │   │   │       ├── current-congress.resource.test.ts
 │   │   │       └── member.resource.test.ts
 │   │   └── tools/
-│   │       └── definitions/
-│   │           ├── bill-lookup.tool.test.ts
-│   │           ├── bill-summaries.tool.test.ts
-│   │           ├── committee-lookup.tool.test.ts
-│   │           ├── committee-reports.tool.test.ts
-│   │           ├── crs-reports.tool.test.ts
-│   │           ├── daily-record.tool.test.ts
-│   │           ├── enacted-laws.tool.test.ts
-│   │           ├── member-lookup.tool.test.ts
-│   │           ├── roll-votes.tool.test.ts
-│   │           └── senate-nominations.tool.test.ts
+│   │       ├── definitions/
+│   │       │   ├── bill-lookup.tool.test.ts
+│   │       │   ├── bill-summaries.tool.test.ts
+│   │       │   ├── committee-lookup.tool.test.ts
+│   │       │   ├── committee-reports.tool.test.ts
+│   │       │   ├── crs-reports.tool.test.ts
+│   │       │   ├── daily-record.tool.test.ts
+│   │       │   ├── enacted-laws.tool.test.ts
+│   │       │   ├── member-lookup.tool.test.ts
+│   │       │   ├── roll-votes.tool.test.ts
+│   │       │   └── senate-nominations.tool.test.ts
+│   │       └── format-helpers.test.ts
 │   └── services/
 │       └── congress-api/
 │           └── congress-api-service.test.ts

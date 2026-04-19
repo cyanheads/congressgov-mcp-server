@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.3.9] - 2026-04-19
+
+### Fixed
+
+- Fixed `congressgov_crs_reports` list rendering every entry as "Report number not available" — `renderCrsReportItem` now falls back to the API's `id` field (e.g., `R46991`) when `reportNumber` and `number` are absent, and also checks `publishDate` when `updateDate` is missing (closes #2)
+- Fixed `congressgov_daily_record`, `congressgov_roll_votes`, `congressgov_bill_lookup` (actions sub-resource), and `congressgov_committee_reports` (text sub-resource) rendering every list entry as `"Item"` — added domain-specific renderers (`renderDailyRecordItem`, `renderRollVoteItem`, `renderBillActionItem`, `renderCommitteeReportTextItem`) that use the actual field shapes returned by Congress.gov (closes #2)
+- Fixed `congressgov_committee_lookup` detail view hiding the committee name — `formatCommittees` now extracts the display name from `history[0].officialName` (with `libraryOfCongressName` fallback) and surfaces it as a top-level heading (closes #2)
+
+### Changed
+
+- Clarified `congressgov_bill_summaries` description and parameter docs — `fromDateTime`/`toDateTime` filter on the summary update time, not the bill action date. The list heading now shows both the bill's action date and the summary update date (closes #2)
+- Documented ordering behavior on `congressgov_committee_lookup`'s `bills` sub-resource — results are ascending by update date and the upstream API does not honor a `sort` parameter; description now explains the `offset = count - limit` workaround for reaching recent activity (closes #2)
+
+### Added
+
+- Added `tests/mcp-server/tools/format-helpers.test.ts` with extensive regression coverage for every renderer, using fixtures captured from live Congress.gov API responses
+
 ## [0.3.8] - 2026-04-19
 
 ### Added
