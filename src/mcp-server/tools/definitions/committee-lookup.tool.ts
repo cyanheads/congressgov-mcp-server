@@ -9,7 +9,7 @@ import { formatCommittees } from '@/mcp-server/tools/format-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 
 export const committeeLookupTool = tool('congressgov_committee_lookup', {
-  description: `Browse congressional committees and their legislation, reports, and nominations. Committee codes follow the pattern chamber-prefix (h/s/j) + abbreviation + number — use 'list' to discover codes, then 'get' or drill into 'bills', 'reports', or 'nominations' ('nominations' is Senate-only). The committeeCode also works with the congress://committee/{committeeCode} resource.`,
+  description: `Browse congressional committees and their legislation, reports, and nominations. Committee codes follow the pattern chamber-prefix (h/s/j) + abbreviation + number — use 'list' to discover codes, then 'get' or drill into 'bills', 'reports', or 'nominations' ('nominations' is Senate-only). The 'bills' sub-resource returns results in ascending update-date order and the API does not honor a sort parameter — for recent activity on long-lived committees, first call with limit=1 to read pagination.count, then call again with offset=count-limit to jump to the most recent page. The committeeCode also works with the congress://committee/{committeeCode} resource.`,
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
   input: z.object({
     operation: z

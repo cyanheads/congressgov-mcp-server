@@ -17,7 +17,7 @@ const DEFAULT_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000;
 const PaginationSchema = createPaginationSchema('Total number of matching summaries.');
 
 export const billSummariesTool = tool('congressgov_bill_summaries', {
-  description: `Browse recent CRS (Congressional Research Service) bill summaries — plain-language summaries of bills at each legislative stage, and the best tool for answering "what's happening in Congress?". Defaults to the last 7 days; specify fromDateTime/toDateTime for custom ranges. Each summary includes the associated bill reference (congress, type, number) for follow-up with 'congressgov_bill_lookup'.`,
+  description: `Browse recent CRS (Congressional Research Service) bill summaries — plain-language summaries of bills at each legislative stage, and the best tool for answering "what's happening in Congress?". The fromDateTime/toDateTime filters apply to the summary's update time (lastSummaryUpdateDate), not the bill's action date — so results include recently rewritten summaries of older bills. Defaults to summaries updated in the last 7 days. Each item shows both the bill's action date and the summary update date; use 'congressgov_bill_lookup' to drill into the referenced bill.`,
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
   input: z.object({
     congress: z
@@ -34,9 +34,14 @@ export const billSummariesTool = tool('congressgov_bill_summaries', {
       .string()
       .optional()
       .describe(
-        'Start of date range (ISO 8601). Defaults to 7 days ago if neither date param is set.',
+        'Start of date range (ISO 8601), filtered on the summary update time. Defaults to 7 days ago if neither date param is set.',
       ),
-    toDateTime: z.string().optional().describe('End of date range (ISO 8601). Defaults to now.'),
+    toDateTime: z
+      .string()
+      .optional()
+      .describe(
+        'End of date range (ISO 8601), filtered on the summary update time. Defaults to now.',
+      ),
     limit: z.number().int().min(1).max(250).default(20).describe('Results per page (1-250).'),
     offset: z.number().int().min(0).default(0).describe('Pagination offset.'),
   }),
