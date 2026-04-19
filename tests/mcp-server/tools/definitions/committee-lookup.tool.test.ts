@@ -84,9 +84,119 @@ describe('committeeLookupTool', () => {
     await expect(committeeLookupTool.handler(input, ctx)).rejects.toThrow(/Senate/);
   });
 
-  it('fetches committee bills sub-resource', async () => {
+  it("fetches committee bills sub-resource (order='oldest' passes through in one call)", async () => {
     const ctx = createMockContext();
     mockApi.getCommitteeSubResource.mockResolvedValue({
+      data: [{ number: '1' }],
+      pagination: { count: 1, nextOffset: null },
+    });
+    const input = committeeLookupTool.input.parse({
+      operation: 'bills',
+      chamber: 'house',
+      committeeCode: 'hsju00',
+      order: 'oldest',
+    });
+    await committeeLookupTool.handler(input, ctx);
+    expect(mockApi.getCommitteeSubResource).toHaveBeenCalledTimes(1);
+    expect(mockApi.getCommitteeSubResource).toHaveBeenCalledWith(
+      expect.objectContaining({ subResource: 'bills', limit: 20, offset: 0 }),
+      ctx,
+    );
+  });
+
+  it("order='recent' probes count then fetches tail and reverses", async () => {
+    const ctx = createMockContext();
+    mockApi.getCommitteeSubResource
+      .mockResolvedValueOnce({
+        data: [{ number: 'first' }],
+        pagination: { count: 100, nextOffset: 1 },
+      })
+      .mockResolvedValueOnce({
+        data: [{ number: 'old' }, { number: 'mid' }, { number: 'new' }],
+        pagination: { count: 100, nextOffset: null },
+      });
+    const input = committeeLookupTool.input.parse({
+      operation: 'bills',
+      chamber: 'house',
+      committeeCode: 'hsju00',
+      limit: 3,
+    });
+    const result = await committeeLookupTool.handler(input, ctx);
+
+    expect(mockApi.getCommitteeSubResource).toHaveBeenCalledTimes(2);
+    expect(mockApi.getCommitteeSubResource).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ subResource: 'bills', limit: 1, offset: 0 }),
+      ctx,
+    );
+    expect(mockApi.getCommitteeSubResource).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ subResource: 'bills', limit: 3, offset: 97 }),
+      ctx,
+    );
+    expect(result.data).toEqual([{ number: 'new' }, { number: 'mid' }, { number: 'old' }]);
+    expect(result.pagination).toEqual({ count: 100, nextOffset: 3 });
+  });
+
+  it("order='recent' paginates backwards — offset=3 returns the next-older page", async () => {
+    const ctx = createMockContext();
+    mockApi.getCommitteeSubResource
+      .mockResolvedValueOnce({
+        data: [{ number: 'first' }],
+        pagination: { count: 100, nextOffset: 1 },
+      })
+      .mockResolvedValueOnce({
+        data: [{ number: 'a' }, { number: 'b' }, { number: 'c' }],
+        pagination: { count: 100, nextOffset: null },
+      });
+    const input = committeeLookupTool.input.parse({
+      operation: 'bills',
+      chamber: 'house',
+      committeeCode: 'hsju00',
+      limit: 3,
+      offset: 3,
+    });
+    const result = await committeeLookupTool.handler(input, ctx);
+
+    expect(mockApi.getCommitteeSubResource).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ limit: 3, offset: 94 }),
+      ctx,
+    );
+    expect(result.pagination).toEqual({ count: 100, nextOffset: 6 });
+  });
+
+  it("order='recent' clamps to available items near the beginning of history", async () => {
+    const ctx = createMockContext();
+    mockApi.getCommitteeSubResource
+      .mockResolvedValueOnce({
+        data: [{ number: 'first' }],
+        pagination: { count: 5, nextOffset: 1 },
+      })
+      .mockResolvedValueOnce({
+        data: [{ number: '1' }, { number: '2' }, { number: '3' }, { number: '4' }, { number: '5' }],
+        pagination: { count: 5, nextOffset: null },
+      });
+    const input = committeeLookupTool.input.parse({
+      operation: 'bills',
+      chamber: 'house',
+      committeeCode: 'hsju00',
+      limit: 20,
+    });
+    const result = await committeeLookupTool.handler(input, ctx);
+
+    expect(mockApi.getCommitteeSubResource).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ limit: 5, offset: 0 }),
+      ctx,
+    );
+    expect(result.data).toHaveLength(5);
+    expect(result.pagination).toEqual({ count: 5, nextOffset: null });
+  });
+
+  it("order='recent' returns empty when count is zero without a second fetch", async () => {
+    const ctx = createMockContext();
+    mockApi.getCommitteeSubResource.mockResolvedValueOnce({
       data: [],
       pagination: { count: 0, nextOffset: null },
     });
@@ -95,10 +205,29 @@ describe('committeeLookupTool', () => {
       chamber: 'house',
       committeeCode: 'hsju00',
     });
-    await committeeLookupTool.handler(input, ctx);
-    expect(mockApi.getCommitteeSubResource).toHaveBeenCalledWith(
-      expect.objectContaining({ subResource: 'bills' }),
-      ctx,
-    );
+    const result = await committeeLookupTool.handler(input, ctx);
+
+    expect(mockApi.getCommitteeSubResource).toHaveBeenCalledTimes(1);
+    expect(result.data).toEqual([]);
+    expect(result.pagination).toEqual({ count: 0, nextOffset: null });
+  });
+
+  it("order='recent' returns empty when offset runs past the end", async () => {
+    const ctx = createMockContext();
+    mockApi.getCommitteeSubResource.mockResolvedValueOnce({
+      data: [{ number: 'first' }],
+      pagination: { count: 10, nextOffset: 1 },
+    });
+    const input = committeeLookupTool.input.parse({
+      operation: 'bills',
+      chamber: 'house',
+      committeeCode: 'hsju00',
+      offset: 10,
+    });
+    const result = await committeeLookupTool.handler(input, ctx);
+
+    expect(mockApi.getCommitteeSubResource).toHaveBeenCalledTimes(1);
+    expect(result.data).toEqual([]);
+    expect(result.pagination).toEqual({ count: 10, nextOffset: null });
   });
 });
