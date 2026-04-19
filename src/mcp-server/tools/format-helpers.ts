@@ -55,15 +55,6 @@ function join(values: (string | undefined | null | false)[], sep = ' | '): strin
   return values.filter(Boolean).join(sep);
 }
 
-function withResponseNotes(result: Record<string, unknown>, text: string): string {
-  if (result.rawResponse == null) return text;
-  return [
-    text,
-    '',
-    '_Note: markdown output is summarized for readability. `rawResponse` preserves the full upstream Congress.gov envelope._',
-  ].join('\n');
-}
-
 // ── Rendering Core ──────────────────────────────────────────────────
 
 function pagHeader(result: Record<string, unknown>): string {
@@ -389,12 +380,11 @@ function makeFormatter(
   itemRenderer?: ItemRenderer,
 ): (result: Record<string, unknown>) => TextBlock[] {
   return (result) => {
-    if (Array.isArray(result.data))
-      return tb(withResponseNotes(result, renderList(result, itemRenderer)));
+    if (Array.isArray(result.data)) return tb(renderList(result, itemRenderer));
     for (const key of detailKeys) {
-      if (result[key] != null) return tb(withResponseNotes(result, renderDetail(result[key])));
+      if (result[key] != null) return tb(renderDetail(result[key]));
     }
-    return tb(withResponseNotes(result, renderDetail(result)));
+    return tb(renderDetail(result));
   };
 }
 
@@ -405,10 +395,10 @@ export function formatBills(result: Record<string, unknown>): TextBlock[] {
     const firstRecord =
       typeof first === 'object' && first !== null ? (first as Record<string, unknown>) : undefined;
     const isBills = !!firstRecord && 'title' in firstRecord && 'number' in firstRecord;
-    return tb(withResponseNotes(result, renderList(result, isBills ? renderBillItem : undefined)));
+    return tb(renderList(result, isBills ? renderBillItem : undefined));
   }
-  if (result.bill != null) return tb(withResponseNotes(result, renderDetail(result.bill)));
-  return tb(withResponseNotes(result, renderDetail(result)));
+  if (result.bill != null) return tb(renderDetail(result.bill));
+  return tb(renderDetail(result));
 }
 
 /** CRS bill summaries — "what's happening in Congress". */
@@ -420,14 +410,13 @@ export function formatMembers(result: Record<string, unknown>): TextBlock[] {
     const first = result.data[0];
     const firstRecord =
       typeof first === 'object' && first !== null ? (first as Record<string, unknown>) : undefined;
-    if (firstRecord && 'bioguideId' in firstRecord)
-      return tb(withResponseNotes(result, renderList(result, renderMemberItem)));
+    if (firstRecord && 'bioguideId' in firstRecord) return tb(renderList(result, renderMemberItem));
     if (firstRecord && 'number' in firstRecord && 'title' in firstRecord)
-      return tb(withResponseNotes(result, renderList(result, renderBillItem)));
-    return tb(withResponseNotes(result, renderList(result)));
+      return tb(renderList(result, renderBillItem));
+    return tb(renderList(result));
   }
-  if (result.member != null) return tb(withResponseNotes(result, renderDetail(result.member)));
-  return tb(withResponseNotes(result, renderDetail(result)));
+  if (result.member != null) return tb(renderDetail(result.member));
+  return tb(renderDetail(result));
 }
 
 /** Committee browse, detail, and sub-resources (bills, reports, nominations). */
@@ -438,10 +427,9 @@ export const formatCommitteeReports = makeFormatter(['report', 'text']);
 
 /** CRS policy analysis reports. */
 export function formatCrsReports(result: Record<string, unknown>): TextBlock[] {
-  if (Array.isArray(result.data))
-    return tb(withResponseNotes(result, renderList(result, renderCrsReportItem)));
-  if (result.report != null) return tb(withResponseNotes(result, renderDetail(result.report)));
-  return tb(withResponseNotes(result, renderDetail(result)));
+  if (Array.isArray(result.data)) return tb(renderList(result, renderCrsReportItem));
+  if (result.report != null) return tb(renderDetail(result.report));
+  return tb(renderDetail(result));
 }
 
 /** Daily Congressional Record — volumes, issues, articles. */

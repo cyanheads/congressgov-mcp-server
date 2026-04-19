@@ -54,10 +54,6 @@ export const crsReportsTool = tool('congressgov_crs_reports', {
         ),
       pagination: PaginationSchema.optional().describe('Pagination metadata for list results.'),
       report: CrsReportSchema.optional().describe('CRS report detail when operation="get".'),
-      rawResponse: z
-        .unknown()
-        .optional()
-        .describe('Full upstream Congress.gov response envelope before normalization.'),
     })
     .passthrough()
     .refine((result) => (Array.isArray(result.data) && !!result.pagination) || !!result.report, {

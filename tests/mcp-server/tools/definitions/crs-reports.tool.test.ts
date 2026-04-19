@@ -66,19 +66,4 @@ describe('crsReportsTool', () => {
     const blocks = crsReportsTool.format!(output);
     expect((blocks[0] as { text: string }).text).toContain('Summary not available');
   });
-
-  it('signals when markdown output is summarizing a preserved raw response', () => {
-    const output = crsReportsTool.output.parse({
-      data: [{ reportNumber: 'R40097', url: 'https://api.congress.gov/v3/crsreport/R40097' }],
-      pagination: { count: 1, nextOffset: null },
-      rawResponse: {
-        CRSReports: [
-          { reportNumber: 'R40097', url: 'https://api.congress.gov/v3/crsreport/R40097' },
-        ],
-      },
-    });
-    const blocks = crsReportsTool.format!(output);
-    expect((blocks[0] as { text: string }).text).toContain('rawResponse');
-    expect((blocks[0] as { text: string }).text).toContain('api.congress.gov');
-  });
 });

@@ -171,10 +171,6 @@ describe('CongressApiService', () => {
       const result = await service.listBills({ congress: 118 }, createMockContext());
       expect(result.data).toHaveLength(2);
       expect(result.pagination.count).toBe(2);
-      expect(result.rawResponse).toMatchObject({
-        bills: [{ number: 1 }, { number: 2 }],
-        request: { format: 'json' },
-      });
     });
 
     it('returns empty array when list key is missing', async () => {
@@ -192,6 +188,25 @@ describe('CongressApiService', () => {
       );
       const result = await service.listBills({ congress: 118 }, createMockContext());
       expect(result.data).toEqual(['raw-token', { number: 2 }]);
+    });
+  });
+
+  describe('law endpoints', () => {
+    it('populates the law field from the upstream bill key', async () => {
+      mockFetch.mockResolvedValue(
+        okJson({
+          bill: { number: 4, title: 'NOTAM Improvement Act of 2023', type: 'HR' },
+          request: { format: 'json' },
+        }),
+      );
+      const result = await service.getLaw(
+        { congress: 118, lawType: 'pub', lawNumber: 4 },
+        createMockContext(),
+      );
+      expect(result.law).toMatchObject({
+        number: 4,
+        title: 'NOTAM Improvement Act of 2023',
+      });
     });
   });
 

@@ -100,10 +100,6 @@ export const billLookupTool = tool('congressgov_bill_lookup', {
         'Pagination metadata for list and sub-resource operations.',
       ),
       bill: BillDetailSchema.optional().describe('Bill detail for operation="get".'),
-      rawResponse: z
-        .unknown()
-        .optional()
-        .describe('Full upstream Congress.gov response envelope before normalization.'),
     })
     .passthrough()
     .refine((result) => (Array.isArray(result.data) && !!result.pagination) || !!result.bill, {

@@ -57,10 +57,6 @@ export const memberLookupTool = tool('congressgov_member_lookup', {
       member: UnknownRecordSchema.optional().describe(
         'Member profile detail when operation="get".',
       ),
-      rawResponse: z
-        .unknown()
-        .optional()
-        .describe('Full upstream Congress.gov response envelope before normalization.'),
     })
     .passthrough()
     .refine((result) => (Array.isArray(result.data) && !!result.pagination) || !!result.member, {

@@ -42,12 +42,11 @@ import type {
 } from './types.js';
 
 type ApiRecord = Record<string, unknown>;
-type EntityResult<TKey extends string> = Record<TKey, ApiRecord> & { rawResponse: ApiRecord };
+type EntityResult<TKey extends string> = Record<TKey, ApiRecord>;
 
 interface FetchListResult {
   data: unknown[];
   pagination: Pagination;
-  rawResponse: ApiRecord;
   [key: string]: unknown;
 }
 
@@ -111,7 +110,7 @@ export class CongressApiService {
       `/bill/${params.congress}/${params.billType}/${params.billNumber}`,
       ctx,
     );
-    return { bill: data.bill as ApiRecord, rawResponse: data };
+    return { bill: data.bill as ApiRecord };
   }
 
   getBillSubResource(params: BillSubResourceParams, ctx?: Context): Promise<FetchListResult> {
@@ -130,11 +129,12 @@ export class CongressApiService {
   }
 
   async getLaw(params: GetLawParams, ctx?: Context): Promise<EntityResult<'law'>> {
+    /** Congress.gov returns the law endpoint payload under `bill` — a law is a bill that became law. */
     const data = await this.get(
       `/law/${params.congress}/${params.lawType}/${params.lawNumber}`,
       ctx,
     );
-    return { law: data.law as ApiRecord, rawResponse: data };
+    return { law: data.bill as ApiRecord };
   }
 
   // --- Members ---
@@ -167,7 +167,7 @@ export class CongressApiService {
 
   async getMember(bioguideId: string, ctx?: Context): Promise<EntityResult<'member'>> {
     const data = await this.get(`/member/${bioguideId}`, ctx);
-    return { member: data.member as ApiRecord, rawResponse: data };
+    return { member: data.member as ApiRecord };
   }
 
   getMemberLegislation(
@@ -195,7 +195,7 @@ export class CongressApiService {
     ctx?: Context,
   ): Promise<EntityResult<'committee'>> {
     const data = await this.get(`/committee/${chamber}/${committeeCode}`, ctx);
-    return { committee: data.committee as ApiRecord, rawResponse: data };
+    return { committee: data.committee as ApiRecord };
   }
 
   getCommitteeSubResource(
@@ -223,7 +223,7 @@ export class CongressApiService {
       `/house-vote/${params.congress}/${params.session}/${params.voteNumber}`,
       ctx,
     );
-    return { vote: (data.houseRollCallVote ?? data) as ApiRecord, rawResponse: data };
+    return { vote: (data.houseRollCallVote ?? data) as ApiRecord };
   }
 
   async getVoteMembers(params: GetVoteParams, ctx?: Context): Promise<EntityResult<'vote'>> {
@@ -231,7 +231,7 @@ export class CongressApiService {
       `/house-vote/${params.congress}/${params.session}/${params.voteNumber}/members`,
       ctx,
     );
-    return { vote: (data.houseRollCallVoteMemberVotes ?? data) as ApiRecord, rawResponse: data };
+    return { vote: (data.houseRollCallVoteMemberVotes ?? data) as ApiRecord };
   }
 
   // --- Nominations ---
@@ -246,7 +246,7 @@ export class CongressApiService {
     ctx?: Context,
   ): Promise<EntityResult<'nomination'>> {
     const data = await this.get(`/nomination/${congress}/${nominationNumber}`, ctx);
-    return { nomination: data.nomination as ApiRecord, rawResponse: data };
+    return { nomination: data.nomination as ApiRecord };
   }
 
   getNominee(
@@ -292,7 +292,7 @@ export class CongressApiService {
   async getCrsReport(params: GetCrsReportParams, ctx?: Context): Promise<EntityResult<'report'>> {
     try {
       const data = await this.get(`/crsreport/${params.reportNumber}`, ctx);
-      return { report: (data.CRSReport ?? data) as ApiRecord, rawResponse: data };
+      return { report: (data.CRSReport ?? data) as ApiRecord };
     } catch (error) {
       const statusCode =
         error instanceof McpError && typeof error.data?.statusCode === 'number'
@@ -343,7 +343,7 @@ export class CongressApiService {
         reportNumber: params.reportNumber,
       });
     }
-    return { report: report as ApiRecord, rawResponse: data };
+    return { report: report as ApiRecord };
   }
 
   async getCommitteeReportText(
@@ -401,7 +401,7 @@ export class CongressApiService {
     const data = await this.get(path, ctx, this.buildQuery(params, extraQuery));
     const items = this.extractListItems(data[listKey]);
     const pagination = this.extractPagination(data.pagination, items.length, params);
-    return { data: items, pagination, rawResponse: data };
+    return { data: items, pagination };
   }
 
   private extractPagination(

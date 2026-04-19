@@ -48,10 +48,6 @@ export const billSummariesTool = tool('congressgov_bill_summaries', {
           'Bill summaries returned by Congress.gov. Preserves upstream item shapes instead of narrowing them.',
         ),
       pagination: PaginationSchema.describe('Pagination metadata for the returned summaries.'),
-      rawResponse: z
-        .unknown()
-        .optional()
-        .describe('Full upstream Congress.gov response envelope before normalization.'),
     })
     .passthrough()
     .describe('Bill summary data from Congress.gov API.'),
