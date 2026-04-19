@@ -9,7 +9,7 @@ import { formatLaws } from '@/mcp-server/tools/format-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 
 export const enactedLawsTool = tool('congressgov_enacted_laws', {
-  description: `Browse enacted public and private laws from Congress.gov. Use 'list' to browse laws by congress. Each law references its origin bill — use 'congressgov_bill_lookup' with that reference for the full legislative history. Law types: pub: Public laws (general application, most common); priv: Private laws (specific individuals or entities)`,
+  description: `Browse enacted public and private laws from Congress.gov. Use 'list' to browse laws by congress, or 'get' for a specific law's full detail. Each law references its origin bill for the full legislative history. Law types: pub: Public laws (general application, most common); priv: Private laws (specific individuals or entities)`,
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
   input: z.object({
     operation: z.enum(['list', 'get']).describe('Which data to retrieve.'),

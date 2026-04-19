@@ -12,7 +12,7 @@ import { getCongressApi } from '@/services/congress-api/congress-api-service.js'
 const PaginationSchema = createPaginationSchema('Total number of matching members or bills.');
 
 export const memberLookupTool = tool('congressgov_member_lookup', {
-  description: `Discover congressional members and their legislative activity. The API has no name search — use 'list' with stateCode (optionally with district), with a congress number, or with currentMember=true to find members. Once you have a bioguideId, use 'get' for full profile or 'sponsored'/'cosponsored' for their legislative portfolio. The bioguideId also works with the congress://member/{bioguideId} resource.`,
+  description: `Discover congressional members and their legislative activity. There is no name search — use 'list' with stateCode (optionally with district), with a congress number, or with currentMember=true to find members. Once you have a bioguideId, use 'get' for full profile or 'sponsored'/'cosponsored' for their legislative portfolio.`,
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
   input: z.object({
     operation: z

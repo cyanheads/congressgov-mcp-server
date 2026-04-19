@@ -66,7 +66,7 @@ const SUB_RESOURCE_MAP: Record<string, string> = {
 };
 
 export const billLookupTool = tool('congressgov_bill_lookup', {
-  description: `Browse and retrieve U.S. legislative bill data from Congress.gov. The API has no keyword search — discover bills by filtering on congress, bill type, and date range, or cross-reference via 'congressgov_bill_summaries' (recent CRS summaries) and 'congressgov_member_lookup' (bills by sponsor). Use 'list' to browse (requires congress), 'get' for full bill detail (sponsor, policy area, CBO estimates, law info), or drill into a specific bill with 'actions', 'amendments', 'cosponsors', 'committees', 'subjects', 'summaries', 'text', 'titles', or 'related' (each requires congress + billType + billNumber). For enacted laws, use 'congressgov_enacted_laws'.`,
+  description: `Browse and retrieve U.S. legislative bill data from Congress.gov. Discover bills by filtering on congress, bill type, and date range — there is no keyword search. Use 'list' to browse (requires congress), 'get' for full bill detail (sponsor, policy area, CBO estimates, law info), or drill into a specific bill with 'actions', 'amendments', 'cosponsors', 'committees', 'subjects', 'summaries', 'text', 'titles', or 'related' (each requires congress + billType + billNumber).`,
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
   input: z.object({
     operation: OperationEnum.describe('Which data to retrieve.'),
