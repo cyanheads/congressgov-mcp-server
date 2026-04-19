@@ -9,14 +9,7 @@ import { formatCommitteeReports } from '@/mcp-server/tools/format-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 
 export const committeeReportsTool = tool('congressgov_committee_reports', {
-  description: `Browse and retrieve committee reports from Congress.gov.
-
-Committee reports accompany legislation reported out of committee. They explain the bill's purpose, committee amendments, dissenting views, and the committee vote.
-
-Report types:
-- hrpt: House reports
-- srpt: Senate reports
-- erpt: Executive reports`,
+  description: `Browse and retrieve committee reports from Congress.gov — reports accompany legislation reported out of committee and explain the bill's purpose, committee amendments, dissenting views, and the committee vote. Report types are 'hrpt' (House), 'srpt' (Senate), and 'erpt' (Executive).`,
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
   input: z.object({
     operation: z.enum(['list', 'get', 'text']).describe('Which data to retrieve.'),
@@ -41,12 +34,15 @@ Report types:
     const api = getCongressApi();
 
     if (input.operation === 'list') {
-      const result = await api.listCommitteeReports({
-        congress: input.congress,
-        reportType: input.reportType,
-        limit: input.limit,
-        offset: input.offset,
-      });
+      const result = await api.listCommitteeReports(
+        {
+          congress: input.congress,
+          reportType: input.reportType,
+          limit: input.limit,
+          offset: input.offset,
+        },
+        ctx,
+      );
       ctx.log.info('Committee reports listed', {
         congress: input.congress,
         count: result.data.length,
@@ -61,11 +57,14 @@ Report types:
     }
 
     if (input.operation === 'text') {
-      const result = await api.getCommitteeReportText({
-        congress: input.congress,
-        reportType: input.reportType,
-        reportNumber: input.reportNumber,
-      });
+      const result = await api.getCommitteeReportText(
+        {
+          congress: input.congress,
+          reportType: input.reportType,
+          reportNumber: input.reportNumber,
+        },
+        ctx,
+      );
       ctx.log.info('Committee report text retrieved', {
         congress: input.congress,
         reportType: input.reportType,
@@ -74,11 +73,14 @@ Report types:
       return result;
     }
 
-    const result = await api.getCommitteeReport({
-      congress: input.congress,
-      reportType: input.reportType,
-      reportNumber: input.reportNumber,
-    });
+    const result = await api.getCommitteeReport(
+      {
+        congress: input.congress,
+        reportType: input.reportType,
+        reportNumber: input.reportNumber,
+      },
+      ctx,
+    );
     ctx.log.info('Committee report retrieved', {
       congress: input.congress,
       reportType: input.reportType,

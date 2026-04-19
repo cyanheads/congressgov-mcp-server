@@ -55,10 +55,6 @@ function join(values: (string | undefined | null | false)[], sep = ' | '): strin
   return values.filter(Boolean).join(sep);
 }
 
-function isApiUrl(val: unknown): boolean {
-  return typeof val === 'string' && val.includes('api.congress.gov');
-}
-
 // ── Rendering Core ──────────────────────────────────────────────────
 
 function pagHeader(result: Record<string, unknown>): string {
@@ -103,7 +99,6 @@ function renderDetail(obj: unknown): string {
 
   for (const [key, val] of Object.entries(record)) {
     if (val == null || val === '') continue;
-    if (isApiUrl(val)) continue;
 
     if (typeof val === 'string') {
       const cleaned = stripHtml(val);
@@ -151,7 +146,7 @@ function renderDetail(obj: unknown): string {
       } else {
         lines.push(`\n**${key}:**`);
         for (const [k2, v2] of Object.entries(nested)) {
-          if (v2 == null || v2 === '' || isApiUrl(v2)) continue;
+          if (v2 == null || v2 === '') continue;
           if (typeof v2 === 'string') lines.push(`  **${k2}:** ${stripHtml(v2)}`);
           else if (typeof v2 === 'number' || typeof v2 === 'boolean')
             lines.push(`  **${k2}:** ${v2}`);
@@ -187,7 +182,6 @@ function renderGenericItem(item: Record<string, unknown>, index: number): string
   for (const [key, val] of Object.entries(item)) {
     if (val == null || val === '') continue;
     if (HEADING_FIELDS.has(key)) continue;
-    if (isApiUrl(val)) continue;
 
     if (typeof val === 'string') {
       const cleaned = stripHtml(val);
@@ -216,6 +210,7 @@ function renderGenericItem(item: Record<string, unknown>, index: number): string
           if (typeof sub === 'object' && sub !== null)
             lines.push(`  - ${renderInline(sub as Record<string, unknown>)}`);
         }
+        if (val.length > 5) lines.push(`  - _...${val.length - 5} more_`);
       }
     }
   }
@@ -241,11 +236,17 @@ const HEADING_FIELDS = new Set([
 function renderInline(obj: Record<string, unknown>): string {
   const parts: string[] = [];
   for (const [key, val] of Object.entries(obj)) {
-    if (val == null || val === '' || isApiUrl(val)) continue;
-    if (typeof val === 'string') parts.push(stripHtml(val).slice(0, 120));
-    else if (typeof val === 'number' || typeof val === 'boolean') parts.push(`${key}: ${val}`);
+    if (val == null || val === '') continue;
+    if (typeof val === 'string') {
+      const cleaned = stripHtml(val);
+      const preview = cleaned.length > 120 ? `${cleaned.slice(0, 117)}...` : cleaned;
+      parts.push(`${key}: ${preview}`);
+    } else if (typeof val === 'number' || typeof val === 'boolean') parts.push(`${key}: ${val}`);
   }
-  return parts.join(', ') || JSON.stringify(obj).slice(0, 200);
+  if (parts.length > 0) return parts.join(', ');
+
+  const json = JSON.stringify(obj);
+  return json.length > 200 ? `${json.slice(0, 197)}...` : json;
 }
 
 // ── Domain-Specific Item Renderers ──────────────────────────────────
@@ -254,6 +255,7 @@ function renderBillItem(item: Record<string, unknown>, i: number): string {
   const type = s(item, 'type')?.toUpperCase() ?? '';
   const number = s(item, 'number') ?? '';
   const title = s(item, 'title') ?? 'Untitled';
+  const url = s(item, 'url');
   const id = type && number ? `${type} ${number}: ` : '';
 
   const lines = [`### ${i + 1}. ${id}${title}`];
@@ -282,6 +284,7 @@ function renderBillItem(item: Record<string, unknown>, i: number): string {
 
   const updated = s(item, 'updateDate');
   if (updated) lines.push(`**Updated:** ${updated}`);
+  if (url) lines.push(`**URL:** ${url}`);
 
   return lines.join('\n');
 }
@@ -289,6 +292,7 @@ function renderBillItem(item: Record<string, unknown>, i: number): string {
 function renderMemberItem(item: Record<string, unknown>, i: number): string {
   const name =
     s(item, 'name') ?? s(item, 'directOrderName') ?? s(item, 'fullName') ?? 'Unknown Member';
+  const url = s(item, 'url');
   const lines = [`### ${i + 1}. ${name}`];
 
   const meta = join([
@@ -321,6 +325,8 @@ function renderMemberItem(item: Record<string, unknown>, i: number): string {
     );
   }
 
+  if (url) lines.push(`**URL:** ${url}`);
+
   return lines.join('\n');
 }
 
@@ -331,8 +337,9 @@ function renderSummaryItem(item: Record<string, unknown>, i: number): string {
   const version = s(item, 'actionDesc') ?? s(item, 'versionCode') ?? '';
   const date = s(item, 'actionDate') ?? '';
   const text = s(item, 'text') ?? '';
+  const url = s(item, 'url') ?? s(item, 'bill', 'url');
 
-  const ref = billType && billNum ? `${billType} ${billNum}` : 'Bill';
+  const ref = billType && billNum ? `${billType} ${billNum}` : 'Bill reference not available';
   const heading = congress ? `${ref}, Congress ${congress}` : ref;
   const lines = [`### ${i + 1}. ${heading}`];
 
@@ -340,13 +347,28 @@ function renderSummaryItem(item: Record<string, unknown>, i: number): string {
   if (meta) lines.push(meta);
 
   const billTitle = s(item, 'bill', 'title');
-  if (billTitle) lines.push(`**Bill Title:** ${billTitle}`);
+  lines.push(`**Bill Title:** ${billTitle ?? 'Not available'}`);
 
   // The summary text is the critical data — the whole point of this tool
-  if (text) {
-    lines.push('');
-    lines.push(text);
-  }
+  lines.push('');
+  lines.push(text || '_Summary text not available._');
+  if (url) lines.push(`\n**URL:** ${url}`);
+
+  return lines.join('\n');
+}
+
+function renderCrsReportItem(item: Record<string, unknown>, i: number): string {
+  const reportNumber =
+    s(item, 'reportNumber') ?? s(item, 'number') ?? 'Report number not available';
+  const title = s(item, 'title') ?? 'Title not available';
+  const updated = s(item, 'updateDate') ?? s(item, 'date') ?? '';
+  const summary = s(item, 'summary') ?? s(item, 'abstract') ?? '';
+  const url = s(item, 'url');
+
+  const lines = [`### ${i + 1}. ${reportNumber}: ${title}`];
+  if (updated) lines.push(`**Updated:** ${updated}`);
+  lines.push(summary || '_Summary not available._');
+  if (url) lines.push(`**URL:** ${url}`);
 
   return lines.join('\n');
 }
@@ -369,8 +391,10 @@ function makeFormatter(
 /** Bill browse, detail, and sub-resources (actions, amendments, cosponsors, etc.). */
 export function formatBills(result: Record<string, unknown>): TextBlock[] {
   if (Array.isArray(result.data)) {
-    const first = (result.data as Record<string, unknown>[])[0];
-    const isBills = first && 'title' in first && 'number' in first;
+    const first = result.data[0];
+    const firstRecord =
+      typeof first === 'object' && first !== null ? (first as Record<string, unknown>) : undefined;
+    const isBills = !!firstRecord && 'title' in firstRecord && 'number' in firstRecord;
     return tb(renderList(result, isBills ? renderBillItem : undefined));
   }
   if (result.bill != null) return tb(renderDetail(result.bill));
@@ -383,9 +407,11 @@ export const formatSummaries = makeFormatter([], renderSummaryItem);
 /** Member browse, detail, and sponsored/cosponsored legislation. */
 export function formatMembers(result: Record<string, unknown>): TextBlock[] {
   if (Array.isArray(result.data)) {
-    const first = (result.data as Record<string, unknown>[])[0];
-    if (first && 'bioguideId' in first) return tb(renderList(result, renderMemberItem));
-    if (first && 'number' in first && 'title' in first)
+    const first = result.data[0];
+    const firstRecord =
+      typeof first === 'object' && first !== null ? (first as Record<string, unknown>) : undefined;
+    if (firstRecord && 'bioguideId' in firstRecord) return tb(renderList(result, renderMemberItem));
+    if (firstRecord && 'number' in firstRecord && 'title' in firstRecord)
       return tb(renderList(result, renderBillItem));
     return tb(renderList(result));
   }
@@ -400,7 +426,11 @@ export const formatCommittees = makeFormatter(['committee']);
 export const formatCommitteeReports = makeFormatter(['report', 'text']);
 
 /** CRS policy analysis reports. */
-export const formatCrsReports = makeFormatter(['report']);
+export function formatCrsReports(result: Record<string, unknown>): TextBlock[] {
+  if (Array.isArray(result.data)) return tb(renderList(result, renderCrsReportItem));
+  if (result.report != null) return tb(renderDetail(result.report));
+  return tb(renderDetail(result));
+}
 
 /** Daily Congressional Record — volumes, issues, articles. */
 export const formatDailyRecord = makeFormatter([]);

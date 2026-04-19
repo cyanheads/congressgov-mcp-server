@@ -34,6 +34,10 @@ describe('crsReportsTool', () => {
     const input = crsReportsTool.input.parse({ operation: 'list' });
     const result = await crsReportsTool.handler(input, ctx);
     expect(result.data).toHaveLength(1);
+    expect(mockApi.listCrsReports).toHaveBeenCalledWith(
+      expect.objectContaining({ limit: 20, offset: 0 }),
+      ctx,
+    );
   });
 
   it('gets a specific CRS report', async () => {
@@ -45,11 +49,21 @@ describe('crsReportsTool', () => {
     });
     const result = await crsReportsTool.handler(input, ctx);
     expect(result.report).toEqual({ title: 'Climate Policy' });
+    expect(mockApi.getCrsReport).toHaveBeenCalledWith({ reportNumber: 'R40097' }, ctx);
   });
 
   it('throws when get is missing reportNumber', async () => {
     const ctx = createMockContext();
     const input = crsReportsTool.input.parse({ operation: 'get' });
     await expect(crsReportsTool.handler(input, ctx)).rejects.toThrow(/reportNumber/);
+  });
+
+  it('formats sparse CRS output without inventing summary text', () => {
+    const output = crsReportsTool.output.parse({
+      data: [{ reportNumber: 'R40097' }],
+      pagination: { count: 1, nextOffset: null },
+    });
+    const blocks = crsReportsTool.format!(output);
+    expect((blocks[0] as { text: string }).text).toContain('Summary not available');
   });
 });

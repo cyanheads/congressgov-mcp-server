@@ -9,11 +9,7 @@ import { formatNominations } from '@/mcp-server/tools/format-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 
 export const senateNominationsTool = tool('congressgov_senate_nominations', {
-  description: `Browse presidential nominations to federal positions and track the Senate confirmation process.
-
-Nominations use 'PN' (Presidential Nomination) numbering. A single nomination may contain multiple nominees — use 'nominees' to see individual appointees.
-
-Partitioned nominations (e.g., PN230-1, PN230-2) occur when nominees within one nomination follow different confirmation paths.`,
+  description: `Browse presidential nominations to federal positions and track the Senate confirmation process. Nominations use 'PN' (Presidential Nomination) numbering, and a single nomination may contain multiple nominees — use 'nominees' to see individual appointees. Partitioned nominations (e.g., PN230-1, PN230-2) occur when nominees within one nomination follow different confirmation paths.`,
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
   input: z.object({
     operation: z
@@ -40,11 +36,14 @@ Partitioned nominations (e.g., PN230-1, PN230-2) occur when nominees within one 
     const api = getCongressApi();
 
     if (input.operation === 'list') {
-      const result = await api.listNominations({
-        congress: input.congress,
-        limit: input.limit,
-        offset: input.offset,
-      });
+      const result = await api.listNominations(
+        {
+          congress: input.congress,
+          limit: input.limit,
+          offset: input.offset,
+        },
+        ctx,
+      );
       ctx.log.info('Nominations listed', {
         congress: input.congress,
         count: result.data.length,
@@ -59,7 +58,7 @@ Partitioned nominations (e.g., PN230-1, PN230-2) occur when nominees within one 
     }
 
     if (input.operation === 'get') {
-      const result = await api.getNomination(input.congress, input.nominationNumber);
+      const result = await api.getNomination(input.congress, input.nominationNumber, ctx);
       ctx.log.info('Nomination retrieved', {
         congress: input.congress,
         nominationNumber: input.nominationNumber,
@@ -73,10 +72,16 @@ Partitioned nominations (e.g., PN230-1, PN230-2) occur when nominees within one 
           "The 'nominees' operation requires 'ordinal' — the position number within the nomination. Use 'get' first to see available ordinals in the nominees array.",
         );
       }
-      const result = await api.getNominee(input.congress, input.nominationNumber, input.ordinal, {
-        limit: input.limit,
-        offset: input.offset,
-      });
+      const result = await api.getNominee(
+        input.congress,
+        input.nominationNumber,
+        input.ordinal,
+        {
+          limit: input.limit,
+          offset: input.offset,
+        },
+        ctx,
+      );
       ctx.log.info('Nominee retrieved', {
         congress: input.congress,
         nominationNumber: input.nominationNumber,
@@ -85,13 +90,16 @@ Partitioned nominations (e.g., PN230-1, PN230-2) occur when nominees within one 
       return result;
     }
 
-    const result = await api.getNominationSubResource({
-      congress: input.congress,
-      nominationNumber: input.nominationNumber,
-      subResource: input.operation,
-      limit: input.limit,
-      offset: input.offset,
-    });
+    const result = await api.getNominationSubResource(
+      {
+        congress: input.congress,
+        nominationNumber: input.nominationNumber,
+        subResource: input.operation,
+        limit: input.limit,
+        offset: input.offset,
+      },
+      ctx,
+    );
     ctx.log.info('Nomination sub-resource retrieved', {
       congress: input.congress,
       nominationNumber: input.nominationNumber,

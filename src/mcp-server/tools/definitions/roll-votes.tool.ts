@@ -9,11 +9,7 @@ import { formatVotes } from '@/mcp-server/tools/format-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 
 export const rollVotesTool = tool('congressgov_roll_votes', {
-  description: `Retrieve House roll call vote data and individual member voting positions.
-
-NOTE: Covers House votes only — Senate vote data is not yet in the Congress.gov API.
-
-Use 'list' to find votes by congress and session, 'get' for vote details (question, result, associated bill), and 'members' for how each representative voted.`,
+  description: `Retrieve House roll call vote data and individual member voting positions — House-only, as Senate vote data is not yet in the Congress.gov API. Use 'list' to find votes by congress and session, 'get' for vote details (question, result, associated bill), or 'members' for how each representative voted.`,
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
   input: z.object({
     operation: z.enum(['list', 'get', 'members']).describe('Which data to retrieve.'),
@@ -40,12 +36,15 @@ Use 'list' to find votes by congress and session, 'get' for vote details (questi
     const api = getCongressApi();
 
     if (input.operation === 'list') {
-      const result = await api.listVotes({
-        congress: input.congress,
-        session: input.session,
-        limit: input.limit,
-        offset: input.offset,
-      });
+      const result = await api.listVotes(
+        {
+          congress: input.congress,
+          session: input.session,
+          limit: input.limit,
+          offset: input.offset,
+        },
+        ctx,
+      );
       ctx.log.info('Votes listed', { congress: input.congress, session: input.session });
       return result;
     }
@@ -64,8 +63,8 @@ Use 'list' to find votes by congress and session, 'get' for vote details (questi
 
     const result =
       input.operation === 'members'
-        ? await api.getVoteMembers(voteParams)
-        : await api.getVote(voteParams);
+        ? await api.getVoteMembers(voteParams, ctx)
+        : await api.getVote(voteParams, ctx);
     ctx.log.info('Vote retrieved', {
       ...voteParams,
       operation: input.operation,

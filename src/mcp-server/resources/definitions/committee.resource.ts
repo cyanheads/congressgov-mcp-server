@@ -21,7 +21,7 @@ export const committeeResource = resource('congress://committee/{committeeCode}'
       : params.committeeCode.startsWith('j')
         ? 'joint'
         : 'house';
-    const result = await api.getCommittee(chamber, params.committeeCode);
+    const result = await api.getCommittee(chamber, params.committeeCode, ctx);
     ctx.log.info('Committee resource fetched', { committeeCode: params.committeeCode });
     return result.committee;
   },

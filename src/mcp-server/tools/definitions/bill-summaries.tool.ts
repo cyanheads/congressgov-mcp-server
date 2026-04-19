@@ -6,14 +6,18 @@
 import { tool, z } from '@cyanheads/mcp-ts-core';
 
 import { formatSummaries } from '@/mcp-server/tools/format-helpers.js';
+import {
+  createPaginationSchema,
+  normalizeOptionalString,
+} from '@/mcp-server/tools/tool-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 
+const DEFAULT_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000;
+
+const PaginationSchema = createPaginationSchema('Total number of matching summaries.');
+
 export const billSummariesTool = tool('congressgov_bill_summaries', {
-  description: `Browse recent CRS (Congressional Research Service) bill summaries.
-
-This is the best tool for answering "what's happening in Congress?" — CRS analysts write plain-language summaries of bills at each legislative stage.
-
-By default, returns summaries from the last 7 days. Specify fromDateTime/toDateTime for custom ranges. Each summary includes the associated bill reference (congress, type, number) for follow-up with congressgov_bill_lookup.`,
+  description: `Browse recent CRS (Congressional Research Service) bill summaries — plain-language summaries of bills at each legislative stage, and the best tool for answering "what's happening in Congress?". Defaults to the last 7 days; specify fromDateTime/toDateTime for custom ranges. Each summary includes the associated bill reference (congress, type, number) for follow-up with 'congressgov_bill_lookup'.`,
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
   input: z.object({
     congress: z
@@ -36,10 +40,23 @@ By default, returns summaries from the last 7 days. Specify fromDateTime/toDateT
     limit: z.number().int().min(1).max(250).default(20).describe('Results per page (1-250).'),
     offset: z.number().int().min(0).default(0).describe('Pagination offset.'),
   }),
-  output: z.object({}).passthrough().describe('Bill summary data from Congress.gov API.'),
+  output: z
+    .object({
+      data: z
+        .array(z.unknown())
+        .describe(
+          'Bill summaries returned by Congress.gov. Preserves upstream item shapes instead of narrowing them.',
+        ),
+      pagination: PaginationSchema.describe('Pagination metadata for the returned summaries.'),
+    })
+    .passthrough()
+    .describe('Bill summary data from Congress.gov API.'),
   format: formatSummaries,
 
   async handler(input, ctx) {
+    const fromDateTimeInput = normalizeOptionalString(input.fromDateTime);
+    const toDateTimeInput = normalizeOptionalString(input.toDateTime);
+
     if (input.billType && !input.congress) {
       throw new Error(
         "The 'billType' filter requires 'congress'. Provide both or omit billType to browse across all types.",
@@ -47,20 +64,23 @@ By default, returns summaries from the last 7 days. Specify fromDateTime/toDateT
     }
 
     const fromDateTime =
-      input.fromDateTime ??
-      (!input.toDateTime
-        ? new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z')
+      fromDateTimeInput ??
+      (!toDateTimeInput
+        ? new Date(Date.now() - DEFAULT_LOOKBACK_MS).toISOString().replace(/\.\d{3}Z$/, 'Z')
         : undefined);
 
     const api = getCongressApi();
-    const result = await api.listSummaries({
-      congress: input.congress,
-      billType: input.billType,
-      fromDateTime,
-      toDateTime: input.toDateTime,
-      limit: input.limit,
-      offset: input.offset,
-    });
+    const result = await api.listSummaries(
+      {
+        congress: input.congress,
+        billType: input.billType,
+        fromDateTime,
+        toDateTime: toDateTimeInput,
+        limit: input.limit,
+        offset: input.offset,
+      },
+      ctx,
+    );
     ctx.log.info('Summaries listed', { count: result.data.length });
     return result;
   },

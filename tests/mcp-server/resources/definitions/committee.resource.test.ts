@@ -29,7 +29,7 @@ describe('committeeResource', () => {
     mockApi.getCommittee.mockResolvedValue({ committee: { name: 'Judiciary' } });
     const params = committeeResource.params!.parse({ committeeCode: 'hsju00' });
     await committeeResource.handler(params, ctx);
-    expect(mockApi.getCommittee).toHaveBeenCalledWith('house', 'hsju00');
+    expect(mockApi.getCommittee).toHaveBeenCalledWith('house', 'hsju00', ctx);
   });
 
   it('infers senate chamber from s-prefix code', async () => {
@@ -37,7 +37,7 @@ describe('committeeResource', () => {
     mockApi.getCommittee.mockResolvedValue({ committee: { name: 'Finance' } });
     const params = committeeResource.params!.parse({ committeeCode: 'ssfi00' });
     await committeeResource.handler(params, ctx);
-    expect(mockApi.getCommittee).toHaveBeenCalledWith('senate', 'ssfi00');
+    expect(mockApi.getCommittee).toHaveBeenCalledWith('senate', 'ssfi00', ctx);
   });
 
   it('infers joint chamber from j-prefix code', async () => {
@@ -45,7 +45,7 @@ describe('committeeResource', () => {
     mockApi.getCommittee.mockResolvedValue({ committee: { name: 'Joint Economic' } });
     const params = committeeResource.params!.parse({ committeeCode: 'jsec00' });
     await committeeResource.handler(params, ctx);
-    expect(mockApi.getCommittee).toHaveBeenCalledWith('joint', 'jsec00');
+    expect(mockApi.getCommittee).toHaveBeenCalledWith('joint', 'jsec00', ctx);
   });
 
   it('returns committee data', async () => {

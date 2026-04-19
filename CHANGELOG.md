@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.3.8] - 2026-04-19
+
+### Added
+
+- Added `AGENTS.md` for non-Claude agents
+- Added the `add-app-tool` skill for MCP Apps tool and UI resource scaffolding
+- Added shared tool schema helpers in `src/mcp-server/tools/tool-helpers.ts`
+
+### Changed
+
+- Bumped `@cyanheads/mcp-ts-core` from `^0.2.10` to `^0.3.5`
+- Bumped `@biomejs/biome` from `^2.4.10` to `^2.4.12`, `@types/node` from `^25.5.0` to `^25.6.0`, `typescript` from `^6.0.2` to `^6.0.3`, and `vitest` from `^4.1.2` to `^4.1.4`
+- Updated Congress.gov tool and resource outputs to use stricter schemas, preserve pagination metadata, and pass request context through service calls. Tools return only normalized fields (`data`/`pagination` for lists, `bill`/`member`/`committee`/etc. for details) — upstream envelopes are no longer duplicated in structured output
+- Updated markdown formatters to surface upstream URLs and improve empty-field handling
+- Updated `CongressApiService` to use framework retry and timeout utilities, and carry request context and abort signals through HTTP calls
+- Updated project skills for direct `createApp()` registration guidance, external-service resilience, testing layout, field-test coverage, and devcheck expectations
+- Dropped the `overrides` block for `brace-expansion` and `path-to-regexp` — upstream chains now resolve to patched versions and `bun audit` is clean without them
+
+### Fixed
+
+- Fixed `getLaw` returning an empty `law` field — Congress.gov returns the law endpoint payload under `bill`, not `law`, so the normalized field was always undefined. Added a service-level test asserting `result.law` is populated
+- Fixed CRS report error handling to distinguish structured upstream "not found" responses from real service outages
+- Fixed member lookup validation to reject ambiguous `congress` and location filters instead of silently dropping one
+- Fixed the `CLAUDE.md` commands table to use `bun run test`
+
 ## [0.3.7] - 2026-03-30
 
 ### Changed

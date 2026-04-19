@@ -16,7 +16,7 @@ export const memberResource = resource('congress://member/{bioguideId}', {
 
   async handler(params, ctx) {
     const api = getCongressApi();
-    const result = await api.getMember(params.bioguideId);
+    const result = await api.getMember(params.bioguideId, ctx);
     ctx.log.info('Member resource fetched', { bioguideId: params.bioguideId });
     return result.member;
   },
