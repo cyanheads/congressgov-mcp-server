@@ -49,11 +49,14 @@ describe('CongressApiService', () => {
   });
 
   describe('URL construction', () => {
-    it('appends api_key and format=json to requests', async () => {
+    it('sends api key via X-Api-Key header and format=json in query', async () => {
       mockFetch.mockResolvedValue(okJson({ congress: {} }));
       await service.getCurrentCongress(createMockContext());
       const url = new URL(mockFetch.mock.calls[0][0]);
-      expect(url.searchParams.get('api_key')).toBe('test-api-key');
+      const init = mockFetch.mock.calls[0][1] as RequestInit;
+      const headers = init.headers as Record<string, string>;
+      expect(headers['X-Api-Key']).toBe('test-api-key');
+      expect(url.searchParams.get('api_key')).toBeNull();
       expect(url.searchParams.get('format')).toBe('json');
     });
 
