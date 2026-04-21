@@ -368,12 +368,46 @@ function renderCrsReportItem(item: Record<string, unknown>, i: number): string {
   const title = s(item, 'title') ?? 'Title not available';
   const updated = s(item, 'updateDate') ?? s(item, 'publishDate') ?? s(item, 'date') ?? '';
   const summary = s(item, 'summary') ?? s(item, 'abstract') ?? '';
+  const contentType = s(item, 'contentType');
+  const status = s(item, 'status');
+  const version = s(item, 'version');
   const url = s(item, 'url');
 
   const lines = [`### ${i + 1}. ${reportNumber}: ${title}`];
-  if (updated) lines.push(`**Updated:** ${updated}`);
+  const meta = join([
+    f('Updated', updated),
+    f('Type', contentType),
+    f('Status', status),
+    f('Version', version),
+  ]);
+  if (meta) lines.push(meta);
   lines.push(summary || '_Summary not available._');
   if (url) lines.push(`**URL:** ${url}`);
+
+  return lines.join('\n');
+}
+
+/** Daily Congressional Record articles — flattened from section-wrapped shape. */
+function renderDailyArticleItem(item: Record<string, unknown>, i: number): string {
+  const title = s(item, 'title') ?? 'Untitled article';
+  const section = s(item, 'sectionName');
+  const startPage = s(item, 'startPage');
+  const endPage = s(item, 'endPage');
+  const pages =
+    startPage && endPage && startPage !== endPage ? `${startPage}–${endPage}` : startPage;
+
+  const lines = [`### ${i + 1}. ${title}`];
+  const meta = join([f('Section', section), f('Pages', pages)]);
+  if (meta) lines.push(meta);
+
+  const text = item.text;
+  if (Array.isArray(text)) {
+    for (const entry of text as Record<string, unknown>[]) {
+      const type = s(entry, 'type');
+      const url = s(entry, 'url');
+      if (type && url) lines.push(`**${type}:** ${url}`);
+    }
+  }
 
   return lines.join('\n');
 }
@@ -385,6 +419,7 @@ function renderDailyRecordItem(item: Record<string, unknown>, i: number): string
   const issueDate = s(item, 'issueDate')?.slice(0, 10);
   const congress = s(item, 'congress');
   const session = s(item, 'sessionNumber');
+  const updated = s(item, 'updateDate');
   const url = s(item, 'url');
 
   const parts: string[] = [];
@@ -394,7 +429,7 @@ function renderDailyRecordItem(item: Record<string, unknown>, i: number): string
   const heading = idPart && issueDate ? `${idPart} — ${issueDate}` : idPart || issueDate || 'Item';
   const lines = [`### ${i + 1}. ${heading}`];
 
-  const meta = join([f('Congress', congress), session ? f('Session', session) : undefined]);
+  const meta = join([f('Congress', congress), f('Session', session), f('Updated', updated)]);
   if (meta) lines.push(meta);
   if (url) lines.push(`**URL:** ${url}`);
 
@@ -404,13 +439,17 @@ function renderDailyRecordItem(item: Record<string, unknown>, i: number): string
 /** House roll call votes. */
 function renderRollVoteItem(item: Record<string, unknown>, i: number): string {
   const roll = s(item, 'rollCallNumber');
+  const identifier = s(item, 'identifier');
   const legType = s(item, 'legislationType')?.toUpperCase();
   const legNum = s(item, 'legislationNumber');
+  const legislationUrl = s(item, 'legislationUrl');
   const result = s(item, 'result');
   const voteType = s(item, 'voteType');
   const startDate = s(item, 'startDate');
   const congress = s(item, 'congress');
   const session = s(item, 'sessionNumber');
+  const updated = s(item, 'updateDate');
+  const sourceUrl = s(item, 'sourceDataURL');
   const url = s(item, 'url');
 
   const legRef = legType && legNum ? `${legType} ${legNum}` : undefined;
@@ -421,12 +460,16 @@ function renderRollVoteItem(item: Record<string, unknown>, i: number): string {
 
   const meta = join([
     f('Congress', congress),
-    session ? f('Session', session) : undefined,
+    f('Session', session),
     f('Type', voteType),
     f('Date', startDate),
+    identifier && identifier !== roll ? f('ID', identifier) : undefined,
+    f('Updated', updated),
   ]);
   if (meta) lines.push(meta);
+  if (legislationUrl) lines.push(`**Legislation URL:** ${legislationUrl}`);
   if (url) lines.push(`**URL:** ${url}`);
+  if (sourceUrl) lines.push(`**Source Data URL:** ${sourceUrl}`);
 
   return lines.join('\n');
 }
@@ -578,7 +621,20 @@ export function formatCrsReports(result: Record<string, unknown>): TextBlock[] {
 }
 
 /** Daily Congressional Record — volumes, issues, articles. */
-export const formatDailyRecord = makeFormatter([], renderDailyRecordItem);
+/** Daily Congressional Record. Dispatches between volumes/issues and flattened articles. */
+export function formatDailyRecord(result: Record<string, unknown>): TextBlock[] {
+  if (Array.isArray(result.data)) {
+    const first = result.data[0];
+    const firstRecord =
+      typeof first === 'object' && first !== null ? (first as Record<string, unknown>) : undefined;
+    const renderer =
+      firstRecord && ('sectionName' in firstRecord || 'title' in firstRecord)
+        ? renderDailyArticleItem
+        : renderDailyRecordItem;
+    return tb(renderList(result, renderer));
+  }
+  return tb(renderDetail(result));
+}
 
 /** Enacted public and private laws. */
 export const formatLaws = makeFormatter(['law'], renderBillItem);

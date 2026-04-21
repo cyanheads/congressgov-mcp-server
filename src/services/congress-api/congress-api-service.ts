@@ -60,6 +60,35 @@ function isApiRecord(value: unknown): value is ApiRecord {
   return typeof value === 'object' && value !== null;
 }
 
+/**
+ * The `/daily-congressional-record/{v}/{i}/articles` endpoint wraps articles
+ * in section objects: `[{ name, sectionArticles: [...] }]`. Upstream pagination
+ * applies to articles (leaves), so flattening aligns `data.length` with the
+ * advertised `pagination.count` and gives each article a `sectionName` field
+ * for rendering. Resolves cyanheads/congressgov-mcp-server#3.
+ */
+function flattenArticleSections(sections: unknown[]): unknown[] {
+  const flat: unknown[] = [];
+  for (const section of sections) {
+    if (!isApiRecord(section)) {
+      flat.push(section);
+      continue;
+    }
+    const sectionName = typeof section.name === 'string' ? section.name : undefined;
+    const articles = section.sectionArticles;
+    if (!Array.isArray(articles)) {
+      flat.push(section);
+      continue;
+    }
+    for (const article of articles) {
+      if (isApiRecord(article)) {
+        flat.push(sectionName ? { sectionName, ...article } : article);
+      }
+    }
+  }
+  return flat;
+}
+
 function isNativeAbortSignal(value: unknown): value is AbortSignal {
   if (
     typeof AbortSignal !== 'function' ||
@@ -385,9 +414,10 @@ export class CongressApiService {
     );
   }
 
-  getDailyArticles(params: GetDailyArticlesParams, ctx?: Context): Promise<FetchListResult> {
+  async getDailyArticles(params: GetDailyArticlesParams, ctx?: Context): Promise<FetchListResult> {
     const path = `/daily-congressional-record/${params.volumeNumber}/${params.issueNumber}/articles`;
-    return this.fetchList(path, 'articles', params, ctx);
+    const result = await this.fetchList(path, 'articles', params, ctx);
+    return { data: flattenArticleSections(result.data), pagination: result.pagination };
   }
 
   // --- Congress metadata ---

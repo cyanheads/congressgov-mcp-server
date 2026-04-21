@@ -50,6 +50,9 @@ describe('formatCrsReports (issue #1)', () => {
     expect(text).toContain('R46991');
     expect(text).toContain('Economic Development Administration: An Overview of Programs');
     expect(text).toContain('**Updated:** 2026-04-10');
+    expect(text).toContain('**Type:** text/html');
+    expect(text).toContain('**Status:** Active');
+    expect(text).toContain('**Version:** 44');
     expect(text).not.toContain('Report number not available');
   });
 
@@ -173,6 +176,7 @@ describe('formatDailyRecord (issue #3)', () => {
     expect(text).toContain('Volume 172, Issue 68 — 2026-04-17');
     expect(text).toContain('**Congress:** 119');
     expect(text).toContain('**Session:** 2');
+    expect(text).toContain('**Updated:** 2026-04-18T08:15:00Z');
     expect(text).not.toMatch(/###\s*1\.\s*Item/);
   });
 
@@ -195,6 +199,41 @@ describe('formatDailyRecord (issue #3)', () => {
       }),
     );
     expect(text).toMatch(/### 1\. Item/);
+  });
+
+  it('renders flattened article items with section, pages, and text links (issue #3)', () => {
+    // Real payload after flattenArticleSections: section wrappers removed,
+    // each article carries sectionName.
+    const text = textOf(
+      formatDailyRecord({
+        data: [
+          {
+            sectionName: 'Daily Digest',
+            title:
+              'Daily Digest/Next Meeting of the SENATE + Next Meeting of the HOUSE OF REPRESENTATIVES; Congressional Record Vol. 172, No. 68',
+            startPage: 'D407',
+            endPage: 'D408',
+            text: [
+              {
+                type: 'PDF',
+                url: 'https://www.congress.gov/119/crec/2026/04/17/172/68/CREC-2026-04-17-pt1-PgD407-2.pdf',
+              },
+              {
+                type: 'Formatted Text',
+                url: 'https://www.congress.gov/119/crec/2026/04/17/172/68/modified/CREC-2026-04-17-pt1-PgD407-2.htm',
+              },
+            ],
+          },
+        ],
+        pagination: { count: 26, nextOffset: 1 },
+      }),
+    );
+    expect(text).toContain('### 1. Daily Digest/Next Meeting');
+    expect(text).toContain('**Section:** Daily Digest');
+    expect(text).toContain('**Pages:** D407–D408');
+    expect(text).toContain('**PDF:** https://www.congress.gov/');
+    expect(text).toContain('**Formatted Text:** https://www.congress.gov/');
+    expect(text).not.toMatch(/###\s*1\.\s*Item/);
   });
 });
 
@@ -226,6 +265,9 @@ describe('formatVotes (issue #4)', () => {
     expect(text).toContain('**Congress:** 119');
     expect(text).toContain('**Type:** 2/3 Yea-And-Nay');
     expect(text).toContain('**Date:** 2025-09-08T18:56:00-04:00');
+    expect(text).toContain('**Updated:** 2025-09-09T01:00:00Z');
+    expect(text).toContain('**Legislation URL:** https://www.congress.gov/bill/119/hr/3424');
+    expect(text).toContain('**Source Data URL:** https://clerk.house.gov/Votes/...');
     expect(text).not.toMatch(/###\s*1\.\s*Item/);
   });
 
