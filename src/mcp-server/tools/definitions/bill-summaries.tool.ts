@@ -6,15 +6,10 @@
 import { tool, z } from '@cyanheads/mcp-ts-core';
 
 import { formatSummaries } from '@/mcp-server/tools/format-helpers.js';
-import {
-  createPaginationSchema,
-  normalizeOptionalString,
-} from '@/mcp-server/tools/tool-helpers.js';
+import { normalizeOptionalString } from '@/mcp-server/tools/tool-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 
 const DEFAULT_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000;
-
-const PaginationSchema = createPaginationSchema('Total number of matching summaries.');
 
 export const billSummariesTool = tool('congressgov_bill_summaries', {
   description: `Browse recent CRS (Congressional Research Service) bill summaries — plain-language summaries of bills at each legislative stage, useful for answering "what's happening in Congress?". The fromDateTime/toDateTime filters apply to the summary's update time (lastSummaryUpdateDate), not the bill's action date, so results include recently rewritten summaries of older bills. Defaults to summaries updated in the last 7 days. Each item shows both the bill's action date and the summary update date.`,
@@ -45,17 +40,7 @@ export const billSummariesTool = tool('congressgov_bill_summaries', {
     limit: z.number().int().min(1).max(250).default(20).describe('Results per page (1-250).'),
     offset: z.number().int().min(0).default(0).describe('Pagination offset.'),
   }),
-  output: z
-    .object({
-      data: z
-        .array(z.unknown())
-        .describe(
-          'Bill summaries returned by Congress.gov. Preserves upstream item shapes instead of narrowing them.',
-        ),
-      pagination: PaginationSchema.describe('Pagination metadata for the returned summaries.'),
-    })
-    .passthrough()
-    .describe('Bill summary data from Congress.gov API.'),
+  output: z.object({}).passthrough().describe('Bill summary data from Congress.gov API.'),
   format: formatSummaries,
 
   async handler(input, ctx) {

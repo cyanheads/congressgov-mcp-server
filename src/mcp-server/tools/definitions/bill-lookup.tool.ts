@@ -6,44 +6,9 @@
 import { tool, z } from '@cyanheads/mcp-ts-core';
 
 import { formatBills } from '@/mcp-server/tools/format-helpers.js';
-import {
-  createPaginationSchema,
-  normalizeOptionalString,
-  StringOrNumberSchema,
-} from '@/mcp-server/tools/tool-helpers.js';
+import { normalizeOptionalString } from '@/mcp-server/tools/tool-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 import type { BillSubResource } from '@/services/congress-api/types.js';
-
-const PaginationSchema = createPaginationSchema('Total number of matching records.');
-
-const BillDetailSchema = z
-  .object({
-    congress: StringOrNumberSchema.optional().describe(
-      'Congress number when Congress.gov includes it.',
-    ),
-    type: z.string().optional().describe('Bill type code when provided by Congress.gov.'),
-    number: StringOrNumberSchema.optional().describe('Bill number when provided by Congress.gov.'),
-    title: z
-      .string()
-      .optional()
-      .describe('Bill title when provided by Congress.gov. Omitted when unknown.'),
-    updateDate: z
-      .string()
-      .optional()
-      .describe('Last update timestamp when provided by Congress.gov.'),
-    latestAction: z
-      .object({
-        actionDate: z
-          .string()
-          .optional()
-          .describe('Latest action date when provided by Congress.gov.'),
-        text: z.string().optional().describe('Latest action text when provided by Congress.gov.'),
-      })
-      .passthrough()
-      .optional()
-      .describe('Latest action summary when provided by Congress.gov.'),
-  })
-  .passthrough();
 
 const BillTypeEnum = z.enum(['hr', 's', 'hjres', 'sjres', 'hconres', 'sconres', 'hres', 'sres']);
 
@@ -88,24 +53,7 @@ export const billLookupTool = tool('congressgov_bill_lookup', {
     limit: z.number().int().min(1).max(250).default(20).describe('Results per page (1-250).'),
     offset: z.number().int().min(0).default(0).describe('Pagination offset.'),
   }),
-  output: z
-    .object({
-      data: z
-        .array(z.unknown())
-        .optional()
-        .describe(
-          'List or sub-resource records for list and drill-down operations. Preserves upstream item shapes instead of narrowing them.',
-        ),
-      pagination: PaginationSchema.optional().describe(
-        'Pagination metadata for list and sub-resource operations.',
-      ),
-      bill: BillDetailSchema.optional().describe('Bill detail for operation="get".'),
-    })
-    .passthrough()
-    .refine((result) => (Array.isArray(result.data) && !!result.pagination) || !!result.bill, {
-      message: 'Expected either paginated list data or a bill detail object.',
-    })
-    .describe('Bill data from Congress.gov API.'),
+  output: z.object({}).passthrough().describe('Bill data from Congress.gov API.'),
   format: formatBills,
 
   async handler(input, ctx) {

@@ -6,10 +6,7 @@
 import { tool, z } from '@cyanheads/mcp-ts-core';
 
 import { formatMembers } from '@/mcp-server/tools/format-helpers.js';
-import { createPaginationSchema, UnknownRecordSchema } from '@/mcp-server/tools/tool-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
-
-const PaginationSchema = createPaginationSchema('Total number of matching members or bills.');
 
 export const memberLookupTool = tool('congressgov_member_lookup', {
   description: `Discover congressional members and their legislative activity. There is no name search — use 'list' with stateCode (optionally with district), with a congress number, or with currentMember=true to find members. Once you have a bioguideId, use 'get' for full profile or 'sponsored'/'cosponsored' for their legislative portfolio.`,
@@ -45,24 +42,7 @@ export const memberLookupTool = tool('congressgov_member_lookup', {
     limit: z.number().int().min(1).max(250).default(20).describe('Results per page (1-250).'),
     offset: z.number().int().min(0).default(0).describe('Pagination offset.'),
   }),
-  output: z
-    .object({
-      data: z
-        .array(z.unknown())
-        .optional()
-        .describe('Paginated member or legislation results. Preserves upstream item shapes.'),
-      pagination: PaginationSchema.optional().describe(
-        'Pagination metadata for list, sponsored, and cosponsored operations.',
-      ),
-      member: UnknownRecordSchema.optional().describe(
-        'Member profile detail when operation="get".',
-      ),
-    })
-    .passthrough()
-    .refine((result) => (Array.isArray(result.data) && !!result.pagination) || !!result.member, {
-      message: 'Expected either paginated list data or a member detail object.',
-    })
-    .describe('Member data from Congress.gov API.'),
+  output: z.object({}).passthrough().describe('Member data from Congress.gov API.'),
   format: formatMembers,
 
   async handler(input, ctx) {
