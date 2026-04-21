@@ -1,6 +1,6 @@
 # congressgov-mcp-server - Directory Structure
 
-Generated on: 2026-04-19 16:33:54
+Generated on: 2026-04-21 02:36:26
 
 ```text
 congressgov-mcp-server/
@@ -13,6 +13,7 @@ congressgov-mcp-server/
 │   └── congress-gov-mcp-design.md
 ├── scripts/
 │   ├── build.ts
+│   ├── check-docs-sync.ts
 │   ├── clean.ts
 │   ├── devcheck.ts
 │   ├── lint-mcp.ts
