@@ -414,6 +414,14 @@ const ALL_CHECKS: Check[] = [
       `Fix definition errors reported above. See ${c.bold('validateDefinitions()')} docs for rule details.`,
   },
   {
+    name: 'Docs Sync',
+    flag: '--no-docs-sync',
+    canFix: false,
+    getCommand: () => ['bun', 'run', 'scripts/check-docs-sync.ts'],
+    tip: (c) =>
+      `Edit both files together, or run ${c.bold('cp CLAUDE.md AGENTS.md')} (or reverse) to resync.`,
+  },
+  {
     name: 'Biome',
     flag: '--no-lint',
     canFix: true,
