@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.3.15](changelog/0.3.x/0.3.15.md) — 2026-05-08
+
+Adopt @cyanheads/mcp-ts-core ^0.7.0 → ^0.8.19 — typed error contracts, ctx.fail/recoveryFor, canvas + spillover. Engines bumped to Bun ≥1.3.0 / Node ≥24.0.0; Docker base oven/bun:1 → oven/bun:1.3. New Framework Antipatterns devcheck step.
+
 ## [0.3.14](changelog/0.3.x/0.3.14.md) — 2026-04-24
 
 Adopt @cyanheads/mcp-ts-core 0.5.3 → 0.7.0 (18 intermediate releases); directory-based changelog system; landing page with sourceUrl overrides; three new skills synced (api-linter, security-pass, release-and-publish)

@@ -1,7 +1,7 @@
 # Agent Protocol
 
 **Server:** congressgov-mcp-server
-**Version:** 0.3.14
+**Version:** 0.3.15
 **Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core)
 
 > **Read the framework docs first:** `node_modules/@cyanheads/mcp-ts-core/CLAUDE.md` contains the full API reference — builders, Context, error codes, exports, patterns. This file covers server-specific conventions only.
@@ -221,10 +221,13 @@ Available skills:
 | `api-context` | Context interface, logger, state, progress |
 | `api-errors` | McpError, JsonRpcErrorCode, error patterns |
 | `api-linter` | MCP definition linter rules reference — look up `format-parity`, `schema-*`, `name-*`, `server-json-*` diagnostics |
+| `api-canvas` | DataCanvas: register tabular data, run SQL, export, plus the `spillover()` helper — Tier 3 opt-in |
 | `api-services` | LLM, Speech, Graph services |
+| `api-telemetry` | OTel catalog: spans, metrics, completion logs, env config, cardinality rules |
 | `api-testing` | createMockContext, test patterns |
-| `api-utils` | Formatting, parsing, security, pagination, scheduling |
+| `api-utils` | Formatting, parsing, security, pagination, scheduling, telemetry helpers |
 | `api-workers` | Cloudflare Workers runtime |
+| `tool-defs-analysis` | Audit MCP definition language across the surface — voice, leaks, defaults, recovery hints, output descriptions |
 
 When you complete a skill's checklist, check the boxes and add a completion timestamp at the end (e.g., `Completed: 2026-03-11`).
 
@@ -261,13 +264,14 @@ Each per-version file opens with YAML frontmatter:
 ---
 summary: One-line headline, ≤250 chars  # required — powers the rollup index
 breaking: false                          # optional — true flags breaking changes
+security: false                          # optional — true flags security fixes
 ---
 
 # 0.3.14 — YYYY-MM-DD
 ...
 ```
 
-`breaking: true` renders a `· ⚠️ Breaking` badge in the rollup — use it when consumers must update code on upgrade (signature changes, removed APIs, config renames).
+`breaking: true` renders a `· ⚠️ Breaking` badge — use it when consumers must update code on upgrade (signature changes, removed APIs, config renames). `security: true` renders a `· 🛡️ Security` badge and pairs with a `## Security` body section. When both are set, badges render `· ⚠️ Breaking · 🛡️ Security`.
 
 ---
 
