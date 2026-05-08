@@ -5,16 +5,24 @@
 
 import { resource, z } from '@cyanheads/mcp-ts-core';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
-import type { BillType } from '@/services/congress-api/types.js';
+import { BILL_TYPE_CODES } from '@/services/congress-api/types.js';
 
 export const billResource = resource('congress://bill/{congress}/{billType}/{billNumber}', {
   name: 'bill-detail',
   description: 'Bill detail: sponsor, status, policy area, committees, latest action.',
   mimeType: 'application/json',
   params: z.object({
-    congress: z.string().describe('Congress number (e.g., 118).'),
-    billType: z.string().describe('Bill type code (e.g., hr, s, hjres).'),
-    billNumber: z.string().describe('Bill number (e.g., 3076).'),
+    congress: z
+      .string()
+      .regex(/^\d+$/, 'Congress must be a positive integer (e.g., 118).')
+      .describe('Congress number (e.g., 118).'),
+    billType: z
+      .enum(BILL_TYPE_CODES)
+      .describe(`Bill type code: one of ${BILL_TYPE_CODES.join(', ')}.`),
+    billNumber: z
+      .string()
+      .regex(/^\d+$/, 'Bill number must be a positive integer (e.g., 3076).')
+      .describe('Bill number (e.g., 3076).'),
   }),
 
   async handler(params, ctx) {
@@ -22,7 +30,7 @@ export const billResource = resource('congress://bill/{congress}/{billType}/{bil
     const result = await api.getBill(
       {
         congress: Number(params.congress),
-        billType: params.billType as BillType,
+        billType: params.billType,
         billNumber: Number(params.billNumber),
       },
       ctx,

@@ -60,6 +60,47 @@ function isApiRecord(value: unknown): value is ApiRecord {
   return typeof value === 'object' && value !== null;
 }
 
+/** English ordinal for a congress number — "119" → "119th". */
+function ordinal(n: number): string {
+  const lastTwo = n % 100;
+  if (lastTwo >= 11 && lastTwo <= 13) return `${n}th`;
+  switch (n % 10) {
+    case 1:
+      return `${n}st`;
+    case 2:
+      return `${n}nd`;
+    case 3:
+      return `${n}rd`;
+    default:
+      return `${n}th`;
+  }
+}
+
+/** Normalize upstream casing: bioguideID → bioguideId. */
+function normalizeVoteResult(item: unknown): unknown {
+  if (!isApiRecord(item) || !('bioguideID' in item)) return item;
+  const { bioguideID, ...rest } = item;
+  return { bioguideId: bioguideID, ...rest };
+}
+
+/** Normalize upstream casing: relatedMaterials[].URL → url. */
+function normalizeCrsReport(item: unknown): unknown {
+  if (!isApiRecord(item) || !Array.isArray(item.relatedMaterials)) return item;
+  const normalized = item.relatedMaterials.map((entry) => {
+    if (!isApiRecord(entry) || !('URL' in entry)) return entry;
+    const { URL: upper, ...rest } = entry;
+    return 'url' in rest ? entry : { url: upper, ...rest };
+  });
+  return { ...item, relatedMaterials: normalized };
+}
+
+/** Normalize upstream casing: cmte_rpt_id → cmteRptId. */
+function normalizeCommitteeReport(item: unknown): unknown {
+  if (!isApiRecord(item) || !('cmte_rpt_id' in item)) return item;
+  const { cmte_rpt_id: snake, ...rest } = item;
+  return { cmteRptId: snake, ...rest };
+}
+
 /**
  * The `/daily-congressional-record/{v}/{i}/articles` endpoint wraps articles
  * in section objects: `[{ name, sectionArticles: [...] }]`. Upstream pagination
@@ -135,9 +176,10 @@ export class CongressApiService {
   }
 
   async getBill(params: GetBillParams, ctx?: Context): Promise<EntityResult<'bill'>> {
-    const data = await this.get(
-      `/bill/${params.congress}/${params.billType}/${params.billNumber}`,
-      ctx,
+    const data = await this.tryNotFound(
+      () => this.get(`/bill/${params.congress}/${params.billType}/${params.billNumber}`, ctx),
+      `Bill ${params.billType.toUpperCase()} ${params.billNumber} not found in the ${ordinal(params.congress)} Congress.`,
+      { ...params },
     );
     return { bill: data.bill as ApiRecord };
   }
@@ -145,7 +187,11 @@ export class CongressApiService {
   getBillSubResource(params: BillSubResourceParams, ctx?: Context): Promise<FetchListResult> {
     const path = `/bill/${params.congress}/${params.billType}/${params.billNumber}/${params.subResource}`;
     const key = this.inferListKey(params.subResource);
-    return this.fetchList(path, key, params, ctx);
+    return this.tryNotFound(
+      () => this.fetchList(path, key, params, ctx),
+      `Bill ${params.billType.toUpperCase()} ${params.billNumber} (or its ${params.subResource}) not found in the ${ordinal(params.congress)} Congress.`,
+      { ...params },
+    );
   }
 
   // --- Laws ---
@@ -159,9 +205,10 @@ export class CongressApiService {
 
   async getLaw(params: GetLawParams, ctx?: Context): Promise<EntityResult<'law'>> {
     /** Congress.gov returns the law endpoint payload under `bill` — a law is a bill that became law. */
-    const data = await this.get(
-      `/law/${params.congress}/${params.lawType}/${params.lawNumber}`,
-      ctx,
+    const data = await this.tryNotFound(
+      () => this.get(`/law/${params.congress}/${params.lawType}/${params.lawNumber}`, ctx),
+      `${params.lawType === 'pub' ? 'Public' : 'Private'} Law ${params.congress}-${params.lawNumber} not found.`,
+      { ...params },
     );
     return { law: data.bill as ApiRecord };
   }
@@ -195,7 +242,11 @@ export class CongressApiService {
   }
 
   async getMember(bioguideId: string, ctx?: Context): Promise<EntityResult<'member'>> {
-    const data = await this.get(`/member/${bioguideId}`, ctx);
+    const data = await this.tryNotFound(
+      () => this.get(`/member/${bioguideId}`, ctx),
+      `Member ${bioguideId} not found. Bioguide IDs are one letter followed by six digits (e.g., P000197).`,
+      { bioguideId },
+    );
     return { member: data.member as ApiRecord };
   }
 
@@ -205,7 +256,11 @@ export class CongressApiService {
   ): Promise<FetchListResult> {
     const path = `/member/${params.bioguideId}/${params.type}`;
     const key = params.type.replace('-legislation', 'Legislation');
-    return this.fetchList(path, key, params, ctx);
+    return this.tryNotFound(
+      () => this.fetchList(path, key, params, ctx),
+      `Member ${params.bioguideId} or their ${params.type.replace('-', ' ')} not found.`,
+      { ...params },
+    );
   }
 
   // --- Committees ---
@@ -223,7 +278,11 @@ export class CongressApiService {
     committeeCode: string,
     ctx?: Context,
   ): Promise<EntityResult<'committee'>> {
-    const data = await this.get(`/committee/${chamber}/${committeeCode}`, ctx);
+    const data = await this.tryNotFound(
+      () => this.get(`/committee/${chamber}/${committeeCode}`, ctx),
+      `Committee ${committeeCode} not found in the ${chamber} chamber.`,
+      { chamber, committeeCode },
+    );
     return { committee: data.committee as ApiRecord };
   }
 
@@ -233,7 +292,11 @@ export class CongressApiService {
   ): Promise<FetchListResult> {
     const path = `/committee/${params.chamber}/${params.committeeCode}/${params.subResource}`;
     const key = this.inferListKey(params.subResource);
-    return this.fetchList(path, key, params, ctx);
+    return this.tryNotFound(
+      () => this.fetchList(path, key, params, ctx),
+      `Committee ${params.committeeCode} (${params.chamber}) or its ${params.subResource} not found.`,
+      { ...params },
+    );
   }
 
   // --- Votes ---
@@ -248,9 +311,10 @@ export class CongressApiService {
   }
 
   async getVote(params: GetVoteParams, ctx?: Context): Promise<EntityResult<'vote'>> {
-    const data = await this.get(
-      `/house-vote/${params.congress}/${params.session}/${params.voteNumber}`,
-      ctx,
+    const data = await this.tryNotFound(
+      () => this.get(`/house-vote/${params.congress}/${params.session}/${params.voteNumber}`, ctx),
+      `House roll call vote ${params.voteNumber} not found in the ${ordinal(params.congress)} Congress, session ${params.session}.`,
+      { ...params },
     );
     return { vote: (data.houseRollCallVote ?? data) as ApiRecord };
   }
@@ -260,12 +324,18 @@ export class CongressApiService {
     ctx?: Context,
   ): Promise<EntityResult<'vote'> & { pagination: Pagination }> {
     /** Congress.gov returns the full member list in a single response — the `members` endpoint ignores limit/offset query params — so paginate client-side. */
-    const data = await this.get(
-      `/house-vote/${params.congress}/${params.session}/${params.voteNumber}/members`,
-      ctx,
+    const data = await this.tryNotFound(
+      () =>
+        this.get(
+          `/house-vote/${params.congress}/${params.session}/${params.voteNumber}/members`,
+          ctx,
+        ),
+      `House roll call vote ${params.voteNumber} not found in the ${ordinal(params.congress)} Congress, session ${params.session}.`,
+      { ...params },
     );
     const voteRaw = (data.houseRollCallVoteMemberVotes ?? data) as ApiRecord;
-    const allResults = Array.isArray(voteRaw.results) ? voteRaw.results : [];
+    const rawResults = Array.isArray(voteRaw.results) ? voteRaw.results : [];
+    const allResults = rawResults.map(normalizeVoteResult);
     const limit = params.limit ?? 20;
     const offset = params.offset ?? 0;
     const paged = allResults.slice(offset, offset + limit);
@@ -287,22 +357,31 @@ export class CongressApiService {
     nominationNumber: string,
     ctx?: Context,
   ): Promise<EntityResult<'nomination'>> {
-    const data = await this.get(`/nomination/${congress}/${nominationNumber}`, ctx);
+    const data = await this.tryNotFound(
+      () => this.get(`/nomination/${congress}/${nominationNumber}`, ctx),
+      `Nomination PN${nominationNumber} not found in the ${ordinal(congress)} Congress.`,
+      { congress, nominationNumber },
+    );
     return { nomination: data.nomination as ApiRecord };
   }
 
   getNominee(
     congress: number,
     nominationNumber: string,
-    ordinal: number,
+    ordinalNum: number,
     params?: PaginationParams,
     ctx?: Context,
   ): Promise<FetchListResult> {
-    return this.fetchList(
-      `/nomination/${congress}/${nominationNumber}/${ordinal}`,
-      'nominees',
-      params,
-      ctx,
+    return this.tryNotFound(
+      () =>
+        this.fetchList(
+          `/nomination/${congress}/${nominationNumber}/${ordinalNum}`,
+          'nominees',
+          params,
+          ctx,
+        ),
+      `Nominee batch ${ordinalNum} not found on PN${nominationNumber} (${ordinal(congress)} Congress). Use 'get' to see available ordinals on the nomination's nominees array.`,
+      { congress, nominationNumber, ordinal: ordinalNum },
     );
   }
 
@@ -312,7 +391,11 @@ export class CongressApiService {
   ): Promise<FetchListResult> {
     const path = `/nomination/${params.congress}/${params.nominationNumber}/${params.subResource}`;
     const key = this.inferListKey(params.subResource);
-    return this.fetchList(path, key, params, ctx);
+    return this.tryNotFound(
+      () => this.fetchList(path, key, params, ctx),
+      `Nomination PN${params.nominationNumber} (or its ${params.subResource}) not found in the ${ordinal(params.congress)} Congress.`,
+      { ...params },
+    );
   }
 
   // --- Summaries ---
@@ -327,14 +410,16 @@ export class CongressApiService {
 
   // --- CRS Reports ---
 
-  listCrsReports(params?: PaginationParams, ctx?: Context): Promise<FetchListResult> {
-    return this.fetchList('/crsreport', 'CRSReports', params, ctx);
+  async listCrsReports(params?: PaginationParams, ctx?: Context): Promise<FetchListResult> {
+    const result = await this.fetchList('/crsreport', 'CRSReports', params, ctx);
+    return { ...result, data: result.data.map(normalizeCrsReport) };
   }
 
   async getCrsReport(params: GetCrsReportParams, ctx?: Context): Promise<EntityResult<'report'>> {
     try {
       const data = await this.get(`/crsreport/${params.reportNumber}`, ctx);
-      return { report: (data.CRSReport ?? data) as ApiRecord };
+      const report = (data.CRSReport ?? data) as ApiRecord;
+      return { report: normalizeCrsReport(report) as ApiRecord };
     } catch (error) {
       const statusCode =
         error instanceof McpError && typeof error.data?.statusCode === 'number'
@@ -345,9 +430,13 @@ export class CongressApiService {
           ? error.data.responseBody
           : '';
 
-      if (statusCode === 500 && this.isMissingEntityErrorBody(responseBody)) {
+      if (
+        error instanceof McpError &&
+        (error.code === JsonRpcErrorCode.NotFound ||
+          (statusCode === 500 && this.isMissingEntityErrorBody(responseBody)))
+      ) {
         throw notFound(
-          'CRS report not found',
+          `CRS report ${params.reportNumber} not found. Report IDs use letter-number codes (e.g., R40097, RL33612, IF12345).`,
           { reportNumber: params.reportNumber },
           { cause: error },
         );
@@ -358,32 +447,37 @@ export class CongressApiService {
 
   // --- Committee Reports ---
 
-  listCommitteeReports(
+  async listCommitteeReports(
     params: ListCommitteeReportsParams,
     ctx?: Context,
   ): Promise<FetchListResult> {
     const path = params.reportType
       ? `/committee-report/${params.congress}/${params.reportType}`
       : `/committee-report/${params.congress}`;
-    return this.fetchList(path, 'reports', params, ctx);
+    const result = await this.fetchList(path, 'reports', params, ctx);
+    return { ...result, data: result.data.map(normalizeCommitteeReport) };
   }
 
   async getCommitteeReport(
     params: GetCommitteeReportParams,
     ctx?: Context,
   ): Promise<EntityResult<'report'>> {
-    const data = await this.get(
-      `/committee-report/${params.congress}/${params.reportType}/${params.reportNumber}`,
-      ctx,
+    const data = await this.tryNotFound(
+      () =>
+        this.get(
+          `/committee-report/${params.congress}/${params.reportType}/${params.reportNumber}`,
+          ctx,
+        ),
+      `Committee report ${params.reportType.toUpperCase()} ${params.congress}-${params.reportNumber} not found.`,
+      { ...params },
     );
     const reports = data.committeeReports;
     const report = Array.isArray(reports) ? reports[0] : (reports ?? data);
     if (!report || (typeof report === 'object' && Object.keys(report).length === 0)) {
-      throw notFound('Committee report not found', {
-        congress: params.congress,
-        reportType: params.reportType,
-        reportNumber: params.reportNumber,
-      });
+      throw notFound(
+        `Committee report ${params.reportType.toUpperCase()} ${params.congress}-${params.reportNumber} not found.`,
+        { ...params },
+      );
     }
     return { report: report as ApiRecord };
   }
@@ -392,9 +486,14 @@ export class CongressApiService {
     params: GetCommitteeReportParams,
     ctx?: Context,
   ): Promise<{ text: unknown }> {
-    const data = await this.get(
-      `/committee-report/${params.congress}/${params.reportType}/${params.reportNumber}/text`,
-      ctx,
+    const data = await this.tryNotFound(
+      () =>
+        this.get(
+          `/committee-report/${params.congress}/${params.reportType}/${params.reportNumber}/text`,
+          ctx,
+        ),
+      `Committee report ${params.reportType.toUpperCase()} ${params.congress}-${params.reportNumber} text not found.`,
+      { ...params },
     );
     return { text: data.text ?? data['text-versions'] ?? data };
   }
@@ -406,17 +505,26 @@ export class CongressApiService {
   }
 
   getDailyIssues(params: GetDailyIssuesParams, ctx?: Context): Promise<FetchListResult> {
-    return this.fetchList(
-      `/daily-congressional-record/${params.volumeNumber}`,
-      'dailyCongressionalRecord',
-      params,
-      ctx,
+    return this.tryNotFound(
+      () =>
+        this.fetchList(
+          `/daily-congressional-record/${params.volumeNumber}`,
+          'dailyCongressionalRecord',
+          params,
+          ctx,
+        ),
+      `Volume ${params.volumeNumber} not found in the daily Congressional Record.`,
+      { ...params },
     );
   }
 
   async getDailyArticles(params: GetDailyArticlesParams, ctx?: Context): Promise<FetchListResult> {
     const path = `/daily-congressional-record/${params.volumeNumber}/${params.issueNumber}/articles`;
-    const result = await this.fetchList(path, 'articles', params, ctx);
+    const result = await this.tryNotFound(
+      () => this.fetchList(path, 'articles', params, ctx),
+      `Issue ${params.issueNumber} of volume ${params.volumeNumber} not found in the daily Congressional Record.`,
+      { ...params },
+    );
     return { data: flattenArticleSections(result.data), pagination: result.pagination };
   }
 
@@ -433,6 +541,25 @@ export class CongressApiService {
   }
 
   // --- Internal ---
+
+  /**
+   * Run an API call and rewrap a generic upstream 404 into an identifier-rich
+   * notFound error. Other errors propagate unchanged.
+   */
+  private async tryNotFound<T>(
+    fn: () => Promise<T>,
+    message: string,
+    data: Record<string, unknown>,
+  ): Promise<T> {
+    try {
+      return await fn();
+    } catch (error) {
+      if (error instanceof McpError && error.code === JsonRpcErrorCode.NotFound) {
+        throw notFound(message, data, { cause: error });
+      }
+      throw error;
+    }
+  }
 
   private async fetchList(
     path: string,

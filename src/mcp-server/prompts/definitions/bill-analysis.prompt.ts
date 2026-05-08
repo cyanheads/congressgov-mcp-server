@@ -7,7 +7,7 @@ import { prompt, z } from '@cyanheads/mcp-ts-core';
 
 export const billAnalysisPrompt = prompt('congressgov_bill_analysis', {
   description:
-    'Structured framework for analyzing a bill: summary, sponsors, committee referrals, action timeline, related legislation, and policy implications.',
+    'Structured framework for analyzing a bill: summary, sponsors, committee referrals, action timeline, related legislation, policy implications, and outlook.',
   args: z.object({
     congress: z.string().describe('Congress number (e.g., 118).'),
     billType: z.string().describe('Bill type code (e.g., hr, s).'),
@@ -31,7 +31,8 @@ export const billAnalysisPrompt = prompt('congressgov_bill_analysis', {
 Use these tools as needed:
 - congressgov_bill_lookup (operations: get, actions, cosponsors, committees, summaries, text, related)
 - congressgov_member_lookup (to understand sponsor/cosponsor profiles)
-- congressgov_committee_lookup (to understand committee context)`,
+- congressgov_committee_lookup (to understand committee context)
+- congressgov_committee_reports (to retrieve the committee report on the bill, if reported out)`,
       },
     },
   ],

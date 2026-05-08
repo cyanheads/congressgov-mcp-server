@@ -8,9 +8,9 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { formatBills } from '@/mcp-server/tools/format-helpers.js';
 import { normalizeOptionalString } from '@/mcp-server/tools/tool-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
-import type { BillSubResource } from '@/services/congress-api/types.js';
+import { BILL_TYPE_CODES, type BillSubResource } from '@/services/congress-api/types.js';
 
-const BillTypeEnum = z.enum(['hr', 's', 'hjres', 'sjres', 'hconres', 'sconres', 'hres', 'sres']);
+const BillTypeEnum = z.enum(BILL_TYPE_CODES);
 
 const OperationEnum = z.enum([
   'list',

@@ -33,6 +33,35 @@ function stripHtml(html: string): string {
     .trim();
 }
 
+/**
+ * Convert upstream HTML (Congress.gov bill summaries are returned with `<p>`,
+ * `<strong>`, `<em>`, anchor tags) into readable Markdown that preserves
+ * paragraph and emphasis structure.
+ */
+function htmlToMarkdown(html: string): string {
+  return html
+    .replace(/<\s*br\s*\/?\s*>/gi, '\n')
+    .replace(/<\s*\/p\s*>/gi, '\n\n')
+    .replace(/<\s*p[^>]*>/gi, '')
+    .replace(/<\s*(strong|b)\s*>/gi, '**')
+    .replace(/<\s*\/\s*(strong|b)\s*>/gi, '**')
+    .replace(/<\s*(em|i)\s*>/gi, '*')
+    .replace(/<\s*\/\s*(em|i)\s*>/gi, '*')
+    .replace(/<\s*a[^>]*href=["']([^"']*)["'][^>]*>([\s\S]*?)<\s*\/\s*a\s*>/gi, '[$2]($1)')
+    .replace(/<[^>]*>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&#039;/g, "'")
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n[ \t]+/g, '\n')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 /** Safe deep access with HTML stripping. Handles string and number values. */
 function s(obj: unknown, ...path: string[]): string | undefined {
   let cur = obj;
@@ -69,7 +98,9 @@ function pagHeader(result: Record<string, unknown>): string {
 function renderList(result: Record<string, unknown>, renderItem?: ItemRenderer): string {
   const items = (result.data ?? []) as unknown[];
   const header = pagHeader(result);
-  if (items.length === 0) return header;
+  if (items.length === 0) {
+    return `${header}\n\nNo results matched the query. Try broadening the filters — widen the date range, drop the type/chamber/state constraint, or remove the date window entirely.`;
+  }
   const renderer = renderItem ?? renderGenericItem;
   const rendered = items.map((item, i) =>
     typeof item === 'object' && item !== null
@@ -337,7 +368,8 @@ function renderSummaryItem(item: Record<string, unknown>, i: number): string {
   const version = s(item, 'actionDesc') ?? s(item, 'versionCode') ?? '';
   const actionDate = s(item, 'actionDate') ?? '';
   const summaryUpdate = s(item, 'lastSummaryUpdateDate') ?? s(item, 'updateDate') ?? '';
-  const text = s(item, 'text') ?? '';
+  const rawText = typeof item.text === 'string' ? item.text : '';
+  const text = rawText ? htmlToMarkdown(rawText) : '';
   const url = s(item, 'url') ?? s(item, 'bill', 'url');
 
   const ref = billType && billNum ? `${billType} ${billNum}` : 'Bill reference not available';

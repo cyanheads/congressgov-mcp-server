@@ -11,7 +11,13 @@ export const committeeResource = resource('congress://committee/{committeeCode}'
   description: 'Committee detail: name, chamber, subcommittees, history, legislation counts.',
   mimeType: 'application/json',
   params: z.object({
-    committeeCode: z.string().describe("Committee system code (e.g., 'hsju00')."),
+    committeeCode: z
+      .string()
+      .regex(
+        /^[hsj][a-z0-9]{3,8}$/,
+        "Committee system code must start with 'h' (House), 's' (Senate), or 'j' (Joint) followed by 3-8 lowercase alphanumeric chars (e.g., 'hsju00').",
+      )
+      .describe("Committee system code (e.g., 'hsju00')."),
   }),
 
   async handler(params, ctx) {
@@ -23,6 +29,10 @@ export const committeeResource = resource('congress://committee/{committeeCode}'
         : 'house';
     const result = await api.getCommittee(chamber, params.committeeCode, ctx);
     ctx.log.info('Committee resource fetched', { committeeCode: params.committeeCode });
-    return result.committee;
+    const history = result.committee.history as
+      | Array<{ officialName?: string; libraryOfCongressName?: string }>
+      | undefined;
+    const name = history?.[0]?.officialName ?? history?.[0]?.libraryOfCongressName ?? null;
+    return { name, chamber, ...result.committee };
   },
 });

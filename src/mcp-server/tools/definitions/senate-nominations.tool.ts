@@ -9,7 +9,7 @@ import { formatNominations } from '@/mcp-server/tools/format-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 
 export const senateNominationsTool = tool('congressgov_senate_nominations', {
-  description: `Browse presidential nominations to federal positions and track the Senate confirmation process. Nominations use 'PN' (Presidential Nomination) numbering, and a single nomination may contain multiple nominees — use 'nominees' to see individual appointees. Partitioned nominations (e.g., PN230-1, PN230-2) occur when nominees within one nomination follow different confirmation paths.`,
+  description: `Browse presidential nominations to federal positions and track the Senate confirmation process. Use 'list' to browse, 'get' for nomination detail, 'actions'/'committees'/'hearings' for confirmation pipeline data, or 'nominees' to retrieve individual appointees in a multi-nominee batch. Nominations use 'PN' (Presidential Nomination) numbering, and a single nomination may contain multiple nominees. Partitioned nominations (e.g., PN230-1, PN230-2) occur when nominees within one nomination follow different confirmation paths.`,
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
   input: z.object({
     operation: z

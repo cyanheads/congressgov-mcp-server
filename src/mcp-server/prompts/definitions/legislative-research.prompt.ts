@@ -33,9 +33,10 @@ Since the Congress.gov API has no keyword search, use these discovery strategies
 
 1. **CRS Reports** — Use congressgov_crs_reports to find nonpartisan policy analyses on this topic.
 2. **Recent Summaries** — Use congressgov_bill_summaries with a broad date range to find recently summarized bills that may relate to this topic.
-3. **Committee Activity** — Identify relevant committees using congressgov_committee_lookup, then check their recent bills and reports.
-4. **Key Members** — Identify members known for this policy area, then check their sponsored legislation via congressgov_member_lookup.
-5. **Floor Activity** — Check congressgov_daily_record for recent floor debate on the topic.
+3. **Bill Detail** — Once candidate bills surface, use congressgov_bill_lookup with operation='get' (and sub-resources like 'actions', 'cosponsors', 'related') for full sponsor, status, and policy area data.
+4. **Committee Activity** — Identify relevant committees using congressgov_committee_lookup, then check their recent bills and reports.
+5. **Key Members** — Identify members known for this policy area, then check their sponsored legislation via congressgov_member_lookup.
+6. **Floor Activity** — Check congressgov_daily_record for recent floor debate on the topic.
 
 Synthesize findings into:
 - **Landscape** — What legislation is active on this topic? What stage are key bills at?

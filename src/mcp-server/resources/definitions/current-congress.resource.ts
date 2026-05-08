@@ -21,7 +21,7 @@ export const currentCongressResource = resource('congress://current', {
   async handler(_params, ctx) {
     const api = getCongressApi();
     const congress = await api.getCurrentCongress(ctx);
-    ctx.log.info('Current congress fetched', { congress: congress.congress });
+    ctx.log.info('Current congress fetched', { congress: congress.number });
     return congress;
   },
 });

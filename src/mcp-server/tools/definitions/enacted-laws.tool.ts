@@ -9,12 +9,17 @@ import { formatLaws } from '@/mcp-server/tools/format-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 
 export const enactedLawsTool = tool('congressgov_enacted_laws', {
-  description: `Browse enacted public and private laws from Congress.gov. Use 'list' to browse laws by congress, or 'get' for a specific law's full detail. Each law references its origin bill for the full legislative history. Law types: pub: Public laws (general application, most common); priv: Private laws (specific individuals or entities)`,
+  description: `Browse enacted public and private laws from Congress.gov. Use 'list' to browse laws by congress, or 'get' for a specific law's full detail. Each law references its origin bill for the full legislative history.`,
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
   input: z.object({
     operation: z.enum(['list', 'get']).describe('Which data to retrieve.'),
     congress: z.number().int().positive().describe('Congress number.'),
-    lawType: z.enum(['pub', 'priv']).optional().describe("Law type. Required for 'get'."),
+    lawType: z
+      .enum(['pub', 'priv'])
+      .optional()
+      .describe(
+        "Law type — 'pub' (public laws, general application, most common) or 'priv' (private laws, specific individuals or entities). Required for 'get'.",
+      ),
     lawNumber: z.number().int().positive().optional().describe("Law number. Required for 'get'."),
     limit: z.number().int().min(1).max(250).default(20).describe('Results per page (1-250).'),
     offset: z.number().int().min(0).default(0).describe('Pagination offset.'),
@@ -40,7 +45,9 @@ export const enactedLawsTool = tool('congressgov_enacted_laws', {
     }
 
     if (!input.lawType || !input.lawNumber) {
-      throw new Error("The 'get' operation requires lawType ('pub' or 'priv') and lawNumber.");
+      throw new Error(
+        "The 'get' operation requires lawType ('pub' or 'priv') and lawNumber. Use 'list' to browse laws by congress.",
+      );
     }
 
     const result = await api.getLaw(

@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.3.16](changelog/0.3.x/0.3.16.md) — 2026-05-08
+
+Identifier-rich notFound errors with English-ordinal congress numbers, upstream casing normalized (bioguideID/URL/cmte_rpt_id → camelCase), bill summaries rendered HTML→Markdown, regex-validated resource params, empty-result recovery hint.
+
 ## [0.3.15](changelog/0.3.x/0.3.15.md) — 2026-05-08
 
 Adopt @cyanheads/mcp-ts-core ^0.7.0 → ^0.8.19 — typed error contracts, ctx.fail/recoveryFor, canvas + spillover. Engines bumped to Bun ≥1.3.0 / Node ≥24.0.0; Docker base oven/bun:1 → oven/bun:1.3. New Framework Antipatterns devcheck step.

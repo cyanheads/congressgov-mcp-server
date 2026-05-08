@@ -23,7 +23,17 @@ export interface DateRangeParams {
 
 // --- Bills ---
 
-export type BillType = 'hr' | 's' | 'hjres' | 'sjres' | 'hconres' | 'sconres' | 'hres' | 'sres';
+export const BILL_TYPE_CODES = [
+  'hr',
+  's',
+  'hjres',
+  'sjres',
+  'hconres',
+  'sconres',
+  'hres',
+  'sres',
+] as const;
+export type BillType = (typeof BILL_TYPE_CODES)[number];
 
 export type BillSubResource =
   | 'actions'
@@ -168,9 +178,9 @@ export interface GetDailyArticlesParams extends PaginationParams {
 // --- Congress metadata ---
 
 export interface CongressDetail {
-  congress: number;
-  endYear: number;
+  endYear: string;
   name: string;
+  number: number;
   sessions: Array<{
     number: number;
     chamber: string;
@@ -178,5 +188,7 @@ export interface CongressDetail {
     startDate: string;
     endDate?: string | undefined;
   }>;
-  startYear: number;
+  startYear: string;
+  updateDate?: string;
+  url?: string;
 }
