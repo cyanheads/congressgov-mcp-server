@@ -1,0 +1,18 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: congressgov-mcp-server
+abstract: "Model Context Protocol (MCP) server for the Congress.gov REST API v3, providing access to U.S. legislative data — bills and enacted laws, members and committees, House roll call votes, presidential nominations, CRS reports, committee reports, bill summaries, and the daily Congressional Record."
+type: software
+authors:
+  - family-names: Hand
+    given-names: Casey
+    orcid: "https://orcid.org/0009-0009-3726-568X"
+repository-code: "https://github.com/cyanheads/congressgov-mcp-server"
+license: Apache-2.0
+keywords:
+  - mcp
+  - model-context-protocol
+  - congress
+  - legislative-data
+  - policy-research
+  - government-data
