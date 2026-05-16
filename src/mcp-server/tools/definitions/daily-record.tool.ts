@@ -4,6 +4,7 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
+import { validationError } from '@cyanheads/mcp-ts-core/errors';
 
 import { formatDailyRecord } from '@/mcp-server/tools/format-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
@@ -41,8 +42,9 @@ export const dailyRecordTool = tool('congressgov_daily_record', {
     }
 
     if (!input.volumeNumber) {
-      throw new Error(
+      throw validationError(
         `The '${input.operation}' operation requires volumeNumber. Use 'list' to browse available Congressional Record volumes.`,
+        { field: 'volumeNumber', operation: input.operation },
       );
     }
 
@@ -60,8 +62,9 @@ export const dailyRecordTool = tool('congressgov_daily_record', {
     }
 
     if (!input.issueNumber) {
-      throw new Error(
+      throw validationError(
         "The 'articles' operation requires both volumeNumber and issueNumber. Use 'issues' to see available issues within a volume.",
+        { field: 'issueNumber' },
       );
     }
 

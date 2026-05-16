@@ -4,6 +4,7 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
+import { validationError } from '@cyanheads/mcp-ts-core/errors';
 
 import { formatCommitteeReports } from '@/mcp-server/tools/format-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
@@ -51,8 +52,13 @@ export const committeeReportsTool = tool('congressgov_committee_reports', {
     }
 
     if (!input.reportType || !input.reportNumber) {
-      throw new Error(
+      throw validationError(
         `The '${input.operation}' operation requires reportType and reportNumber. Use 'list' to browse available reports.`,
+        {
+          operation: input.operation,
+          reportType: input.reportType,
+          reportNumber: input.reportNumber,
+        },
       );
     }
 

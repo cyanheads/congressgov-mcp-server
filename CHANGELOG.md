@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.3.17](changelog/0.3.x/0.3.17.md) — 2026-05-16
+
+Adopt @cyanheads/mcp-ts-core ^0.8.19 → ^0.9.1: server-level `instructions` field surfaced on initialize, tool input-validation errors switch from `new Error` to the `validationError` factory, fetchResponse drops stale 404/429 status-code probing in favor of the framework's typed HTTP→McpError mapping.
+
 ## [0.3.16](changelog/0.3.x/0.3.16.md) — 2026-05-08
 
 Identifier-rich notFound errors with English-ordinal congress numbers, upstream casing normalized (bioguideID/URL/cmte_rpt_id → camelCase), bill summaries rendered HTML→Markdown, regex-validated resource params, empty-result recovery hint.

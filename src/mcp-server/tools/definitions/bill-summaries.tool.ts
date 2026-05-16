@@ -4,6 +4,7 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
+import { validationError } from '@cyanheads/mcp-ts-core/errors';
 
 import { formatSummaries } from '@/mcp-server/tools/format-helpers.js';
 import { normalizeOptionalString } from '@/mcp-server/tools/tool-helpers.js';
@@ -46,8 +47,9 @@ export const billSummariesTool = tool('congressgov_bill_summaries', {
     const toDateTimeInput = normalizeOptionalString(input.toDateTime);
 
     if (input.billType && !input.congress) {
-      throw new Error(
+      throw validationError(
         "The 'billType' filter requires 'congress'. Provide both or omit billType to browse across all types.",
+        { field: 'congress', billType: input.billType },
       );
     }
 

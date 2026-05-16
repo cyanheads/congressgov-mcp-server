@@ -702,19 +702,15 @@ export class CongressApiService {
         ...(signal ? { signal } : {}),
       });
     } catch (error) {
-      if (error instanceof McpError && error.code === JsonRpcErrorCode.ServiceUnavailable) {
-        const statusCode =
-          typeof error.data?.statusCode === 'number' ? error.data.statusCode : undefined;
-        if (statusCode === 404) {
-          throw notFound('Congress.gov resource not found', { path }, { cause: error });
-        }
-        if (statusCode === 429) {
-          throw rateLimited(
-            'Congress.gov API rate limit reached (5,000 requests/hour). Wait before retrying — the limit resets hourly.',
-            { path },
-            { cause: error },
-          );
-        }
+      /** fetchWithTimeout maps HTTP status → typed McpError directly (e.g. 429 → RateLimited).
+       *  Rewrap RateLimited here to preserve the domain-specific quota message; 404 rewrapping
+       *  happens at call sites via tryNotFound() with identifier-rich data. */
+      if (error instanceof McpError && error.code === JsonRpcErrorCode.RateLimited) {
+        throw rateLimited(
+          'Congress.gov API rate limit reached (5,000 requests/hour). Wait before retrying — the limit resets hourly.',
+          { path },
+          { cause: error },
+        );
       }
       throw error;
     }

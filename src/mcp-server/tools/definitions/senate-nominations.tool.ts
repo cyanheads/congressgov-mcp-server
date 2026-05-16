@@ -4,6 +4,7 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
+import { validationError } from '@cyanheads/mcp-ts-core/errors';
 
 import { formatNominations } from '@/mcp-server/tools/format-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
@@ -54,8 +55,9 @@ export const senateNominationsTool = tool('congressgov_senate_nominations', {
     }
 
     if (!input.nominationNumber) {
-      throw new Error(
+      throw validationError(
         `The '${input.operation}' operation requires nominationNumber. Use 'list' to browse nominations.`,
+        { field: 'nominationNumber', operation: input.operation },
       );
     }
 
@@ -70,8 +72,9 @@ export const senateNominationsTool = tool('congressgov_senate_nominations', {
 
     if (input.operation === 'nominees') {
       if (!input.ordinal) {
-        throw new Error(
+        throw validationError(
           "The 'nominees' operation requires 'ordinal' — the position number within the nomination. Use 'get' first to see available ordinals in the nominees array.",
+          { field: 'ordinal' },
         );
       }
       const result = await api.getNominee(

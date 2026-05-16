@@ -4,6 +4,7 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
+import { validationError } from '@cyanheads/mcp-ts-core/errors';
 
 import { formatCrsReports } from '@/mcp-server/tools/format-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
@@ -33,8 +34,9 @@ export const crsReportsTool = tool('congressgov_crs_reports', {
     }
 
     if (!input.reportNumber) {
-      throw new Error(
+      throw validationError(
         "The 'get' operation requires reportNumber. Report IDs use letter-number codes (e.g., R40097). Use 'list' to browse available reports.",
+        { field: 'reportNumber' },
       );
     }
 

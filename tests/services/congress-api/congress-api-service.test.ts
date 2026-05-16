@@ -21,7 +21,12 @@ import {
 } from '@/services/congress-api/congress-api-service.js';
 
 function okJson(data: unknown) {
-  return { ok: true, status: 200, text: async () => JSON.stringify(data) };
+  return {
+    ok: true,
+    status: 200,
+    headers: new Headers(),
+    text: async () => JSON.stringify(data),
+  };
 }
 
 function errorResponse(status: number, body: string, statusText = 'Error') {
@@ -29,6 +34,7 @@ function errorResponse(status: number, body: string, statusText = 'Error') {
     ok: false,
     status,
     statusText,
+    headers: new Headers(),
     text: async () => body,
   };
 }
@@ -132,7 +138,7 @@ describe('CongressApiService', () => {
       await expect(
         service.getCrsReport({ reportNumber: 'R99999' }, createMockContext()),
       ).rejects.toMatchObject({
-        code: JsonRpcErrorCode.ServiceUnavailable,
+        code: JsonRpcErrorCode.InternalError,
       });
     });
 

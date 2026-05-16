@@ -71,6 +71,7 @@ await createApp({
     withSource(billAnalysisPrompt, 'prompts', 'bill-analysis.prompt.ts'),
     withSource(legislativeResearchPrompt, 'prompts', 'legislative-research.prompt.ts'),
   ],
+  instructions: `Use the congressgov_* tools to access U.S. legislative data via the Congress.gov API v3: bills, enacted laws, members, committees, House roll call votes, presidential nominations, CRS reports, and the daily Congressional Record. There is no keyword search — browse by congress number, bill/report type, date range, chamber, state, and district. Bills are addressed by congress + billType + billNumber (e.g. 118/hr/1234), members by bioguideId, committees by chamber-prefix codes.`,
   landing: {
     repoRoot: REPO_ROOT,
     tagline: 'U.S. legislative data — bills, votes, members, committees — via MCP.',

@@ -4,6 +4,7 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
+import { validationError } from '@cyanheads/mcp-ts-core/errors';
 
 import { formatBills } from '@/mcp-server/tools/format-helpers.js';
 import { normalizeOptionalString } from '@/mcp-server/tools/tool-helpers.js';
@@ -78,8 +79,9 @@ export const billLookupTool = tool('congressgov_bill_lookup', {
     }
 
     if (!input.billType || !input.billNumber) {
-      throw new Error(
+      throw validationError(
         `The '${input.operation}' operation requires congress, billType, and billNumber. Use 'list' first to find the bill, then request its ${input.operation}.`,
+        { operation: input.operation, billType: input.billType, billNumber: input.billNumber },
       );
     }
 

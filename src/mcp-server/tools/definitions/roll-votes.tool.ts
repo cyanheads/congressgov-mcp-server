@@ -4,6 +4,7 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
+import { validationError } from '@cyanheads/mcp-ts-core/errors';
 
 import { formatVotes } from '@/mcp-server/tools/format-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
@@ -50,8 +51,9 @@ export const rollVotesTool = tool('congressgov_roll_votes', {
     }
 
     if (!input.voteNumber) {
-      throw new Error(
+      throw validationError(
         `The '${input.operation}' operation requires voteNumber. Use 'list' to browse available votes.`,
+        { field: 'voteNumber', operation: input.operation },
       );
     }
 

@@ -4,6 +4,7 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
+import { validationError } from '@cyanheads/mcp-ts-core/errors';
 
 import { formatMembers } from '@/mcp-server/tools/format-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
@@ -50,13 +51,15 @@ export const memberLookupTool = tool('congressgov_member_lookup', {
 
     if (input.operation === 'list') {
       if (input.district !== undefined && !input.stateCode) {
-        throw new Error(
+        throw validationError(
           "The 'district' parameter requires 'stateCode'. Provide both to look up a specific House representative.",
+          { field: 'stateCode', district: input.district },
         );
       }
       if (input.congress !== undefined && (input.stateCode || input.district !== undefined)) {
-        throw new Error(
+        throw validationError(
           "Congress.gov does not support combining 'congress' with stateCode or district for member lookups. Use congress-only or stateCode/district-only filters.",
+          { congress: input.congress, stateCode: input.stateCode, district: input.district },
         );
       }
       const result = await api.listMembers(
@@ -75,8 +78,9 @@ export const memberLookupTool = tool('congressgov_member_lookup', {
     }
 
     if (!input.bioguideId) {
-      throw new Error(
+      throw validationError(
         `The '${input.operation}' operation requires bioguideId. Use 'list' with stateCode or congress to discover members.`,
+        { field: 'bioguideId', operation: input.operation },
       );
     }
 

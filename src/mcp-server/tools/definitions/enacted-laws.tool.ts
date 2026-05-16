@@ -4,6 +4,7 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
+import { validationError } from '@cyanheads/mcp-ts-core/errors';
 
 import { formatLaws } from '@/mcp-server/tools/format-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
@@ -45,8 +46,9 @@ export const enactedLawsTool = tool('congressgov_enacted_laws', {
     }
 
     if (!input.lawType || !input.lawNumber) {
-      throw new Error(
+      throw validationError(
         "The 'get' operation requires lawType ('pub' or 'priv') and lawNumber. Use 'list' to browse laws by congress.",
+        { lawType: input.lawType, lawNumber: input.lawNumber },
       );
     }
 

@@ -5,6 +5,7 @@
 
 import type { Context } from '@cyanheads/mcp-ts-core';
 import { tool, z } from '@cyanheads/mcp-ts-core';
+import { validationError } from '@cyanheads/mcp-ts-core/errors';
 
 import { formatCommittees } from '@/mcp-server/tools/format-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
@@ -56,8 +57,9 @@ export const committeeLookupTool = tool('congressgov_committee_lookup', {
     }
 
     if (!input.chamber || !input.committeeCode) {
-      throw new Error(
+      throw validationError(
         `The '${input.operation}' operation requires chamber and committeeCode. Use 'list' to discover available committees.`,
+        { operation: input.operation, chamber: input.chamber, committeeCode: input.committeeCode },
       );
     }
 
@@ -68,8 +70,9 @@ export const committeeLookupTool = tool('congressgov_committee_lookup', {
     }
 
     if (input.operation === 'nominations' && input.chamber !== 'senate') {
-      throw new Error(
+      throw validationError(
         "Nominations are only referred to Senate committees. Use chamber='senate' or a Senate committee code (s-prefix).",
+        { field: 'chamber', chamber: input.chamber },
       );
     }
 
