@@ -404,33 +404,13 @@ export class CongressApiService {
   }
 
   async getCrsReport(params: GetCrsReportParams, ctx?: Context): Promise<EntityResult<'report'>> {
-    try {
-      const data = await this.get(`/crsreport/${params.reportNumber}`, ctx);
-      const report = (data.CRSReport ?? data) as ApiRecord;
-      return { report: normalizeCrsReport(report) as ApiRecord };
-    } catch (error) {
-      const statusCode =
-        error instanceof McpError && typeof error.data?.statusCode === 'number'
-          ? error.data.statusCode
-          : undefined;
-      const responseBody =
-        error instanceof McpError && typeof error.data?.responseBody === 'string'
-          ? error.data.responseBody
-          : '';
-
-      if (
-        error instanceof McpError &&
-        (error.code === JsonRpcErrorCode.NotFound ||
-          (statusCode === 500 && this.isMissingEntityErrorBody(responseBody)))
-      ) {
-        throw notFound(
-          `CRS report ${params.reportNumber} not found. Report IDs use letter-number codes (e.g., R40097, RL33612, IF12345).`,
-          { reportNumber: params.reportNumber },
-          { cause: error },
-        );
-      }
-      throw error;
-    }
+    const data = await this.tryNotFound(
+      () => this.get(`/crsreport/${params.reportNumber}`, ctx),
+      `CRS report ${params.reportNumber} not found. Report IDs use letter-number codes (e.g., R40097, RL33612, IF12345).`,
+      { reportNumber: params.reportNumber },
+    );
+    const report = (data.CRSReport ?? data) as ApiRecord;
+    return { report: normalizeCrsReport(report) as ApiRecord };
   }
 
   // --- Committee Reports ---
@@ -531,8 +511,10 @@ export class CongressApiService {
   // --- Internal ---
 
   /**
-   * Run an API call and rewrap a generic upstream 404 into an identifier-rich
-   * notFound error. Other errors propagate unchanged.
+   * Run an API call and rewrap upstream "missing entity" responses into an
+   * identifier-rich notFound error. Covers both proper 404s and the 500-with-
+   * Django-DoesNotExist pattern that some Congress.gov endpoints emit (e.g.
+   * committee sub-resources, CRS reports). Other errors propagate unchanged.
    */
   private async tryNotFound<T>(
     fn: () => Promise<T>,
@@ -542,8 +524,17 @@ export class CongressApiService {
     try {
       return await fn();
     } catch (error) {
-      if (error instanceof McpError && error.code === JsonRpcErrorCode.NotFound) {
-        throw notFound(message, data, { cause: error });
+      if (error instanceof McpError) {
+        const statusCode =
+          typeof error.data?.statusCode === 'number' ? error.data.statusCode : undefined;
+        const responseBody =
+          typeof error.data?.responseBody === 'string' ? error.data.responseBody : '';
+        if (
+          error.code === JsonRpcErrorCode.NotFound ||
+          (statusCode === 500 && this.isMissingEntityErrorBody(responseBody))
+        ) {
+          throw notFound(message, data, { cause: error });
+        }
       }
       throw error;
     }
@@ -749,7 +740,7 @@ export class CongressApiService {
           : typeof parsed.message === 'string'
             ? parsed.message
             : '';
-      return /not found|no data/i.test(message);
+      return /not found|no data|does not exist/i.test(message);
     } catch {
       return false;
     }

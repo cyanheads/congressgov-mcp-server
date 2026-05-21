@@ -142,6 +142,26 @@ describe('CongressApiService', () => {
       });
     });
 
+    it('classifies committee sub-resource 500 with DoesNotExist body as not found', async () => {
+      mockFetch.mockResolvedValue(
+        errorResponse(
+          500,
+          JSON.stringify({
+            error:
+              "Committee matching query does not exist.\n    query was: (), {\n 'ext_system_cd': 'hstn00'} (DoesNotExist)",
+          }),
+        ),
+      );
+      await expect(
+        service.getCommitteeSubResource(
+          { chamber: 'house', committeeCode: 'hstn00', subResource: 'reports' },
+          createMockContext(),
+        ),
+      ).rejects.toMatchObject({
+        code: JsonRpcErrorCode.NotFound,
+      });
+    });
+
     it('ignores signal-like objects that are not native AbortSignal instances', async () => {
       mockFetch.mockResolvedValue(okJson({ congress: {} }));
       const ctx = {
