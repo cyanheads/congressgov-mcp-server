@@ -44,7 +44,7 @@ type ApiRecord = Record<string, unknown>;
 type EntityResult<TKey extends string> = Record<TKey, ApiRecord>;
 
 interface FetchListResult {
-  data: unknown[];
+  data: ApiRecord[];
   pagination: Pagination;
   [key: string]: unknown;
 }
@@ -76,8 +76,8 @@ function ordinal(n: number): string {
 }
 
 /** Normalize upstream casing: bioguideID → bioguideId. */
-function normalizeVoteResult(item: unknown): unknown {
-  if (!isApiRecord(item) || !('bioguideID' in item)) return item;
+function normalizeVoteResult(item: ApiRecord): ApiRecord {
+  if (!('bioguideID' in item)) return item;
   const { bioguideID, ...rest } = item;
   return { bioguideId: bioguideID, ...rest };
 }
@@ -87,8 +87,7 @@ function normalizeVoteResult(item: unknown): unknown {
  * - `relatedMaterials[].URL` → `url`, then dedupe by URL (upstream returns dupes).
  * - `url` on the report itself ships schemeless (`www.congress.gov/...`) — prepend https.
  */
-function normalizeCrsReport(item: unknown): unknown {
-  if (!isApiRecord(item)) return item;
+function normalizeCrsReport(item: ApiRecord): ApiRecord {
   let normalized: ApiRecord = item;
 
   if (typeof normalized.url === 'string' && /^www\./i.test(normalized.url)) {
@@ -118,8 +117,8 @@ function normalizeCrsReport(item: unknown): unknown {
 }
 
 /** Normalize upstream casing: cmte_rpt_id → cmteRptId. */
-function normalizeCommitteeReport(item: unknown): unknown {
-  if (!isApiRecord(item) || !('cmte_rpt_id' in item)) return item;
+function normalizeCommitteeReport(item: ApiRecord): ApiRecord {
+  if (!('cmte_rpt_id' in item)) return item;
   const { cmte_rpt_id: snake, ...rest } = item;
   return { cmteRptId: snake, ...rest };
 }
@@ -137,8 +136,7 @@ function toIsoZ(value: unknown): unknown {
   return m ? `${m[1]}T${m[2]}Z` : value;
 }
 
-function normalizeCommitteeReportSubresource(item: unknown): unknown {
-  if (!isApiRecord(item)) return item;
+function normalizeCommitteeReportSubresource(item: ApiRecord): ApiRecord {
   if (typeof item.updateDate !== 'string') return item;
   const normalized = toIsoZ(item.updateDate);
   return normalized === item.updateDate ? item : { ...item, updateDate: normalized };
@@ -151,13 +149,9 @@ function normalizeCommitteeReportSubresource(item: unknown): unknown {
  * advertised `pagination.count` and gives each article a `sectionName` field
  * for rendering. Resolves cyanheads/congressgov-mcp-server#3.
  */
-function flattenArticleSections(sections: unknown[]): unknown[] {
-  const flat: unknown[] = [];
+function flattenArticleSections(sections: ApiRecord[]): ApiRecord[] {
+  const flat: ApiRecord[] = [];
   for (const section of sections) {
-    if (!isApiRecord(section)) {
-      flat.push(section);
-      continue;
-    }
     const sectionName = typeof section.name === 'string' ? section.name : undefined;
     const articles = section.sectionArticles;
     if (!Array.isArray(articles)) {
@@ -702,12 +696,13 @@ export class CongressApiService {
     return query;
   }
 
-  private extractListItems(raw: unknown): unknown[] {
-    if (Array.isArray(raw)) return raw;
-    if (!isApiRecord(raw)) return [];
-
-    const nestedItems = Object.values(raw).find(Array.isArray);
-    return Array.isArray(nestedItems) ? nestedItems : [];
+  private extractListItems(raw: unknown): ApiRecord[] {
+    const arr = Array.isArray(raw)
+      ? raw
+      : isApiRecord(raw)
+        ? ((Object.values(raw).find(Array.isArray) as unknown[] | undefined) ?? [])
+        : [];
+    return arr.filter(isApiRecord);
   }
 
   private getRequestContext(ctx: Context | undefined, operation: string): RequestContextLike {

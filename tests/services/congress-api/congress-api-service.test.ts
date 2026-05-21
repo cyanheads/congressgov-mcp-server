@@ -208,7 +208,7 @@ describe('CongressApiService', () => {
       expect(result.data).toEqual([]);
     });
 
-    it('preserves mixed list item types instead of silently filtering them out', async () => {
+    it('filters non-record list items so data is uniformly ApiRecord[]', async () => {
       mockFetch.mockResolvedValue(
         okJson({
           bills: ['raw-token', { number: 2 }],
@@ -216,7 +216,7 @@ describe('CongressApiService', () => {
         }),
       );
       const result = await service.listBills({ congress: 118 }, createMockContext());
-      expect(result.data).toEqual(['raw-token', { number: 2 }]);
+      expect(result.data).toEqual([{ number: 2 }]);
     });
   });
 
