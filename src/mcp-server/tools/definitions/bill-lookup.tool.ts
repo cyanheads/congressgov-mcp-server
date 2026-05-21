@@ -7,7 +7,12 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { validationError } from '@cyanheads/mcp-ts-core/errors';
 
 import { formatBills } from '@/mcp-server/tools/format-helpers.js';
-import { normalizeOptionalString } from '@/mcp-server/tools/tool-helpers.js';
+import {
+  buildQueryEcho,
+  listOrDetail,
+  normalizeOptionalString,
+  validateIsoDateTime,
+} from '@/mcp-server/tools/tool-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 import { BILL_TYPE_CODES, type BillSubResource } from '@/services/congress-api/types.js';
 
@@ -65,13 +70,19 @@ export const billLookupTool = tool('congressgov_bill_lookup', {
     limit: z.number().int().min(1).max(250).default(20).describe('Results per page (1-250).'),
     offset: z.number().int().min(0).default(0).describe('Pagination offset.'),
   }),
-  output: z.object({}).passthrough().describe('Bill data from Congress.gov API.'),
+  output: listOrDetail(
+    'bill',
+    'Bill record (sponsor, policy area, latest action, CBO estimates, law citation) for `get`; absent for `list` and sub-resources.',
+  ),
   format: formatBills,
 
   async handler(input, ctx) {
     const api = getCongressApi();
-    const fromDateTime = normalizeOptionalString(input.fromDateTime);
-    const toDateTime = normalizeOptionalString(input.toDateTime);
+    const fromDateTime = validateIsoDateTime(
+      normalizeOptionalString(input.fromDateTime),
+      'fromDateTime',
+    );
+    const toDateTime = validateIsoDateTime(normalizeOptionalString(input.toDateTime), 'toDateTime');
 
     if (input.operation === 'list') {
       const result = await api.listBills(
@@ -87,7 +98,15 @@ export const billLookupTool = tool('congressgov_bill_lookup', {
         ctx,
       );
       ctx.log.info('Bills listed', { congress: input.congress, count: result.data.length });
-      return result;
+      return {
+        ...result,
+        query: buildQueryEcho('bills', {
+          congress: input.congress,
+          billType: input.billType,
+          fromDateTime,
+          toDateTime,
+        }),
+      };
     }
 
     if (!input.billType || !input.billNumber) {
@@ -132,6 +151,11 @@ export const billLookupTool = tool('congressgov_bill_lookup', {
       billNumber: input.billNumber,
       subResource,
     });
-    return result;
+    return {
+      ...result,
+      query: buildQueryEcho(
+        `${input.operation} for ${input.billType.toUpperCase()} ${input.billNumber} in the ${input.congress}th Congress`,
+      ),
+    };
   },
 });

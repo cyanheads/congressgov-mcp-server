@@ -7,6 +7,7 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { validationError } from '@cyanheads/mcp-ts-core/errors';
 
 import { formatCrsReports } from '@/mcp-server/tools/format-helpers.js';
+import { buildQueryEcho, listOrDetail } from '@/mcp-server/tools/tool-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 
 export const crsReportsTool = tool('congressgov_crs_reports', {
@@ -21,7 +22,10 @@ export const crsReportsTool = tool('congressgov_crs_reports', {
     limit: z.number().int().min(1).max(250).default(20).describe('Results per page (1-250).'),
     offset: z.number().int().min(0).default(0).describe('Pagination offset.'),
   }),
-  output: z.object({}).passthrough().describe('CRS report data from Congress.gov API.'),
+  output: listOrDetail(
+    'report',
+    'CRS report record for `get` (authors, topics, summary, formats, related materials); absent for `list`.',
+  ),
   format: formatCrsReports,
 
   async handler(input, ctx) {
@@ -30,7 +34,7 @@ export const crsReportsTool = tool('congressgov_crs_reports', {
     if (input.operation === 'list') {
       const result = await api.listCrsReports({ limit: input.limit, offset: input.offset }, ctx);
       ctx.log.info('CRS reports listed', { count: result.data.length });
-      return result;
+      return { ...result, query: buildQueryEcho('CRS reports') };
     }
 
     if (!input.reportNumber) {

@@ -7,7 +7,12 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { validationError } from '@cyanheads/mcp-ts-core/errors';
 
 import { formatSummaries } from '@/mcp-server/tools/format-helpers.js';
-import { normalizeOptionalString } from '@/mcp-server/tools/tool-helpers.js';
+import {
+  buildQueryEcho,
+  listOutput,
+  normalizeOptionalString,
+  validateIsoDateTime,
+} from '@/mcp-server/tools/tool-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 import { BILL_TYPE_CODES } from '@/services/congress-api/types.js';
 
@@ -39,12 +44,18 @@ export const billSummariesTool = tool('congressgov_bill_summaries', {
     limit: z.number().int().min(1).max(250).default(20).describe('Results per page (1-250).'),
     offset: z.number().int().min(0).default(0).describe('Pagination offset.'),
   }),
-  output: z.object({}).passthrough().describe('Bill summary data from Congress.gov API.'),
+  output: listOutput,
   format: formatSummaries,
 
   async handler(input, ctx) {
-    const fromDateTimeInput = normalizeOptionalString(input.fromDateTime);
-    const toDateTimeInput = normalizeOptionalString(input.toDateTime);
+    const fromDateTimeInput = validateIsoDateTime(
+      normalizeOptionalString(input.fromDateTime),
+      'fromDateTime',
+    );
+    const toDateTimeInput = validateIsoDateTime(
+      normalizeOptionalString(input.toDateTime),
+      'toDateTime',
+    );
 
     if (input.billType && !input.congress) {
       throw validationError(
@@ -72,6 +83,14 @@ export const billSummariesTool = tool('congressgov_bill_summaries', {
       ctx,
     );
     ctx.log.info('Summaries listed', { count: result.data.length });
-    return result;
+    return {
+      ...result,
+      query: buildQueryEcho('bill summaries', {
+        congress: input.congress,
+        billType: input.billType,
+        fromDateTime,
+        toDateTime: toDateTimeInput,
+      }),
+    };
   },
 });

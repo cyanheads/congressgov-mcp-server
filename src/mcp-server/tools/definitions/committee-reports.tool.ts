@@ -7,6 +7,7 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { validationError } from '@cyanheads/mcp-ts-core/errors';
 
 import { formatCommitteeReports } from '@/mcp-server/tools/format-helpers.js';
+import { buildQueryEcho, listOrDetail } from '@/mcp-server/tools/tool-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 
 export const committeeReportsTool = tool('congressgov_committee_reports', {
@@ -28,7 +29,10 @@ export const committeeReportsTool = tool('congressgov_committee_reports', {
     limit: z.number().int().min(1).max(250).default(20).describe('Results per page (1-250).'),
     offset: z.number().int().min(0).default(0).describe('Pagination offset.'),
   }),
-  output: z.object({}).passthrough().describe('Committee report data from Congress.gov API.'),
+  output: listOrDetail(
+    'report',
+    "the committee report (citation, title, committees, associated bill); for `text`, an alternative key 'text' carries an array of {type, url} format links.",
+  ),
   format: formatCommitteeReports,
 
   async handler(input, ctx) {
@@ -48,7 +52,13 @@ export const committeeReportsTool = tool('congressgov_committee_reports', {
         congress: input.congress,
         count: result.data.length,
       });
-      return result;
+      return {
+        ...result,
+        query: buildQueryEcho('committee reports', {
+          congress: input.congress,
+          reportType: input.reportType,
+        }),
+      };
     }
 
     if (!input.reportType || !input.reportNumber) {

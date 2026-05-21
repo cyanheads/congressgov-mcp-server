@@ -7,10 +7,11 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { validationError } from '@cyanheads/mcp-ts-core/errors';
 
 import { formatLaws } from '@/mcp-server/tools/format-helpers.js';
+import { buildQueryEcho, listOrDetail } from '@/mcp-server/tools/tool-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 
 export const enactedLawsTool = tool('congressgov_enacted_laws', {
-  description: `Browse enacted public and private laws from Congress.gov. 'list' is the primary value — it filters bills by enactment status and law type ('pub' or 'priv'), which 'bill_lookup' cannot. 'get' is provided for symmetry but returns the same payload as 'bill_lookup' with operation='get' on the origin bill (the upstream /law endpoint mirrors /bill); prefer 'bill_lookup' as canonical for detail. The 'laws' array on the origin bill carries the public/private law citation (e.g. {"number":"118-2","type":"Public Law"}).`,
+  description: `Browse enacted public and private laws from Congress.gov by congress and law type ('pub' for public laws, 'priv' for private). 'list' filters by enactment status and law type — the discovery path 'bill_lookup' does not offer. 'get' returns the origin bill record (sponsor, actions, summaries, text), with the public/private law citation on the bill's 'laws' array (e.g. {"number":"118-2","type":"Public Law"}).`,
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
   input: z.object({
     operation: z.enum(['list', 'get']).describe('Which data to retrieve.'),
@@ -25,7 +26,10 @@ export const enactedLawsTool = tool('congressgov_enacted_laws', {
     limit: z.number().int().min(1).max(250).default(20).describe('Results per page (1-250).'),
     offset: z.number().int().min(0).default(0).describe('Pagination offset.'),
   }),
-  output: z.object({}).passthrough().describe('Law data from Congress.gov API.'),
+  output: listOrDetail(
+    'law',
+    "Origin bill record for `get`; absent for `list`. The bill's `laws` array carries the law citation.",
+  ),
   format: formatLaws,
 
   async handler(input, ctx) {
@@ -42,7 +46,13 @@ export const enactedLawsTool = tool('congressgov_enacted_laws', {
         ctx,
       );
       ctx.log.info('Laws listed', { congress: input.congress, count: result.data.length });
-      return result;
+      return {
+        ...result,
+        query: buildQueryEcho('enacted laws', {
+          congress: input.congress,
+          lawType: input.lawType,
+        }),
+      };
     }
 
     if (!input.lawType || !input.lawNumber) {

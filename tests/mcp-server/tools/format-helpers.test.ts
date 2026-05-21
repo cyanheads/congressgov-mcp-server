@@ -642,16 +642,130 @@ describe('shared renderers preserved (regression)', () => {
     expect(text).not.toContain('isMilitary');
   });
 
-  it('formatNominations surfaces partitioned-form hint when result is empty with emptyHint', () => {
+  it('formatNominations surfaces partitioned-form hint via query when result is empty', () => {
     const text = textOf(
       formatNominations({
         data: [],
         pagination: { count: 0, nextOffset: null },
-        emptyHint: 'If `851` is a multi-part parent, try `851-1`.',
+        query: 'If `851` is a multi-part parent, try `851-1`.',
       }),
     );
     expect(text).toContain('**0 results**');
     expect(text).toContain('multi-part parent');
     expect(text).toContain('851-1');
+  });
+});
+
+describe('formatNominations sub-resources (issue #26)', () => {
+  it('renders nomination action rows with date, text, and metadata — not bare "Nomination"', () => {
+    /** Real payload from /nomination/119/851-1/actions. */
+    const text = textOf(
+      formatNominations({
+        data: [
+          {
+            actionCode: 'S05310',
+            actionDate: '2026-05-19',
+            text: 'Confirmed by the Senate by Yea-Nay Vote. 52 - 38. Record Vote Number: 127.',
+            type: 'Floor',
+          },
+        ],
+        pagination: { count: 12, nextOffset: 5 },
+      }),
+    );
+    expect(text).toContain('2026-05-19');
+    expect(text).toContain('Confirmed by the Senate');
+    expect(text).toContain('**Type:** Floor');
+    expect(text).toContain('**Action Code:** S05310');
+    expect(text).not.toMatch(/### 1\. Nomination$/m);
+  });
+
+  it('renders nomination committee rows with name, activities, and metadata', () => {
+    /** Real payload from /nomination/119/851-1/committees. */
+    const text = textOf(
+      formatNominations({
+        data: [
+          {
+            activities: [
+              { date: '2026-04-30T19:28:22Z', name: 'Reported By' },
+              { date: '2026-03-25T14:15:00Z', name: 'Hearings By (full committee)' },
+            ],
+            chamber: 'Senate',
+            name: 'Judiciary Committee',
+            systemCode: 'ssju00',
+            type: 'Standing',
+            url: 'https://api.congress.gov/v3/committee/senate/ssju00?format=json',
+          },
+        ],
+        pagination: { count: 1, nextOffset: null },
+      }),
+    );
+    expect(text).toContain('### 1. Judiciary Committee');
+    expect(text).toContain('**Code:** ssju00');
+    expect(text).toContain('**Chamber:** Senate');
+    expect(text).toContain('**Type:** Standing');
+    expect(text).toContain('**Activities:**');
+    expect(text).toContain('2026-04-30 — Reported By');
+    expect(text).not.toMatch(/### 1\. Nomination$/m);
+  });
+
+  it('renders nominee rows with full name and ordinal/state', () => {
+    /** Real payload from /nomination/119/851-1/nominees/1. */
+    const text = textOf(
+      formatNominations({
+        data: [
+          { firstName: 'Sheria', lastName: 'Clarke', middleName: 'Akins', ordinal: 1, state: 'SC' },
+        ],
+        pagination: { count: 1, nextOffset: null },
+      }),
+    );
+    expect(text).toContain('### 1. Sheria Akins Clarke');
+    expect(text).toContain('**Ordinal:** 1');
+    expect(text).toContain('**State:** SC');
+    expect(text).not.toMatch(/### 1\. Nomination$/m);
+  });
+
+  it('renders nomination hearing rows by citation/number with chamber and date', () => {
+    /** Documented shape from /nomination/{c}/{n}/hearings (data sparse upstream). */
+    const text = textOf(
+      formatNominations({
+        data: [
+          {
+            chamber: 'Senate',
+            citation: 'S.Hrg. 119-42',
+            congress: 119,
+            date: '2026-03-25',
+            jacketNumber: 12345,
+            number: 42,
+            partNumber: '1',
+          },
+        ],
+        pagination: { count: 1, nextOffset: null },
+      }),
+    );
+    expect(text).toContain('### 1. S.Hrg. 119-42');
+    expect(text).toContain('**Chamber:** Senate');
+    expect(text).toContain('**Date:** 2026-03-25');
+    expect(text).toContain('**Jacket:** 12345');
+  });
+});
+
+describe('empty paginated pages (issue #28)', () => {
+  it('disambiguates an empty page past the end from "0 total"', () => {
+    /** Real shape: bill HR 6047 has 10 actions; offset=10 returns empty. */
+    const text = textOf(
+      formatBills({
+        data: [],
+        pagination: { count: 10, nextOffset: null },
+      }),
+    );
+    expect(text).toContain('**10 results**');
+    expect(text).toContain('Page is empty');
+    expect(text).toContain('past the end of 10 total items');
+  });
+
+  it('omits the page-empty hint when total is 0', () => {
+    const text = textOf(formatBills({ data: [], pagination: { count: 0, nextOffset: null } }));
+    expect(text).toContain('**0 results**');
+    expect(text).not.toContain('Page is empty');
   });
 });

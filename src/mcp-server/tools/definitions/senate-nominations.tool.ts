@@ -7,6 +7,7 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { validationError } from '@cyanheads/mcp-ts-core/errors';
 
 import { formatNominations } from '@/mcp-server/tools/format-helpers.js';
+import { buildQueryEcho, listOrDetail } from '@/mcp-server/tools/tool-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 
 export const senateNominationsTool = tool('congressgov_senate_nominations', {
@@ -34,7 +35,10 @@ export const senateNominationsTool = tool('congressgov_senate_nominations', {
     limit: z.number().int().min(1).max(250).default(20).describe('Results per page (1-250).'),
     offset: z.number().int().min(0).default(0).describe('Pagination offset.'),
   }),
-  output: z.object({}).passthrough().describe('Nomination data from Congress.gov API.'),
+  output: listOrDetail(
+    'nomination',
+    'Nomination record for `get` (description, dates, nominees array, sub-resource counts); absent for `list` and sub-resources.',
+  ),
   format: formatNominations,
 
   async handler(input, ctx) {
@@ -53,7 +57,10 @@ export const senateNominationsTool = tool('congressgov_senate_nominations', {
         congress: input.congress,
         count: result.data.length,
       });
-      return result;
+      return {
+        ...result,
+        query: buildQueryEcho('nominations', { congress: input.congress }),
+      };
     }
 
     if (!input.nominationNumber) {
@@ -127,6 +134,6 @@ function withParentFormHint<T extends { data: unknown[] }>(result: T, nomination
   if (result.data.length > 0 || nominationNumber.includes('-')) return result;
   return {
     ...result,
-    emptyHint: `If \`${nominationNumber}\` is a multi-part parent, its actions/committees/hearings/nominees live on the partitioned children. Try \`${nominationNumber}-1\` (and -2, -3, …) instead.`,
+    query: `If \`${nominationNumber}\` is a multi-part parent, its actions/committees/hearings/nominees live on the partitioned children. Try \`${nominationNumber}-1\` (and -2, -3, …) instead.`,
   };
 }

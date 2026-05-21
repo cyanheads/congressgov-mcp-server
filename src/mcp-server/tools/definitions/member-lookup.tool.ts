@@ -7,6 +7,7 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { validationError } from '@cyanheads/mcp-ts-core/errors';
 
 import { formatMembers } from '@/mcp-server/tools/format-helpers.js';
+import { buildQueryEcho, listOrDetail } from '@/mcp-server/tools/tool-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 
 export const memberLookupTool = tool('congressgov_member_lookup', {
@@ -43,7 +44,10 @@ export const memberLookupTool = tool('congressgov_member_lookup', {
     limit: z.number().int().min(1).max(250).default(20).describe('Results per page (1-250).'),
     offset: z.number().int().min(0).default(0).describe('Pagination offset.'),
   }),
-  output: z.object({}).passthrough().describe('Member data from Congress.gov API.'),
+  output: listOrDetail(
+    'member',
+    'Member profile for `get` (name, state, terms, party history, leadership, legislation counts); absent for `list`, `sponsored`, `cosponsored`.',
+  ),
   format: formatMembers,
 
   async handler(input, ctx) {
@@ -68,7 +72,15 @@ export const memberLookupTool = tool('congressgov_member_lookup', {
         ctx,
       );
       ctx.log.info('Members listed', { count: result.data.length });
-      return result;
+      return {
+        ...result,
+        query: buildQueryEcho('members', {
+          congress: input.congress,
+          stateCode: input.stateCode,
+          district: input.district,
+          currentMember: input.currentMember,
+        }),
+      };
     }
 
     if (!input.bioguideId) {
@@ -99,6 +111,9 @@ export const memberLookupTool = tool('congressgov_member_lookup', {
       bioguideId: input.bioguideId,
       type: input.operation,
     });
-    return result;
+    return {
+      ...result,
+      query: buildQueryEcho(`${input.operation} legislation for ${input.bioguideId}`),
+    };
   },
 });

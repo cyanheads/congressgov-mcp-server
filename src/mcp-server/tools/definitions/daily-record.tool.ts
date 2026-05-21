@@ -7,6 +7,7 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { validationError } from '@cyanheads/mcp-ts-core/errors';
 
 import { formatDailyRecord } from '@/mcp-server/tools/format-helpers.js';
+import { buildQueryEcho, listOutput } from '@/mcp-server/tools/tool-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 
 export const dailyRecordTool = tool('congressgov_daily_record', {
@@ -29,7 +30,7 @@ export const dailyRecordTool = tool('congressgov_daily_record', {
     limit: z.number().int().min(1).max(250).default(20).describe('Results per page (1-250).'),
     offset: z.number().int().min(0).default(0).describe('Pagination offset.'),
   }),
-  output: z.object({}).passthrough().describe('Congressional Record data from Congress.gov API.'),
+  output: listOutput,
   format: formatDailyRecord,
 
   async handler(input, ctx) {
@@ -38,7 +39,7 @@ export const dailyRecordTool = tool('congressgov_daily_record', {
     if (input.operation === 'list') {
       const result = await api.listDailyRecord({ limit: input.limit, offset: input.offset }, ctx);
       ctx.log.info('Daily record listed');
-      return result;
+      return { ...result, query: buildQueryEcho('Congressional Record volumes') };
     }
 
     if (!input.volumeNumber) {
@@ -58,7 +59,10 @@ export const dailyRecordTool = tool('congressgov_daily_record', {
         ctx,
       );
       ctx.log.info('Daily record issues retrieved', { volumeNumber: input.volumeNumber });
-      return result;
+      return {
+        ...result,
+        query: buildQueryEcho(`issues for volume ${input.volumeNumber}`),
+      };
     }
 
     if (!input.issueNumber) {
@@ -81,6 +85,11 @@ export const dailyRecordTool = tool('congressgov_daily_record', {
       volumeNumber: input.volumeNumber,
       issueNumber: input.issueNumber,
     });
-    return result;
+    return {
+      ...result,
+      query: buildQueryEcho(
+        `articles for volume ${input.volumeNumber}, issue ${input.issueNumber}`,
+      ),
+    };
   },
 });
