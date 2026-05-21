@@ -8,6 +8,7 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { validationError } from '@cyanheads/mcp-ts-core/errors';
 
 import { formatCommittees } from '@/mcp-server/tools/format-helpers.js';
+import { buildQueryEcho, listOrDetail } from '@/mcp-server/tools/tool-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 import type { Chamber } from '@/services/congress-api/types.js';
 
@@ -21,7 +22,7 @@ function inferChamberFromCode(code: string): Chamber | undefined {
 }
 
 export const committeeLookupTool = tool('congressgov_committee_lookup', {
-  description: `Browse congressional committees and their legislation, reports, and nominations. Committee codes follow the pattern chamber-prefix (h/s/j) + abbreviation + number — use 'list' to discover codes, then 'get' or drill into 'bills', 'reports', or 'nominations' ('nominations' is Senate-only). 'get' and sub-resources only need committeeCode (chamber is inferred from the prefix); pass chamber explicitly to override. The 'bills' sub-resource defaults to 'recent' order (newest update-date first); pass order='oldest' for ascending update-date order.`,
+  description: `Browse congressional committees and their legislation, reports, and nominations. Committee codes follow the pattern chamber-prefix (h/s/j) + abbreviation + number — use 'list' to discover codes, then 'get' or drill into 'bills', 'reports', or 'nominations' ('nominations' is Senate-only). 'get' and sub-resources only need committeeCode (chamber is inferred from the prefix); pass chamber explicitly to override. The 'bills' sub-resource defaults to 'recent' order (newest update-date first); pass order='oldest' for ascending update-date order. Upstream omits bill titles from the 'bills' sub-resource — rows carry only {congress, billType, billNumber, actionDate, relationshipType, url}; chain 'congressgov_bill_lookup get' per row to retrieve titles and policy area.`,
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
   input: z.object({
     operation: z
@@ -47,7 +48,10 @@ export const committeeLookupTool = tool('congressgov_committee_lookup', {
         "Sort order for the 'bills' sub-resource. 'recent' (default) returns newest update-date first; 'oldest' returns ascending update-date order. Ignored by other operations.",
       ),
   }),
-  output: z.object({}).passthrough().describe('Committee data from Congress.gov API.'),
+  output: listOrDetail(
+    'committee',
+    'Committee record for `get` (name, chamber, subcommittees, history, sub-resource counts); absent for `list` and sub-resources.',
+  ),
   format: formatCommittees,
 
   async handler(input, ctx) {
@@ -64,7 +68,13 @@ export const committeeLookupTool = tool('congressgov_committee_lookup', {
         ctx,
       );
       ctx.log.info('Committees listed', { count: result.data.length });
-      return result;
+      return {
+        ...result,
+        query: buildQueryEcho('committees', {
+          congress: input.congress,
+          chamber: input.chamber,
+        }),
+      };
     }
 
     if (!input.committeeCode) {
@@ -121,7 +131,10 @@ export const committeeLookupTool = tool('congressgov_committee_lookup', {
       committeeCode: input.committeeCode,
       subResource: input.operation,
     });
-    return result;
+    return {
+      ...result,
+      query: buildQueryEcho(`${input.operation} for committee ${input.committeeCode}`),
+    };
   },
 });
 
