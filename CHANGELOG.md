@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.3.18](changelog/0.3.x/0.3.18.md) — 2026-05-20
+
+Fix `congressgov_member_lookup` list to build the combined `/member/congress/{c}/{state}/{district}` URL instead of rejecting the filter combo, and classify upstream `500 (DoesNotExist)` bodies as `NotFound` across all endpoints (not just CRS) — affects `congressgov_committee_lookup` reports/bills/nominations sub-resources.
+
 ## [0.3.17](changelog/0.3.x/0.3.17.md) — 2026-05-16
 
 Adopt @cyanheads/mcp-ts-core ^0.8.19 → ^0.9.1: server-level `instructions` field surfaced on initialize, tool input-validation errors switch from `new Error` to the `validationError` factory, fetchResponse drops stale 404/429 status-code probing in favor of the framework's typed HTTP→McpError mapping.
