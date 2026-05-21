@@ -20,16 +20,32 @@ function tb(content: string): TextBlock[] {
   return [{ type: 'text', text: content }];
 }
 
-function stripHtml(html: string): string {
-  return html
+/**
+ * Strip HTML to plain text while preserving paragraph and line breaks. Upstream
+ * summary fields and other narrative bodies ship as HTML; we want the visible
+ * structure (paragraph boundaries) to survive into the rendered Markdown.
+ *
+ * Inline contexts that need single-line output should pass `{ inline: true }`.
+ */
+function stripHtml(html: string, { inline = false } = {}): string {
+  const text = html
+    .replace(/<\s*br\s*\/?\s*>/gi, '\n')
+    .replace(/<\s*\/p\s*>/gi, '\n\n')
     .replace(/<[^>]*>/g, '')
     .replace(/&nbsp;/g, ' ')
     .replace(/&#039;/g, "'")
     .replace(/&amp;/g, '&')
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/\s+/g, ' ')
+    .replace(/&quot;/g, '"');
+
+  if (inline) return text.replace(/\s+/g, ' ').trim();
+
+  return text
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n[ \t]+/g, '\n')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
 
@@ -62,14 +78,14 @@ function htmlToMarkdown(html: string): string {
     .trim();
 }
 
-/** Safe deep access with HTML stripping. Handles string and number values. */
+/** Safe deep access for compact field display — collapses whitespace to a single line. */
 function s(obj: unknown, ...path: string[]): string | undefined {
   let cur = obj;
   for (const key of path) {
     if (cur == null || typeof cur !== 'object') return;
     cur = (cur as Record<string, unknown>)[key];
   }
-  if (typeof cur === 'string') return stripHtml(cur);
+  if (typeof cur === 'string') return stripHtml(cur, { inline: true });
   if (typeof cur === 'number') return String(cur);
   return;
 }
@@ -95,11 +111,15 @@ function pagHeader(result: Record<string, unknown>): string {
 }
 
 /** Render a paginated list with header and per-item rendering. */
-function renderList(result: Record<string, unknown>, renderItem?: ItemRenderer): string {
+function renderList(
+  result: Record<string, unknown>,
+  renderItem?: ItemRenderer,
+  emptyHint?: string,
+): string {
   const items = (result.data ?? []) as unknown[];
   const header = pagHeader(result);
   if (items.length === 0) {
-    return `${header}\n\nNo results matched the query. Try broadening the filters — widen the date range, drop the type/chamber/state constraint, or remove the date window entirely.`;
+    return emptyHint ? `${header}\n\n${emptyHint}` : header;
   }
   const renderer = renderItem ?? renderGenericItem;
   const rendered = items.map((item, i) =>
@@ -132,12 +152,12 @@ function renderDetail(obj: unknown): string {
     if (val == null || val === '') continue;
 
     if (typeof val === 'string') {
-      const cleaned = stripHtml(val);
-      if (cleaned.length > 300) {
+      const inline = stripHtml(val, { inline: true });
+      if (inline.length > 300) {
         lines.push(`**${key}:**`);
-        lines.push(cleaned);
+        lines.push(stripHtml(val));
       } else {
-        lines.push(`**${key}:** ${cleaned}`);
+        lines.push(`**${key}:** ${inline}`);
       }
     } else if (typeof val === 'number' || typeof val === 'boolean') {
       lines.push(`**${key}:** ${val}`);
@@ -178,7 +198,7 @@ function renderDetail(obj: unknown): string {
         lines.push(`\n**${key}:**`);
         for (const [k2, v2] of Object.entries(nested)) {
           if (v2 == null || v2 === '') continue;
-          if (typeof v2 === 'string') lines.push(`  **${k2}:** ${stripHtml(v2)}`);
+          if (typeof v2 === 'string') lines.push(`  **${k2}:** ${stripHtml(v2, { inline: true })}`);
           else if (typeof v2 === 'number' || typeof v2 === 'boolean')
             lines.push(`  **${k2}:** ${v2}`);
           else if (typeof v2 === 'object' && v2)
@@ -215,12 +235,12 @@ function renderGenericItem(item: Record<string, unknown>, index: number): string
     if (HEADING_FIELDS.has(key)) continue;
 
     if (typeof val === 'string') {
-      const cleaned = stripHtml(val);
-      if (cleaned.length > 300) {
+      const inline = stripHtml(val, { inline: true });
+      if (inline.length > 300) {
         lines.push(`**${key}:**`);
-        lines.push(cleaned);
+        lines.push(stripHtml(val));
       } else {
-        lines.push(`**${key}:** ${cleaned}`);
+        lines.push(`**${key}:** ${inline}`);
       }
     } else if (typeof val === 'number' || typeof val === 'boolean') {
       lines.push(`**${key}:** ${val}`);
@@ -269,7 +289,7 @@ function renderInline(obj: Record<string, unknown>): string {
   for (const [key, val] of Object.entries(obj)) {
     if (val == null || val === '') continue;
     if (typeof val === 'string') {
-      const cleaned = stripHtml(val);
+      const cleaned = stripHtml(val, { inline: true });
       const preview = cleaned.length > 120 ? `${cleaned.slice(0, 117)}...` : cleaned;
       parts.push(`${key}: ${preview}`);
     } else if (typeof val === 'number' || typeof val === 'boolean') parts.push(`${key}: ${val}`);
@@ -413,7 +433,7 @@ function renderCrsReportItem(item: Record<string, unknown>, i: number): string {
     f('Version', version),
   ]);
   if (meta) lines.push(meta);
-  lines.push(summary || '_Summary not available._');
+  if (summary) lines.push(summary);
   if (url) lines.push(`**URL:** ${url}`);
 
   return lines.join('\n');
@@ -555,6 +575,368 @@ function renderCommitteeReportTextItem(item: Record<string, unknown>, i: number)
   return lines.join('\n');
 }
 
+/** Member-sponsored amendments — `type`/`title` are null upstream; identify by `amendmentNumber`. */
+function renderAmendmentItem(item: Record<string, unknown>, i: number): string {
+  const number = s(item, 'amendmentNumber');
+  const url = s(item, 'url') ?? '';
+  /** URL path carries the chamber prefix (samdt / hamdt) we need for a readable type label. */
+  const amdMatch = url.match(/\/amendment\/(\d+)\/(samdt|hamdt|suamdt|huamdt)\//i);
+  const typeCode = amdMatch?.[2]?.toLowerCase();
+  const chamber =
+    typeCode === 'samdt' || typeCode === 'suamdt'
+      ? 'Senate Amendment'
+      : typeCode === 'hamdt' || typeCode === 'huamdt'
+        ? 'House Amendment'
+        : 'Amendment';
+  const heading = number ? `${chamber} ${number}` : 'Amendment';
+  const lines = [`### ${i + 1}. ${heading}`];
+
+  const meta = join([
+    f('Congress', s(item, 'congress')),
+    f('Introduced', s(item, 'introducedDate')),
+  ]);
+  if (meta) lines.push(meta);
+
+  const actionDate = s(item, 'latestAction', 'actionDate');
+  const actionText = s(item, 'latestAction', 'text');
+  if (actionDate || actionText)
+    lines.push(`**Latest Action:** ${[actionDate, actionText].filter(Boolean).join(' — ')}`);
+
+  if (url) lines.push(`**URL:** ${url}`);
+  return lines.join('\n');
+}
+
+/** Bill text versions — heading from `type` (e.g. "Enrolled Bill"), formats[] as labeled URLs. */
+function renderBillTextItem(item: Record<string, unknown>, i: number): string {
+  const type = s(item, 'type') ?? 'Bill Text';
+  const date = s(item, 'date');
+  const lines = [`### ${i + 1}. ${type}`];
+  if (date) lines.push(`**Date:** ${date}`);
+
+  const formats = item.formats;
+  if (Array.isArray(formats)) {
+    for (const fmt of formats as Record<string, unknown>[]) {
+      const fType = s(fmt, 'type');
+      const fUrl = s(fmt, 'url');
+      if (fType && fUrl) lines.push(`**${fType}:** ${fUrl}`);
+    }
+  }
+  return lines.join('\n');
+}
+
+/** Nomination type wrapper: `{isCivilian: true}` / `{isMilitary: true}` → readable label. */
+function nominationTypeLabel(raw: unknown): string | undefined {
+  if (!raw || typeof raw !== 'object') return;
+  const t = raw as Record<string, unknown>;
+  if (t.isCivilian === true) return 'Civilian';
+  if (t.isMilitary === true) return 'Military';
+  return;
+}
+
+function nominationHeading(item: Record<string, unknown>): string {
+  const citation = s(item, 'citation');
+  if (citation) return citation;
+  const number = s(item, 'number');
+  const partNumber = s(item, 'partNumber');
+  if (number && partNumber && partNumber !== '00') return `PN${number}-${Number(partNumber)}`;
+  if (number) return `PN${number}`;
+  return 'Nomination';
+}
+
+function renderNominationListItem(item: Record<string, unknown>, i: number): string {
+  const heading = nominationHeading(item);
+  const type = nominationTypeLabel(item.nominationType);
+  const lines = [`### ${i + 1}. ${heading}`];
+
+  const description = s(item, 'description');
+  if (description) lines.push(description);
+
+  const meta = join([
+    f('Congress', s(item, 'congress')),
+    f('Type', type),
+    f('Received', s(item, 'receivedDate')),
+    f('Authority Date', s(item, 'authorityDate')),
+    f('Updated', s(item, 'updateDate')),
+  ]);
+  if (meta) lines.push(meta);
+
+  const actionDate = s(item, 'latestAction', 'actionDate');
+  const actionText = s(item, 'latestAction', 'text');
+  if (actionDate || actionText)
+    lines.push(`**Latest Action:** ${[actionDate, actionText].filter(Boolean).join(' — ')}`);
+
+  const url = s(item, 'url');
+  if (url) lines.push(`**URL:** ${url}`);
+  return lines.join('\n');
+}
+
+function renderNominationDetail(item: Record<string, unknown>): string {
+  const heading = nominationHeading(item);
+  const type = nominationTypeLabel(item.nominationType);
+  const lines = [`# ${heading}`];
+
+  const description = s(item, 'description');
+  if (description) lines.push(description);
+
+  const meta = join([
+    f('Congress', s(item, 'congress')),
+    f('Type', type),
+    f('Part Number', s(item, 'partNumber')),
+    f('Received', s(item, 'receivedDate')),
+    f('Authority Date', s(item, 'authorityDate')),
+    f('Updated', s(item, 'updateDate')),
+  ]);
+  if (meta) lines.push(meta);
+
+  const actionDate = s(item, 'latestAction', 'actionDate');
+  const actionText = s(item, 'latestAction', 'text');
+  if (actionDate || actionText)
+    lines.push(`**Latest Action:** ${[actionDate, actionText].filter(Boolean).join(' — ')}`);
+
+  const subResources: string[] = [];
+  for (const key of ['actions', 'committees', 'hearings']) {
+    const sub = item[key] as Record<string, unknown> | undefined;
+    if (sub && typeof sub.count === 'number' && sub.count > 0)
+      subResources.push(`${sub.count} ${key}`);
+  }
+  if (subResources.length) lines.push(`**Available:** ${subResources.join(', ')}`);
+
+  const nominees = item.nominees;
+  if (Array.isArray(nominees) && nominees.length > 0) {
+    lines.push(`\n**Nominees (${nominees.length}):**`);
+    for (const n of nominees.slice(0, 20) as Record<string, unknown>[]) {
+      const ord = s(n, 'ordinal');
+      const count = s(n, 'nomineeCount');
+      const org = s(n, 'organization');
+      const title = s(n, 'positionTitle');
+      const parts = [
+        ord ? `Ord ${ord}` : undefined,
+        count ? `${count} nominee(s)` : undefined,
+        org,
+        title,
+      ].filter(Boolean);
+      lines.push(`- ${parts.join(' — ')}`);
+    }
+    if (nominees.length > 20) lines.push(`- _...${nominees.length - 20} more_`);
+  } else if (s(item, 'partNumber') === '00') {
+    /** Parent nominations (partNumber=00) have no nominees array. Sub-resources
+     * also return 0 results — they live on the partitioned children (PN851-1, PN851-2, …). */
+    lines.push(
+      '\n_This is a parent nomination. Individual nominees and confirmation actions live on partitioned children (e.g. `PN851-1`, `PN851-2`). Use the partitioned form for `actions`, `committees`, `hearings`, or `nominees`._',
+    );
+  }
+
+  const url = s(item, 'url');
+  if (url) lines.push(`\n**URL:** ${url}`);
+  return lines.join('\n');
+}
+
+/** Roll call vote detail — question, result, date, party totals. */
+function renderRollVoteDetail(item: Record<string, unknown>): string {
+  const roll = s(item, 'rollCallNumber');
+  const congress = s(item, 'congress');
+  const session = s(item, 'sessionNumber');
+  const result = s(item, 'result');
+  const question = s(item, 'voteQuestion');
+  const voteType = s(item, 'voteType');
+  const startDate = s(item, 'startDate');
+  const updated = s(item, 'updateDate');
+  const identifier = s(item, 'identifier');
+  const sourceUrl = s(item, 'sourceDataURL');
+
+  const headingLeft = roll ? `Roll ${roll}` : 'Roll call';
+  const heading = result ? `${headingLeft} — ${result}` : headingLeft;
+  const lines = [`# ${heading}`];
+
+  if (question) lines.push(`**Question:** ${question}`);
+
+  const meta = join([
+    f('Congress', congress),
+    f('Session', session),
+    f('Type', voteType),
+    f('Date', startDate),
+    f('Updated', updated),
+    identifier && identifier !== roll ? f('ID', identifier) : undefined,
+  ]);
+  if (meta) lines.push(meta);
+
+  const totals = item.votePartyTotal;
+  if (Array.isArray(totals) && totals.length > 0) {
+    lines.push('\n**Party Totals:**');
+    for (const t of totals as Record<string, unknown>[]) {
+      const party = s(t, 'party', 'name') ?? s(t, 'voteParty') ?? '?';
+      const yea = s(t, 'yeaTotal') ?? '0';
+      const nay = s(t, 'nayTotal') ?? '0';
+      const present = s(t, 'presentTotal') ?? '0';
+      const notVoting = s(t, 'notVotingTotal') ?? '0';
+      lines.push(
+        `- **${party}:** Yea ${yea}, Nay ${nay}, Present ${present}, Not Voting ${notVoting}`,
+      );
+    }
+  }
+
+  const results = item.results;
+  if (Array.isArray(results) && results.length > 0) {
+    lines.push(`\n**Member Votes:** ${results.length} on this page`);
+    for (const r of results.slice(0, 20) as Record<string, unknown>[]) {
+      const name =
+        s(r, 'firstName') && s(r, 'lastName')
+          ? `${s(r, 'firstName')} ${s(r, 'lastName')}`
+          : (s(r, 'bioguideId') ?? '?');
+      const vote = s(r, 'voteCast');
+      const party = s(r, 'voteParty');
+      const state = s(r, 'voteState');
+      const parts = [
+        name,
+        party && state ? `(${party}-${state})` : undefined,
+        vote ? `→ ${vote}` : undefined,
+      ].filter(Boolean);
+      lines.push(`- ${parts.join(' ')}`);
+    }
+    if (results.length > 20) lines.push(`- _...${results.length - 20} more_`);
+  }
+
+  if (sourceUrl) lines.push(`\n**Source Data URL:** ${sourceUrl}`);
+  return lines.join('\n');
+}
+
+/** Member detail. */
+function renderMemberDetail(item: Record<string, unknown>): string {
+  const name =
+    s(item, 'directOrderName') ??
+    s(item, 'invertedOrderName') ??
+    s(item, 'bioguideId') ??
+    'Unknown';
+  const lines = [`# ${name}`];
+
+  const meta = join([
+    f('ID', s(item, 'bioguideId')),
+    f('Party', s(item, 'partyName') ?? s(item, 'currentParty')),
+    f('State', s(item, 'state')),
+    item.district != null ? f('District', s(item, 'district')) : undefined,
+    f(
+      'Currently Serving',
+      typeof item.currentMember === 'boolean' ? String(item.currentMember) : undefined,
+    ),
+    f('Birth Year', s(item, 'birthYear')),
+    f('Updated', s(item, 'updateDate')),
+  ]);
+  if (meta) lines.push(meta);
+
+  const honorific = s(item, 'honorificName');
+  if (honorific) lines.push(`**Honorific:** ${honorific}`);
+
+  /** terms may be a direct array or nested as `{item: [...]}`. */
+  const rawTerms = item.terms;
+  const termsArr: Record<string, unknown>[] | undefined = Array.isArray(rawTerms)
+    ? rawTerms
+    : rawTerms &&
+        typeof rawTerms === 'object' &&
+        Array.isArray((rawTerms as Record<string, unknown>).item)
+      ? ((rawTerms as Record<string, unknown>).item as Record<string, unknown>[])
+      : undefined;
+
+  if (termsArr && termsArr.length > 0) {
+    lines.push(`\n**Terms (${termsArr.length}):**`);
+    const recent = termsArr.slice(-5);
+    for (const term of recent) {
+      const chamber = s(term, 'chamber');
+      const start = s(term, 'startYear');
+      const end = s(term, 'endYear');
+      const party = s(term, 'partyName');
+      const stateName = s(term, 'stateName');
+      const range = start && end ? `${start}–${end}` : start;
+      const parts = [chamber, range, party, stateName].filter(Boolean);
+      lines.push(`- ${parts.join(', ')}`);
+    }
+    if (termsArr.length > 5) lines.push(`- _...${termsArr.length - 5} earlier_`);
+  }
+
+  const partyHistory = item.partyHistory;
+  if (Array.isArray(partyHistory) && partyHistory.length > 0) {
+    lines.push(`\n**Party History:**`);
+    for (const p of partyHistory as Record<string, unknown>[]) {
+      const partyName = s(p, 'partyName');
+      const start = s(p, 'startYear');
+      const end = s(p, 'endYear');
+      const range = start && end ? `${start}–${end}` : start;
+      const parts = [partyName, range && `(${range})`].filter(Boolean);
+      lines.push(`- ${parts.join(' ')}`);
+    }
+  }
+
+  const leadership = item.leadership;
+  if (Array.isArray(leadership) && leadership.length > 0) {
+    lines.push(`\n**Leadership Roles (${leadership.length}):**`);
+    for (const l of leadership.slice(0, 10) as Record<string, unknown>[]) {
+      const type = s(l, 'type');
+      const congress = s(l, 'congress');
+      lines.push(
+        `- ${[type, congress ? `Congress ${congress}` : undefined].filter(Boolean).join(' — ')}`,
+      );
+    }
+    if (leadership.length > 10) lines.push(`- _...${leadership.length - 10} more_`);
+  }
+
+  const subResources: string[] = [];
+  for (const key of ['sponsoredLegislation', 'cosponsoredLegislation']) {
+    const sub = item[key] as Record<string, unknown> | undefined;
+    if (sub && typeof sub.count === 'number' && sub.count > 0) {
+      const label = key === 'sponsoredLegislation' ? 'sponsored' : 'cosponsored';
+      subResources.push(`${sub.count} ${label}`);
+    }
+  }
+  if (subResources.length) lines.push(`\n**Legislation:** ${subResources.join(', ')}`);
+
+  const url = s(item, 'url');
+  if (url) lines.push(`\n**URL:** ${url}`);
+  return lines.join('\n');
+}
+
+/** Committee list item — name + key fields. */
+function renderCommitteeListItem(item: Record<string, unknown>, i: number): string {
+  const name = s(item, 'name') ?? s(item, 'systemCode') ?? 'Committee';
+  const lines = [`### ${i + 1}. ${name}`];
+  const meta = join([
+    f('Code', s(item, 'systemCode')),
+    f('Chamber', s(item, 'chamber')),
+    f('Type', s(item, 'committeeTypeCode')),
+    f('Updated', s(item, 'updateDate')),
+  ]);
+  if (meta) lines.push(meta);
+  const url = s(item, 'url');
+  if (url) lines.push(`**URL:** ${url}`);
+  return lines.join('\n');
+}
+
+/** Committee report list item — citation-first; upstream omits title and bill ref. */
+function renderCommitteeReportListItem(item: Record<string, unknown>, i: number): string {
+  const citation = s(item, 'citation');
+  const type = s(item, 'type');
+  const number = s(item, 'number');
+  const part = s(item, 'part');
+  const congress = s(item, 'congress');
+  const chamber = s(item, 'chamber');
+  const updated = s(item, 'updateDate');
+  const url = s(item, 'url');
+
+  const heading =
+    citation ?? (type && number ? `${type} ${congress ?? ''}-${number}` : 'Committee Report');
+  const lines = [`### ${i + 1}. ${heading}`];
+
+  const meta = join([
+    f('Congress', congress),
+    f('Chamber', chamber),
+    f('Type', type),
+    f('Number', number),
+    part && part !== '1' ? f('Part', part) : undefined,
+    f('Updated', updated),
+  ]);
+  if (meta) lines.push(meta);
+  if (url) lines.push(`**URL:** ${url}`);
+  return lines.join('\n');
+}
+
 // ── Per-Tool Format Exports ─────────────────────────────────────────
 
 function makeFormatter(
@@ -583,9 +965,33 @@ export function formatBills(result: Record<string, unknown>): TextBlock[] {
   return tb(renderDetail(result));
 }
 
+/**
+ * Bill sub-resource summary item — known shape (no nested `bill.*`, since the
+ * caller already has the bill). Reuses `htmlToMarkdown` so `<p>` / `<strong>`
+ * survive into the rendered Markdown.
+ */
+function renderBillSubresourceSummaryItem(item: Record<string, unknown>, i: number): string {
+  const version = s(item, 'actionDesc') ?? s(item, 'versionCode') ?? 'Summary';
+  const actionDate = s(item, 'actionDate');
+  const updated = s(item, 'updateDate');
+  const lines = [`### ${i + 1}. ${version}`];
+  const meta = join([f('Action Date', actionDate), f('Summary Updated', updated)]);
+  if (meta) lines.push(meta);
+
+  const text = typeof item.text === 'string' ? htmlToMarkdown(item.text) : '';
+  if (text) lines.push('', text);
+  return lines.join('\n');
+}
+
 function pickBillListRenderer(first: Record<string, unknown>): ItemRenderer | undefined {
   if ('title' in first && 'number' in first) return renderBillItem;
-  // Actions always ship a `text` body; most also carry actionDate/actionCode/sourceSystem.
+  /** Bill text versions: `type` + `formats[]`, no `actionDate`. */
+  if ('type' in first && 'formats' in first) return renderBillTextItem;
+  /** Bill sub-resource summaries: `actionDesc`/`versionCode` + `text`, no `actionCode`/`sourceSystem`. */
+  if ('text' in first && ('actionDesc' in first || 'versionCode' in first)) {
+    return renderBillSubresourceSummaryItem;
+  }
+  /** Actions always ship a `text` body; most also carry actionDate/actionCode/sourceSystem. */
   if (
     'text' in first &&
     ('actionDate' in first || 'actionCode' in first || 'sourceSystem' in first)
@@ -604,11 +1010,19 @@ export function formatMembers(result: Record<string, unknown>): TextBlock[] {
     const firstRecord =
       typeof first === 'object' && first !== null ? (first as Record<string, unknown>) : undefined;
     if (firstRecord && 'bioguideId' in firstRecord) return tb(renderList(result, renderMemberItem));
-    if (firstRecord && 'number' in firstRecord && 'title' in firstRecord)
-      return tb(renderList(result, renderBillItem));
+    /** Sponsored/cosponsored may mix bills (type+title) and amendments (amendmentNumber, null type/title).
+     * Dispatch per-row so amendments don't render as 'Untitled'. */
+    if (firstRecord && ('number' in firstRecord || 'amendmentNumber' in firstRecord)) {
+      const dispatch: ItemRenderer = (item, i) =>
+        'amendmentNumber' in item && item.amendmentNumber != null
+          ? renderAmendmentItem(item, i)
+          : renderBillItem(item, i);
+      return tb(renderList(result, dispatch));
+    }
     return tb(renderList(result));
   }
-  if (result.member != null) return tb(renderDetail(result.member));
+  if (result.member != null)
+    return tb(renderMemberDetail(result.member as Record<string, unknown>));
   return tb(renderDetail(result));
 }
 
@@ -623,7 +1037,16 @@ function extractCommitteeName(committee: Record<string, unknown>): string | unde
 
 /** Committee browse, detail, and sub-resources (bills, reports, nominations). */
 export function formatCommittees(result: Record<string, unknown>): TextBlock[] {
-  if (Array.isArray(result.data)) return tb(renderList(result));
+  if (Array.isArray(result.data)) {
+    const first = result.data[0];
+    const firstRecord =
+      typeof first === 'object' && first !== null ? (first as Record<string, unknown>) : undefined;
+    /** Committee list rows have `systemCode` + `name`. Sub-resource rows
+     * (bills/reports/nominations) keep their generic / specialized renderers. */
+    if (firstRecord && 'systemCode' in firstRecord && 'name' in firstRecord)
+      return tb(renderList(result, renderCommitteeListItem));
+    return tb(renderList(result));
+  }
   if (result.committee != null) {
     const committee = result.committee as Record<string, unknown>;
     const name = extractCommitteeName(committee);
@@ -635,7 +1058,7 @@ export function formatCommittees(result: Record<string, unknown>): TextBlock[] {
 
 /** Committee reports — list, detail, and text. */
 export function formatCommitteeReports(result: Record<string, unknown>): TextBlock[] {
-  if (Array.isArray(result.data)) return tb(renderList(result));
+  if (Array.isArray(result.data)) return tb(renderList(result, renderCommitteeReportListItem));
   if (Array.isArray(result.text)) {
     const textResult = { data: result.text, pagination: { count: result.text.length } };
     return tb(renderList(textResult, renderCommitteeReportTextItem));
@@ -672,7 +1095,19 @@ export function formatDailyRecord(result: Record<string, unknown>): TextBlock[] 
 export const formatLaws = makeFormatter(['law'], renderBillItem);
 
 /** House roll call votes and member voting positions. */
-export const formatVotes = makeFormatter(['vote'], renderRollVoteItem);
+export function formatVotes(result: Record<string, unknown>): TextBlock[] {
+  if (Array.isArray(result.data)) return tb(renderList(result, renderRollVoteItem));
+  if (result.vote != null) return tb(renderRollVoteDetail(result.vote as Record<string, unknown>));
+  return tb(renderDetail(result));
+}
 
 /** Presidential nominations and Senate confirmation pipeline. */
-export const formatNominations = makeFormatter(['nomination']);
+export function formatNominations(result: Record<string, unknown>): TextBlock[] {
+  if (Array.isArray(result.data)) {
+    const hint = typeof result.emptyHint === 'string' ? result.emptyHint : undefined;
+    return tb(renderList(result, renderNominationListItem, hint));
+  }
+  if (result.nomination != null)
+    return tb(renderNominationDetail(result.nomination as Record<string, unknown>));
+  return tb(renderDetail(result));
+}

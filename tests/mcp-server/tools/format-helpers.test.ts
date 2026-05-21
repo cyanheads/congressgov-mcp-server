@@ -89,7 +89,7 @@ describe('formatCrsReports (issue #1)', () => {
     expect(text).not.toContain('should-be-ignored');
   });
 
-  it('reports missing fields honestly when the item is sparse', () => {
+  it('reports missing identifier/title honestly without inventing summary text', () => {
     const text = textOf(
       formatCrsReports({
         data: [{}],
@@ -98,7 +98,7 @@ describe('formatCrsReports (issue #1)', () => {
     );
     expect(text).toContain('Report number not available');
     expect(text).toContain('Title not available');
-    expect(text).toContain('Summary not available');
+    expect(text).not.toContain('Summary not available');
   });
 });
 
@@ -290,18 +290,24 @@ describe('formatVotes (issue #4)', () => {
     expect(text).not.toContain(': —');
   });
 
-  it('still routes detail operations through renderDetail', () => {
+  it('renders the detail object with a domain renderer (heading + question + meta)', () => {
     const text = textOf(
       formatVotes({
         vote: {
           rollCallNumber: 240,
           result: 'Passed',
-          question: 'On Motion to Suspend the Rules and Pass',
+          voteQuestion: 'On Motion to Suspend the Rules and Pass',
+          congress: 119,
+          sessionNumber: 1,
+          voteType: 'Yea-And-Nay',
+          startDate: '2025-09-08T18:56:00-04:00',
         },
       }),
     );
-    expect(text).toContain('**rollCallNumber:** 240');
-    expect(text).toContain('**question:**');
+    expect(text).toContain('# Roll 240 — Passed');
+    expect(text).toContain('**Question:** On Motion to Suspend the Rules and Pass');
+    expect(text).toContain('**Congress:** 119');
+    expect(text).toContain('**Type:** Yea-And-Nay');
   });
 });
 
@@ -422,14 +428,28 @@ describe('formatCommitteeReports — text operation (issue #6)', () => {
     expect(text).toContain('**PDF (Errata):**');
   });
 
-  it('passes through list and detail shapes untouched', () => {
+  it('renders list rows with citation-first heading and key metadata', () => {
     const listText = textOf(
       formatCommitteeReports({
-        data: [{ type: 'HRPT', number: 100, title: 'Sample Report' }],
+        data: [
+          {
+            chamber: 'House',
+            citation: 'H. Rept. 117-100',
+            congress: 117,
+            number: 100,
+            type: 'HRPT',
+            updateDate: '2025-05-27T14:15:46Z',
+            url: 'https://api.congress.gov/v3/committee-report/117/HRPT/100?format=json',
+          },
+        ],
         pagination: { count: 1, nextOffset: null },
       }),
     );
-    expect(listText).toContain('### 1. HRPT 100: Sample Report');
+    expect(listText).toContain('### 1. H. Rept. 117-100');
+    expect(listText).toContain('**Congress:** 117');
+    expect(listText).toContain('**Chamber:** House');
+    expect(listText).toContain('**Type:** HRPT');
+    expect(listText).toContain('**Updated:** 2025-05-27T14:15:46Z');
 
     const detailText = textOf(
       formatCommitteeReports({
@@ -586,17 +606,52 @@ describe('shared renderers preserved (regression)', () => {
     expect(text).toContain('**Party:** D');
   });
 
-  it('formatNominations falls back to generic detail for nomination objects', () => {
+  it('formatNominations renders detail with citation heading + description + meta', () => {
     const text = textOf(
       formatNominations({
         nomination: {
           citation: 'PN123',
           description: 'Nominee description',
           congress: 119,
+          nominationType: { isCivilian: true },
+          partNumber: '01',
         },
       }),
     );
-    expect(text).toContain('**citation:** PN123');
-    expect(text).toContain('**description:** Nominee description');
+    expect(text).toContain('# PN123');
+    expect(text).toContain('Nominee description');
+    expect(text).toContain('**Congress:** 119');
+    expect(text).toContain('**Type:** Civilian');
+  });
+
+  it('formatNominations list renders nominationType as readable label, not nested object', () => {
+    const text = textOf(
+      formatNominations({
+        data: [
+          { citation: 'PN851-1', nominationType: { isCivilian: true }, congress: 119 },
+          { citation: 'PN907-4', nominationType: { isMilitary: true }, congress: 119 },
+        ],
+        pagination: { count: 2, nextOffset: null },
+      }),
+    );
+    expect(text).toContain('### 1. PN851-1');
+    expect(text).toContain('**Type:** Civilian');
+    expect(text).toContain('### 2. PN907-4');
+    expect(text).toContain('**Type:** Military');
+    expect(text).not.toContain('isCivilian');
+    expect(text).not.toContain('isMilitary');
+  });
+
+  it('formatNominations surfaces partitioned-form hint when result is empty with emptyHint', () => {
+    const text = textOf(
+      formatNominations({
+        data: [],
+        pagination: { count: 0, nextOffset: null },
+        emptyHint: 'If `851` is a multi-part parent, try `851-1`.',
+      }),
+    );
+    expect(text).toContain('**0 results**');
+    expect(text).toContain('multi-part parent');
+    expect(text).toContain('851-1');
   });
 });

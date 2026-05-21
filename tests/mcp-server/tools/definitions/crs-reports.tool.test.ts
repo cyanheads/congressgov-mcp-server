@@ -58,12 +58,14 @@ describe('crsReportsTool', () => {
     await expect(crsReportsTool.handler(input, ctx)).rejects.toThrow(/reportNumber/);
   });
 
-  it('formats sparse CRS output without inventing summary text', () => {
+  it('omits the summary line entirely when sparse — never invents placeholder noise', () => {
     const output = crsReportsTool.output.parse({
       data: [{ reportNumber: 'R40097' }],
       pagination: { count: 1, nextOffset: null },
     });
     const blocks = crsReportsTool.format!(output);
-    expect((blocks[0] as { text: string }).text).toContain('Summary not available');
+    const text = (blocks[0] as { text: string }).text;
+    expect(text).toContain('R40097');
+    expect(text).not.toContain('Summary not available');
   });
 });
