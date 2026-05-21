@@ -49,6 +49,7 @@ export type BillSubResource =
 export interface ListBillsParams extends PaginationParams, DateRangeParams {
   billType?: BillType | undefined;
   congress: number;
+  sort?: 'updateDate desc' | 'updateDate asc' | undefined;
 }
 
 export interface GetBillParams {

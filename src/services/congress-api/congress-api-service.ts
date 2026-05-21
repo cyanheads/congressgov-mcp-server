@@ -82,15 +82,39 @@ function normalizeVoteResult(item: unknown): unknown {
   return { bioguideId: bioguideID, ...rest };
 }
 
-/** Normalize upstream casing: relatedMaterials[].URL → url. */
+/**
+ * Normalize CRS report payloads:
+ * - `relatedMaterials[].URL` → `url`, then dedupe by URL (upstream returns dupes).
+ * - `url` on the report itself ships schemeless (`www.congress.gov/...`) — prepend https.
+ */
 function normalizeCrsReport(item: unknown): unknown {
-  if (!isApiRecord(item) || !Array.isArray(item.relatedMaterials)) return item;
-  const normalized = item.relatedMaterials.map((entry) => {
-    if (!isApiRecord(entry) || !('URL' in entry)) return entry;
-    const { URL: upper, ...rest } = entry;
-    return 'url' in rest ? entry : { url: upper, ...rest };
-  });
-  return { ...item, relatedMaterials: normalized };
+  if (!isApiRecord(item)) return item;
+  let normalized: ApiRecord = item;
+
+  if (typeof normalized.url === 'string' && /^www\./i.test(normalized.url)) {
+    normalized = { ...normalized, url: `https://${normalized.url}` };
+  }
+
+  if (Array.isArray(normalized.relatedMaterials)) {
+    const seen = new Set<string>();
+    const deduped: unknown[] = [];
+    for (const entry of normalized.relatedMaterials) {
+      let cased: unknown = entry;
+      if (isApiRecord(entry) && 'URL' in entry && !('url' in entry)) {
+        const { URL: upper, ...rest } = entry;
+        cased = { url: upper, ...rest };
+      }
+      const key = isApiRecord(cased) && typeof cased.url === 'string' ? cased.url : undefined;
+      if (key) {
+        if (seen.has(key)) continue;
+        seen.add(key);
+      }
+      deduped.push(cased);
+    }
+    normalized = { ...normalized, relatedMaterials: deduped };
+  }
+
+  return normalized;
 }
 
 /** Normalize upstream casing: cmte_rpt_id → cmteRptId. */
@@ -98,6 +122,26 @@ function normalizeCommitteeReport(item: unknown): unknown {
   if (!isApiRecord(item) || !('cmte_rpt_id' in item)) return item;
   const { cmte_rpt_id: snake, ...rest } = item;
   return { cmteRptId: snake, ...rest };
+}
+
+const SPACE_DATE_RE = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})\+00:00$/;
+
+/**
+ * Some endpoints (notably `/committee/{c}/{code}/reports`) emit `updateDate` as
+ * `"YYYY-MM-DD HH:MM:SS+00:00"` instead of strict ISO-8601. Rewrite to ISO Z form
+ * so consumers see a single shape across the surface.
+ */
+function toIsoZ(value: unknown): unknown {
+  if (typeof value !== 'string') return value;
+  const m = SPACE_DATE_RE.exec(value);
+  return m ? `${m[1]}T${m[2]}Z` : value;
+}
+
+function normalizeCommitteeReportSubresource(item: unknown): unknown {
+  if (!isApiRecord(item)) return item;
+  if (typeof item.updateDate !== 'string') return item;
+  const normalized = toIsoZ(item.updateDate);
+  return normalized === item.updateDate ? item : { ...item, updateDate: normalized };
 }
 
 /**
@@ -171,7 +215,8 @@ export class CongressApiService {
     const path = params.billType
       ? `/bill/${params.congress}/${params.billType}`
       : `/bill/${params.congress}`;
-    return this.fetchList(path, 'bills', params, ctx);
+    const extraQuery = params.sort ? { sort: params.sort } : undefined;
+    return this.fetchList(path, 'bills', params, ctx, extraQuery);
   }
 
   async getBill(params: GetBillParams, ctx?: Context): Promise<EntityResult<'bill'>> {
@@ -274,17 +319,21 @@ export class CongressApiService {
     return { committee: data.committee as ApiRecord };
   }
 
-  getCommitteeSubResource(
+  async getCommitteeSubResource(
     params: CommitteeSubResourceParams,
     ctx?: Context,
   ): Promise<FetchListResult> {
     const path = `/committee/${params.chamber}/${params.committeeCode}/${params.subResource}`;
     const key = this.inferListKey(params.subResource);
-    return this.tryNotFound(
+    const result = await this.tryNotFound(
       () => this.fetchList(path, key, params, ctx),
       `Committee ${params.committeeCode} (${params.chamber}) or its ${params.subResource} not found.`,
       { ...params },
     );
+    if (params.subResource === 'reports') {
+      return { ...result, data: result.data.map(normalizeCommitteeReportSubresource) };
+    }
+    return result;
   }
 
   // --- Votes ---
@@ -548,7 +597,13 @@ export class CongressApiService {
     extraQuery?: Record<string, string>,
   ): Promise<FetchListResult> {
     const data = await this.get(path, ctx, this.buildQuery(params, extraQuery));
-    const items = this.extractListItems(data[listKey]);
+    const rawItems = this.extractListItems(data[listKey]);
+    /** The /bill/{c}/{t}/{n}/text endpoint always returns limit+1 items —
+     * truncate to honor the requested page size and keep pagination consistent. */
+    const items =
+      params?.limit != null && rawItems.length > params.limit
+        ? rawItems.slice(0, params.limit)
+        : rawItems;
     const pagination = this.extractPagination(data.pagination, items.length, params);
     return { data: items, pagination };
   }
