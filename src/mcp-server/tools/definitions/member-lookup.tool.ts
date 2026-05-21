@@ -10,7 +10,7 @@ import { formatMembers } from '@/mcp-server/tools/format-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 
 export const memberLookupTool = tool('congressgov_member_lookup', {
-  description: `Discover congressional members and their legislative activity. There is no name search — use 'list' with stateCode (optionally with district), with a congress number, or with currentMember=true to find members. Once you have a bioguideId, use 'get' for full profile or 'sponsored'/'cosponsored' for their legislative portfolio.`,
+  description: `Discover congressional members and their legislative activity. No name search. For 'list', filter by stateCode (optionally with district), by congress, or by both together (e.g., 118th Congress + CA, or CA district 12 in the 118th). Add currentMember=true to restrict to currently serving members. Once you have a bioguideId, use 'get' for full profile or 'sponsored'/'cosponsored' for their legislative portfolio.`,
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
   input: z.object({
     operation: z
@@ -54,12 +54,6 @@ export const memberLookupTool = tool('congressgov_member_lookup', {
         throw validationError(
           "The 'district' parameter requires 'stateCode'. Provide both to look up a specific House representative.",
           { field: 'stateCode', district: input.district },
-        );
-      }
-      if (input.congress !== undefined && (input.stateCode || input.district !== undefined)) {
-        throw validationError(
-          "Congress.gov does not support combining 'congress' with stateCode or district for member lookups. Use congress-only or stateCode/district-only filters.",
-          { congress: input.congress, stateCode: input.stateCode, district: input.district },
         );
       }
       const result = await api.listMembers(

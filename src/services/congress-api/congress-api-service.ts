@@ -10,7 +10,6 @@ import {
   notFound,
   rateLimited,
   serviceUnavailable,
-  validationError,
 } from '@cyanheads/mcp-ts-core/errors';
 import { fetchWithTimeout, withRetry } from '@cyanheads/mcp-ts-core/utils';
 import { getServerConfig } from '@/config/server-config.js';
@@ -216,23 +215,12 @@ export class CongressApiService {
   // --- Members ---
 
   listMembers(params: ListMembersParams, ctx?: Context): Promise<FetchListResult> {
-    if (params.congress !== undefined && (params.stateCode || params.district !== undefined)) {
-      throw validationError(
-        'Congress.gov does not support combining congress with stateCode or district for member lookups. Use congress-only or stateCode/district-only filters.',
-        {
-          congress: params.congress,
-          stateCode: params.stateCode,
-          district: params.district,
-        },
-      );
-    }
-
-    let path = '/member';
+    const prefix =
+      params.congress !== undefined ? `/member/congress/${params.congress}` : '/member';
+    let path = prefix;
     if (params.stateCode) {
-      path = `/member/${params.stateCode}`;
+      path = `${prefix}/${params.stateCode}`;
       if (params.district !== undefined) path += `/${params.district}`;
-    } else if (params.congress) {
-      path = `/member/congress/${params.congress}`;
     }
     const extraQuery =
       params.currentMember === undefined

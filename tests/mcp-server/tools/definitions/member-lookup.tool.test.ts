@@ -60,15 +60,22 @@ describe('memberLookupTool', () => {
     await expect(memberLookupTool.handler(input, ctx)).rejects.toThrow(/stateCode/);
   });
 
-  it('throws when congress is combined with state filters', async () => {
+  it('lists members by congress combined with state and district', async () => {
     const ctx = createMockContext();
+    mockApi.listMembers.mockResolvedValue({
+      data: [],
+      pagination: { count: 0, nextOffset: null },
+    });
     const input = memberLookupTool.input.parse({
       operation: 'list',
       congress: 118,
       stateCode: 'CA',
+      district: 12,
     });
-    await expect(memberLookupTool.handler(input, ctx)).rejects.toThrow(
-      /does not support combining/i,
+    await memberLookupTool.handler(input, ctx);
+    expect(mockApi.listMembers).toHaveBeenCalledWith(
+      expect.objectContaining({ congress: 118, stateCode: 'CA', district: 12 }),
+      ctx,
     );
   });
 

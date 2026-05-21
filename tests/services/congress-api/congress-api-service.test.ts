@@ -245,13 +245,21 @@ describe('CongressApiService', () => {
       expect(url.pathname).toBe('/v3/member/congress/118');
     });
 
-    it('rejects ambiguous congress and location filters instead of silently dropping one', async () => {
-      try {
-        service.listMembers({ congress: 118, stateCode: 'CA' }, createMockContext());
-        expect.unreachable('Expected listMembers to throw');
-      } catch (error) {
-        expect(error).toMatchObject({ code: JsonRpcErrorCode.ValidationError });
-      }
+    it('builds combined path for listMembers with congress and state', async () => {
+      mockFetch.mockResolvedValue(okJson({ members: [] }));
+      await service.listMembers({ congress: 118, stateCode: 'CA' }, createMockContext());
+      const url = new URL(mockFetch.mock.calls[0][0]);
+      expect(url.pathname).toBe('/v3/member/congress/118/CA');
+    });
+
+    it('builds combined path for listMembers with congress, state, and district', async () => {
+      mockFetch.mockResolvedValue(okJson({ members: [] }));
+      await service.listMembers(
+        { congress: 118, stateCode: 'CA', district: 12 },
+        createMockContext(),
+      );
+      const url = new URL(mockFetch.mock.calls[0][0]);
+      expect(url.pathname).toBe('/v3/member/congress/118/CA/12');
     });
   });
 });
