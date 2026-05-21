@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.3.19](changelog/0.3.x/0.3.19.md) — 2026-05-20
+
+Closes every open issue: domain renderers for member/nomination/vote/committee, `order` sort on `bill_lookup` and `roll_votes`, chamber inference on `committee_lookup`, partitioned-form hints for `senate_nominations`, and upstream-data normalization (CRS dedup/scheme, committee-report ISO dates, `/text` limit+1).
+
 ## [0.3.18](changelog/0.3.x/0.3.18.md) — 2026-05-20
 
 Fix `congressgov_member_lookup` list to build the combined `/member/congress/{c}/{state}/{district}` URL instead of rejecting the filter combo, and classify upstream `500 (DoesNotExist)` bodies as `NotFound` across all endpoints (not just CRS) — affects `congressgov_committee_lookup` reports/bills/nominations sub-resources.
