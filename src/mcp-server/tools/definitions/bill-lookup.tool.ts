@@ -32,7 +32,7 @@ const SUB_RESOURCE_MAP: Record<string, string> = {
 };
 
 export const billLookupTool = tool('congressgov_bill_lookup', {
-  description: `Browse and retrieve U.S. legislative bill data from Congress.gov. Discover bills by filtering on congress, bill type, and date range — there is no keyword search. Use 'list' to browse (requires congress), 'get' for full bill detail (sponsor, policy area, CBO estimates, law info), or drill into a specific bill with 'actions', 'amendments', 'cosponsors', 'committees', 'subjects', 'summaries', 'text', 'titles', or 'related' (each requires congress + billType + billNumber).`,
+  description: `Browse and retrieve U.S. legislative bill data from Congress.gov. Discover bills by filtering on congress, bill type, and date range — there is no keyword search. Use 'list' to browse (requires congress, defaults to most-recently-updated first), 'get' for full bill detail (sponsor, policy area, CBO estimates, law info), or drill into a specific bill with 'actions', 'amendments', 'cosponsors', 'committees', 'subjects', 'summaries', 'text', 'titles', or 'related' (each requires congress + billType + billNumber).`,
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
   input: z.object({
     operation: OperationEnum.describe('Which data to retrieve.'),
@@ -49,8 +49,19 @@ export const billLookupTool = tool('congressgov_bill_lookup', {
     fromDateTime: z
       .string()
       .optional()
-      .describe('Start of date range filter (ISO 8601). Filters by latest action date.'),
-    toDateTime: z.string().optional().describe('End of date range filter (ISO 8601).'),
+      .describe(
+        "Start of date range filter (ISO 8601). Filters by the bill's update date — when Congress.gov last touched the record — not by the bill's latest legislative action.",
+      ),
+    toDateTime: z
+      .string()
+      .optional()
+      .describe('End of date range filter (ISO 8601). Same field semantics as fromDateTime.'),
+    order: z
+      .enum(['recent', 'oldest'])
+      .default('recent')
+      .describe(
+        "Sort order for 'list' (sorts by update date). 'recent' (default) is newest first; 'oldest' is ascending. Ignored by other operations.",
+      ),
     limit: z.number().int().min(1).max(250).default(20).describe('Results per page (1-250).'),
     offset: z.number().int().min(0).default(0).describe('Pagination offset.'),
   }),
@@ -69,6 +80,7 @@ export const billLookupTool = tool('congressgov_bill_lookup', {
           billType: input.billType,
           fromDateTime,
           toDateTime,
+          sort: input.order === 'oldest' ? 'updateDate asc' : 'updateDate desc',
           limit: input.limit,
           offset: input.offset,
         },

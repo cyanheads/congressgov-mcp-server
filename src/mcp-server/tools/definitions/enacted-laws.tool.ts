@@ -10,7 +10,7 @@ import { formatLaws } from '@/mcp-server/tools/format-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 
 export const enactedLawsTool = tool('congressgov_enacted_laws', {
-  description: `Browse enacted public and private laws from Congress.gov. Use 'list' to browse laws by congress, or 'get' for a specific law's full detail. Each law references its origin bill for the full legislative history.`,
+  description: `Browse enacted public and private laws from Congress.gov. 'list' is the primary value — it filters bills by enactment status and law type ('pub' or 'priv'), which 'bill_lookup' cannot. 'get' is provided for symmetry but returns the same payload as 'bill_lookup' with operation='get' on the origin bill (the upstream /law endpoint mirrors /bill); prefer 'bill_lookup' as canonical for detail. The 'laws' array on the origin bill carries the public/private law citation (e.g. {"number":"118-2","type":"Public Law"}).`,
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
   input: z.object({
     operation: z.enum(['list', 'get']).describe('Which data to retrieve.'),

@@ -11,8 +11,17 @@ import { formatCommittees } from '@/mcp-server/tools/format-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 import type { Chamber } from '@/services/congress-api/types.js';
 
+/** Committee codes carry chamber in the first letter (h=House, s=Senate, j=Joint). */
+function inferChamberFromCode(code: string): Chamber | undefined {
+  const first = code[0]?.toLowerCase();
+  if (first === 's') return 'senate';
+  if (first === 'j') return 'joint';
+  if (first === 'h') return 'house';
+  return;
+}
+
 export const committeeLookupTool = tool('congressgov_committee_lookup', {
-  description: `Browse congressional committees and their legislation, reports, and nominations. Committee codes follow the pattern chamber-prefix (h/s/j) + abbreviation + number — use 'list' to discover codes, then 'get' or drill into 'bills', 'reports', or 'nominations' ('nominations' is Senate-only). The 'bills' sub-resource defaults to 'recent' order (newest update-date first); pass order='oldest' for ascending update-date order.`,
+  description: `Browse congressional committees and their legislation, reports, and nominations. Committee codes follow the pattern chamber-prefix (h/s/j) + abbreviation + number — use 'list' to discover codes, then 'get' or drill into 'bills', 'reports', or 'nominations' ('nominations' is Senate-only). 'get' and sub-resources only need committeeCode (chamber is inferred from the prefix); pass chamber explicitly to override. The 'bills' sub-resource defaults to 'recent' order (newest update-date first); pass order='oldest' for ascending update-date order.`,
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
   input: z.object({
     operation: z
@@ -22,7 +31,9 @@ export const committeeLookupTool = tool('congressgov_committee_lookup', {
     chamber: z
       .enum(['house', 'senate', 'joint'])
       .optional()
-      .describe("Chamber filter. Required for 'get' and sub-resources."),
+      .describe(
+        "Chamber filter for 'list', or override for 'get' and sub-resources (otherwise inferred from committeeCode prefix).",
+      ),
     committeeCode: z
       .string()
       .optional()
@@ -56,30 +67,38 @@ export const committeeLookupTool = tool('congressgov_committee_lookup', {
       return result;
     }
 
-    if (!input.chamber || !input.committeeCode) {
+    if (!input.committeeCode) {
       throw validationError(
-        `The '${input.operation}' operation requires chamber and committeeCode. Use 'list' to discover available committees.`,
-        { operation: input.operation, chamber: input.chamber, committeeCode: input.committeeCode },
+        `The '${input.operation}' operation requires committeeCode. Use 'list' to discover available committees.`,
+        { operation: input.operation, committeeCode: input.committeeCode },
+      );
+    }
+
+    const chamber = input.chamber ?? inferChamberFromCode(input.committeeCode);
+    if (!chamber) {
+      throw validationError(
+        `Could not infer chamber from committeeCode '${input.committeeCode}'. Pass chamber explicitly ('house', 'senate', or 'joint').`,
+        { field: 'committeeCode', committeeCode: input.committeeCode },
       );
     }
 
     if (input.operation === 'get') {
-      const result = await api.getCommittee(input.chamber, input.committeeCode, ctx);
+      const result = await api.getCommittee(chamber, input.committeeCode, ctx);
       ctx.log.info('Committee retrieved', { committeeCode: input.committeeCode });
       return result;
     }
 
-    if (input.operation === 'nominations' && input.chamber !== 'senate') {
+    if (input.operation === 'nominations' && chamber !== 'senate') {
       throw validationError(
         "Nominations are only referred to Senate committees. Use chamber='senate' or a Senate committee code (s-prefix).",
-        { field: 'chamber', chamber: input.chamber },
+        { field: 'chamber', chamber },
       );
     }
 
     if (input.operation === 'bills' && input.order === 'recent') {
       return fetchCommitteeBillsRecent(
         {
-          chamber: input.chamber,
+          chamber,
           committeeCode: input.committeeCode,
           limit: input.limit,
           offset: input.offset,
@@ -90,7 +109,7 @@ export const committeeLookupTool = tool('congressgov_committee_lookup', {
 
     const result = await api.getCommitteeSubResource(
       {
-        chamber: input.chamber,
+        chamber,
         committeeCode: input.committeeCode,
         subResource: input.operation,
         limit: input.limit,

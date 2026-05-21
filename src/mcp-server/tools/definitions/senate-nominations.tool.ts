@@ -10,7 +10,7 @@ import { formatNominations } from '@/mcp-server/tools/format-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 
 export const senateNominationsTool = tool('congressgov_senate_nominations', {
-  description: `Browse presidential nominations to federal positions and track the Senate confirmation process. Use 'list' to browse, 'get' for nomination detail, 'actions'/'committees'/'hearings' for confirmation pipeline data, or 'nominees' to retrieve individual appointees in a multi-nominee batch. Nominations use 'PN' (Presidential Nomination) numbering, and a single nomination may contain multiple nominees. Partitioned nominations (e.g., PN230-1, PN230-2) occur when nominees within one nomination follow different confirmation paths.`,
+  description: `Browse presidential nominations to federal positions and track the Senate confirmation process. Use 'list' to browse, 'get' for nomination detail, 'actions'/'committees'/'hearings' for confirmation pipeline data, or 'nominees' to retrieve individual appointees in a multi-nominee batch. Nominations use 'PN' (Presidential Nomination) numbering. Most nominations carry confirmation activity on the parent (e.g., PN1000); multi-part parents (e.g., PN851) carry no activity of their own — their actions, committees, hearings, and nominees live on partitioned children (PN851-1, PN851-2, …). 'get' on a parent that has no \`nominees\` array signals the partitioned form is needed for everything below it.`,
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
   input: z.object({
     operation: z
@@ -20,14 +20,16 @@ export const senateNominationsTool = tool('congressgov_senate_nominations', {
     nominationNumber: z
       .string()
       .optional()
-      .describe("Nomination number (e.g., '1064'). Required for detail operations."),
+      .describe(
+        "Nomination number. Use the bare form (e.g. '1000') for nominations whose activity sits on the parent; use the partitioned form (e.g. '851-1') for sub-resources of a multi-part nomination. Required for detail operations.",
+      ),
     ordinal: z
       .number()
       .int()
       .positive()
       .optional()
       .describe(
-        "Batch ordinal within a multi-nominee nomination. Each ordinal addresses a group of nominees; the 'nominees' operation returns every individual in that batch. Use 'get' first to see available ordinals on the nomination's `nominees` array.",
+        "Batch ordinal within a multi-nominee nomination. Each ordinal addresses a group of nominees; the 'nominees' operation returns every individual in that batch. Use 'get' first to see available ordinals on the nomination's `nominees` array (multi-part parents have no nominees array — use a partitioned form like '851-1' instead).",
       ),
     limit: z.number().int().min(1).max(250).default(20).describe('Results per page (1-250).'),
     offset: z.number().int().min(0).default(0).describe('Pagination offset.'),
@@ -92,7 +94,7 @@ export const senateNominationsTool = tool('congressgov_senate_nominations', {
         nominationNumber: input.nominationNumber,
         ordinal: input.ordinal,
       });
-      return result;
+      return withParentFormHint(result, input.nominationNumber);
     }
 
     const result = await api.getNominationSubResource(
@@ -110,6 +112,21 @@ export const senateNominationsTool = tool('congressgov_senate_nominations', {
       nominationNumber: input.nominationNumber,
       subResource: input.operation,
     });
-    return result;
+    return withParentFormHint(result, input.nominationNumber);
   },
 });
+
+/**
+ * Sub-resource calls (actions/committees/hearings/nominees) against a bare
+ * parent number (e.g. '851') silently return 0 results when the nomination is
+ * a multi-part parent — those sub-resources live on the partitioned children.
+ * Attach a hint the formatter can render so callers know to try the partitioned
+ * form.
+ */
+function withParentFormHint<T extends { data: unknown[] }>(result: T, nominationNumber: string): T {
+  if (result.data.length > 0 || nominationNumber.includes('-')) return result;
+  return {
+    ...result,
+    emptyHint: `If \`${nominationNumber}\` is a multi-part parent, its actions/committees/hearings/nominees live on the partitioned children. Try \`${nominationNumber}-1\` (and -2, -3, …) instead.`,
+  };
+}
