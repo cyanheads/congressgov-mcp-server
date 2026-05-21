@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.3.20](changelog/0.3.x/0.3.20.md) — 2026-05-20
+
+Strict newest-first sort on `congressgov_roll_votes`, restored sub-resource rendering on `congressgov_senate_nominations`, empty-page disambiguation in list output, ISO 8601 validation on date filters, and a `Search:` echo line on every list response so callers can confirm what was filtered.
+
 ## [0.3.19](changelog/0.3.x/0.3.19.md) — 2026-05-20
 
 Closes every open issue: domain renderers for member/nomination/vote/committee, `order` sort on `bill_lookup` and `roll_votes`, chamber inference on `committee_lookup`, partitioned-form hints for `senate_nominations`, and upstream-data normalization (CRS dedup/scheme, committee-report ISO dates, `/text` limit+1).
