@@ -6,7 +6,7 @@
     "url": "https://github.com/cyanheads/congressgov-mcp-server",
     "source": "github"
   },
-  "version": "0.3.20",
+  "version": "0.3.21",
   "remotes": [
     {
       "type": "streamable-http",
@@ -19,7 +19,7 @@
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@cyanheads/congressgov-mcp-server",
       "runtimeHint": "bun",
-      "version": "0.3.20",
+      "version": "0.3.21",
       "packageArguments": [
         {
           "type": "positional",
@@ -33,9 +33,9 @@
       "environmentVariables": [
         {
           "name": "CONGRESS_API_KEY",
-          "description": "API key from api.data.gov for the Congress.gov API.",
+          "description": "API key from api.data.gov \u2014 optional (falls back to DEMO_KEY: 30 req/hr). Own key: 1000 req/hr. Free signup at api.data.gov.",
           "format": "string",
-          "isRequired": true
+          "isRequired": false
         },
         {
           "name": "MCP_LOG_LEVEL",
@@ -54,7 +54,7 @@
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@cyanheads/congressgov-mcp-server",
       "runtimeHint": "bun",
-      "version": "0.3.20",
+      "version": "0.3.21",
       "packageArguments": [
         {
           "type": "positional",
@@ -68,9 +68,9 @@
       "environmentVariables": [
         {
           "name": "CONGRESS_API_KEY",
-          "description": "API key from api.data.gov for the Congress.gov API.",
+          "description": "API key from api.data.gov \u2014 optional (falls back to DEMO_KEY: 30 req/hr). Own key: 1000 req/hr. Free signup at api.data.gov.",
           "format": "string",
-          "isRequired": true
+          "isRequired": false
         },
         {
           "name": "MCP_HTTP_HOST",

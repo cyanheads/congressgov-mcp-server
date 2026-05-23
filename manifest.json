@@ -1,0 +1,33 @@
+{
+  "manifest_version": "0.3",
+  "name": "congressgov-mcp-server",
+  "version": "0.3.21",
+  "description": "Access U.S. congressional data - bills, votes, members, committees - via MCP.",
+  "author": { "name": "cyanheads" },
+  "server": {
+    "type": "node",
+    "entry_point": "dist/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/dist/index.js"],
+      "env": {
+        "MCP_TRANSPORT_TYPE": "stdio",
+        "MCP_AUTH_MODE": "none",
+        "NODE_ENV": "production"
+      }
+    }
+  },
+  "compatibility": {
+    "runtimes": { "node": ">=24.0.0" }
+  },
+  "tools_generated": true,
+  "prompts_generated": true,
+  "user_config": {
+    "CONGRESS_API_KEY": {
+      "type": "string",
+      "title": "Congress.gov API Key",
+      "description": "Optional. Defaults to DEMO_KEY (30 req/hr). Get your own key at api.data.gov for 1,000 req/hr.",
+      "required": false
+    }
+  }
+}

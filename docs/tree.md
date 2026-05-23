@@ -1,6 +1,6 @@
 # congressgov-mcp-server - Directory Structure
 
-Generated on: 2026-05-16 19:22:40
+Generated on: 2026-05-23 12:22:52
 
 ```text
 congressgov-mcp-server/
@@ -30,6 +30,8 @@ congressgov-mcp-server/
 │   ├── clean.ts
 │   ├── devcheck.ts
 │   ├── lint-mcp.ts
+│   ├── lint-packaging.ts
+│   ├── list-skills.ts
 │   ├── split-changelog.ts
 │   └── tree.ts
 ├── skills/
@@ -170,6 +172,7 @@ congressgov-mcp-server/
 ├── .dockerignore
 ├── .env.example
 ├── .gitignore
+├── .mcpbignore
 ├── AGENTS.md
 ├── biome.json
 ├── bun.lock
@@ -180,6 +183,7 @@ congressgov-mcp-server/
 ├── devcheck.config.json
 ├── Dockerfile
 ├── LICENSE
+├── manifest.json
 ├── package.json
 ├── README.md
 ├── server.json

@@ -7,7 +7,12 @@ import { z } from '@cyanheads/mcp-ts-core';
 import { parseEnvConfig } from '@cyanheads/mcp-ts-core/config';
 
 const ServerConfigSchema = z.object({
-  apiKey: z.string().min(1).describe('Congress.gov API key from api.data.gov'),
+  apiKey: z
+    .string()
+    .default('DEMO_KEY')
+    .describe(
+      'Congress.gov API key from api.data.gov — optional (DEMO_KEY: 30 req/hr, own key: 1000 req/hr)',
+    ),
   baseUrl: z
     .string()
     .url()

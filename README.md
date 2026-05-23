@@ -7,9 +7,15 @@
 
 <div align="center">
 
-[![npm](https://img.shields.io/npm/v/@cyanheads/congressgov-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/congressgov-mcp-server) [![Version](https://img.shields.io/badge/Version-0.3.20-blue.svg?style=flat-square)](./CHANGELOG.md) [![Framework](https://img.shields.io/badge/Built%20on-@cyanheads/mcp--ts--core-259?style=flat-square)](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.29.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/)
+[![Version](https://img.shields.io/badge/Version-0.3.21-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/congressgov-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.29.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/congressgov-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/congressgov-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^6.0.3-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.2-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
-[![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![TypeScript](https://img.shields.io/badge/TypeScript-^6.0.3-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.2-blueviolet.svg?style=flat-square)](https://bun.sh/)
+</div>
+
+<div align="center">
+
+[![Install in Claude Desktop](https://img.shields.io/badge/Install_in-Claude_Desktop-D97757?style=for-the-badge&logo=anthropic&logoColor=white)](https://github.com/cyanheads/congressgov-mcp-server/releases/latest/download/congressgov-mcp-server.mcpb) [![Install in Cursor](https://cursor.com/deeplink/mcp-install-dark.svg)](https://cursor.com/en/install-mcp?name=congressgov-mcp-server&config=eyJjb21tYW5kIjoiYnVueCIsImFyZ3MiOlsiQGN5YW5oZWFkcy9jb25ncmVzc2dvdi1tY3Atc2VydmVyQGxhdGVzdCJdLCJlbnYiOnsiTUNQX1RSQU5TUE9SVF9UWVBFIjoic3RkaW8iLCJDT05HUkVTU19BUElfS0VZIjoiIn19) [![Install in VS Code](https://img.shields.io/badge/VS_Code-Install_Server-0098FF?style=for-the-badge&logo=visualstudiocode&logoColor=white)](https://vscode.dev/redirect?url=vscode:mcp/install?%7B%22name%22%3A%22congressgov-mcp-server%22%2C%22config%22%3A%7B%22command%22%3A%22bunx%22%2C%22args%22%3A%5B%22%40cyanheads%2Fcongressgov-mcp-server%40latest%22%5D%2C%22env%22%3A%7B%22MCP_TRANSPORT_TYPE%22%3A%22stdio%22%2C%22CONGRESS_API_KEY%22%3A%22%22%7D%7D%7D)
+
+[![Framework](https://img.shields.io/badge/Built%20on-@cyanheads/mcp--ts--core-67E8F9?style=flat-square)](https://www.npmjs.com/package/@cyanheads/mcp-ts-core)
 
 </div>
 
@@ -136,9 +142,9 @@ Built on [`@cyanheads/mcp-ts-core`](https://github.com/cyanheads/mcp-ts-core):
 Congress.gov-specific:
 
 - Type-safe client for the Congress.gov REST API v3
-- Authentication via free API key from [api.data.gov](https://api.data.gov/signup/)
+- Optional API key from [api.data.gov](https://api.data.gov/signup/) — defaults to `DEMO_KEY` (30 req/hr); own key gets 1,000 req/hr
 - Automatic pagination and response normalization
-- Rate limiting awareness (5,000 requests/hour per key)
+- Rate limiting awareness
 - All tools are read-only and idempotent
 
 ## Getting started
@@ -194,7 +200,7 @@ Or with npx (no Bun required):
 }
 ```
 
-Get a free API key at [api.data.gov/signup](https://api.data.gov/signup/) (5,000 requests/hour).
+Get a free API key at [api.data.gov/signup](https://api.data.gov/signup/) for 1,000 req/hr. Without a key the server falls back to `DEMO_KEY` (30 req/hr).
 
 ### Prerequisites
 
@@ -226,7 +232,7 @@ All configuration is validated at startup via Zod schemas in `src/config/server-
 
 | Variable | Description | Default |
 |:---|:---|:---|
-| `CONGRESS_API_KEY` | **Required.** API key from [api.data.gov](https://api.data.gov/signup/) | — |
+| `CONGRESS_API_KEY` | Optional. API key from [api.data.gov](https://api.data.gov/signup/). Omit to use `DEMO_KEY` (30 req/hr); own key: 1,000 req/hr. | `DEMO_KEY` |
 | `CONGRESS_API_BASE_URL` | Congress.gov API base URL | `https://api.congress.gov/v3` |
 | `MCP_TRANSPORT_TYPE` | Transport: `stdio` or `http` | `stdio` |
 | `MCP_HTTP_PORT` | HTTP server port | `3010` |

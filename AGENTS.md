@@ -1,8 +1,11 @@
 # Agent Protocol
 
 **Server:** congressgov-mcp-server
-**Version:** 0.3.20
-**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core)
+**Version:** 0.3.21
+**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.9.6`
+**Engines:** Bun ≥1.3.0, Node ≥24.0.0
+**MCP SDK:** `@modelcontextprotocol/sdk` ^1.29.0
+**Zod:** ^4.4.3
 
 > **Read the framework docs first:** `node_modules/@cyanheads/mcp-ts-core/CLAUDE.md` contains the full API reference — builders, Context, error codes, exports, patterns. This file covers server-specific conventions only.
 
@@ -37,7 +40,7 @@ Tailor suggestions to what's actually missing or stale — don't recite the full
 
 | Env Var | Required | Description |
 |:--------|:---------|:------------|
-| `CONGRESS_API_KEY` | Yes | API key from [api.data.gov](https://api.data.gov/signup/) (free, 5,000 req/hr) |
+| `CONGRESS_API_KEY` | No | Optional. Defaults to `DEMO_KEY` (30 req/hr). Own key from [api.data.gov](https://api.data.gov/signup/): 1,000 req/hr. |
 | `CONGRESS_API_BASE_URL` | No | Defaults to `https://api.congress.gov/v3` |
 
 ---
@@ -240,10 +243,14 @@ When you complete a skill's checklist, check the boxes and add a completion time
 | `bun run build` | Compile TypeScript |
 | `bun run rebuild` | Clean + build |
 | `bun run clean` | Remove build artifacts |
-| `bun run devcheck` | Lint + format + typecheck + security |
+| `bun run devcheck` | Lint + format + typecheck + security + changelog sync |
+| `bun run audit:refresh` | Delete `bun.lock`, reinstall, re-audit. Use when `devcheck` flags a transitive advisory — stale lockfile can mask already-patched deps. If advisory survives, it's real. |
 | `bun run tree` | Generate directory structure doc |
+| `bun run list-skills` | List available skills from `.claude/skills/` or `skills/` |
 | `bun run format` | Auto-fix formatting |
 | `bun run lint:mcp` | Validate MCP tool/resource/prompt definitions |
+| `bun run lint:packaging` | Validate env var alignment between `manifest.json` and `server.json` |
+| `bun run bundle` | Build and pack as `.mcpb` for one-click Claude Desktop install |
 | `bun run changelog:build` | Regenerate `CHANGELOG.md` from `changelog/*.md` |
 | `bun run changelog:check` | Verify `CHANGELOG.md` is in sync (used by devcheck) |
 | `bun run test` | Run tests |
@@ -251,6 +258,14 @@ When you complete a skill's checklist, check the boxes and add a completion time
 | `bun run dev:http` | Dev mode (HTTP) |
 | `bun run start:stdio` | Production mode (stdio) |
 | `bun run start:http` | Production mode (HTTP) |
+
+---
+
+## Bundling
+
+`bun run bundle` produces a `.mcpb` extension bundle for one-click install in Claude Desktop. MCPB is stdio-only — HTTP deployments are unaffected. The bundle file ships as `dist/congressgov-mcp-server.mcpb`.
+
+**Adding an env var requires both files:** `server.json` (registry discovery, `environmentVariables[]`) and `manifest.json` (bundle install UX, `mcp_config.env` + `user_config`). `lint:packaging` (run by `devcheck`) verifies the env var names match.
 
 ---
 
@@ -295,14 +310,14 @@ Remind the user to run these after completing a release flow.
 ## Checklist
 
 - [ ] Zod schemas: all fields have `.describe()`, only JSON-Schema-serializable types (no `z.custom()`, `z.date()`, `z.transform()`, `z.bigint()`, `z.symbol()`, `z.void()`, `z.map()`, `z.set()`, `z.function()`, `z.nan()`)
-- [ ] Optional nested objects: handler guards for empty inner values from form-based clients (`if (input.obj?.field && ...)`, not just `if (input.obj)`)
+- [ ] Optional nested objects: handler guards for empty inner values from form-based clients (`if (input.obj?.field && ...)`, not just `if (input.obj)`). When regex/length constraints matter, use `z.union([z.literal(''), z.string().regex(...).describe(...)])` — literal variants are exempt from `describe-on-fields`.
 - [ ] JSDoc `@fileoverview` + `@module` on every file
 - [ ] `ctx.log` for logging, `ctx.state` for storage
 - [ ] Handlers throw on failure — error factories or plain `Error`, no try/catch
 - [ ] `format()` renders all data the LLM needs — different clients forward different surfaces (Claude Code → `structuredContent`, Claude Desktop → `content[]`); both must carry the same data
-- [ ] Raw/domain/output schemas reviewed against real upstream sparsity/nullability before finalizing required vs optional fields
-- [ ] Normalization and `format()` preserve uncertainty; do not fabricate facts from missing upstream Congress.gov data
-- [ ] Tests include at least one sparse payload case with omitted upstream fields
+- [ ] If wrapping external API: raw/domain/output schemas reviewed against real upstream sparsity/nullability before finalizing required vs optional fields
+- [ ] If wrapping external API: normalization and `format()` preserve uncertainty; do not fabricate facts from missing upstream Congress.gov data
+- [ ] If wrapping external API: tests include at least one sparse payload case with omitted upstream fields
 - [ ] Registered in `createApp()` arrays (directly or via barrel exports)
 - [ ] Tests use `createMockContext()` from `@cyanheads/mcp-ts-core/testing`
 - [ ] `bun run devcheck` passes

@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.3.21](changelog/0.3.x/0.3.21.md) — 2026-05-23
+
+mcp-ts-core ^0.9.1 → ^0.9.6, zod added as direct dep, manifest.json + .mcpbignore scaffolded for MCPB bundle support, install badges added to README.
+
 ## [0.3.20](changelog/0.3.x/0.3.20.md) — 2026-05-20
 
 Strict newest-first sort on `congressgov_roll_votes`, restored sub-resource rendering on `congressgov_senate_nominations`, empty-page disambiguation in list output, ISO 8601 validation on date filters, and a `Search:` echo line on every list response so callers can confirm what was filtered.
