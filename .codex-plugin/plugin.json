@@ -1,0 +1,25 @@
+{
+  "name": "@cyanheads/congressgov-mcp-server",
+  "version": "0.3.22",
+  "description": "Access U.S. congressional data - bills, votes, members, committees - through MCP. STDIO & Streamable HTTP.",
+  "author": {
+    "name": "cyanheads",
+    "email": "casey@caseyjhand.com",
+    "url": "https://github.com/cyanheads"
+  },
+  "homepage": "https://github.com/cyanheads/congressgov-mcp-server#readme",
+  "repository": "https://github.com/cyanheads/congressgov-mcp-server",
+  "license": "Apache-2.0",
+  "keywords": ["mcp", "mcp-server", "model-context-protocol", "congress", "legislation", "bills"],
+  "mcpServers": "./.codex-plugin/mcp.json",
+  "interface": {
+    "displayName": "@cyanheads/congressgov-mcp-server",
+    "shortDescription": "Access U.S. congressional data - bills, votes, members, committees - through MCP.",
+    "longDescription": "MCP server wrapping the Congress.gov API v3 — the official machine-readable interface to U.S. legislative data. Provides tools for browsing bills, enacted laws, members, committees, roll call votes, nominations, CRS reports, committee reports, and the Congressional Record.",
+    "developerName": "cyanheads",
+    "category": "government",
+    "capabilities": ["Read"],
+    "websiteURL": "https://github.com/cyanheads/congressgov-mcp-server",
+    "defaultPrompt": []
+  }
+}

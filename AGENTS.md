@@ -1,8 +1,8 @@
 # Agent Protocol
 
 **Server:** congressgov-mcp-server
-**Version:** 0.3.21
-**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.9.6`
+**Version:** 0.3.22
+**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.9.13`
 **Engines:** Bun ≥1.3.0, Node ≥24.0.0
 **MCP SDK:** `@modelcontextprotocol/sdk` ^1.29.0
 **Zod:** ^4.4.3
@@ -54,6 +54,7 @@ Tailor suggestions to what's actually missing or stale — don't recite the full
 - **Secrets in env vars only** — never hardcoded.
 - **All tools are read-only.** Every tool gets `annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true }`.
 - **API key stays out of logs.** The service appends `api_key` as a query param — never log full URLs.
+- **Close the loop on issues.** When implementing work tracked by a GitHub issue, comment on the issue with what landed and close it. Do both — a comment without a close leaves stale issues open; a close without a comment leaves no record of what shipped. The comment is for future readers — state the concrete changes, not the conversation that produced them.
 
 ---
 
@@ -184,7 +185,7 @@ All tools share these patterns. The service layer handles them uniformly:
 ```ts
 // Framework — z is re-exported, no separate zod import needed
 import { tool, z } from '@cyanheads/mcp-ts-core';
-import { notFound, serviceUnavailable, rateLimited } from '@cyanheads/mcp-ts-core/errors';
+import { McpError, JsonRpcErrorCode, notFound, serviceUnavailable, rateLimited, validationError } from '@cyanheads/mcp-ts-core/errors';
 
 // Server's own code — via path alias
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
@@ -212,11 +213,14 @@ Available skills:
 | `add-service` | Scaffold a new service integration |
 | `add-test` | Scaffold test file for a tool, resource, or service |
 | `field-test` | Exercise tools/resources/prompts with real inputs, verify behavior, report issues |
+| `tool-defs-analysis` | Read-only audit of MCP definition language across the surface — voice, leaks, defaults, recovery hints, output descriptions |
 | `security-pass` | Audit server for MCP-flavored security gaps: output injection, scope blast radius, input sinks, tenant isolation |
+| `code-simplifier` | Post-session cleanup against `git diff` — modernize syntax, consolidate duplication, align with the codebase |
 | `devcheck` | Lint, format, typecheck, audit |
 | `polish-docs-meta` | Finalize docs, README, metadata, and agent protocol for shipping |
+| `git-wrapup` | Land working-tree changes as a versioned commit + annotated tag — version bump, changelog, verify, tag. Local only. |
+| `release-and-publish` | Push + npm + MCP Registry + GH Release + Docker. Picks up from `git-wrapup` |
 | `maintenance` | Investigate changelogs, adopt upstream changes, sync skills to agent dirs |
-| `release-and-publish` | Post-wrapup ship workflow: verification gate, push, publish to npm/MCP Registry/GHCR |
 | `report-issue-framework` | File bugs/features against `@cyanheads/mcp-ts-core` |
 | `report-issue-local` | File bugs/features against this server's repo |
 | `api-auth` | Auth modes, scopes, JWT/OAuth |
@@ -230,7 +234,6 @@ Available skills:
 | `api-testing` | createMockContext, test patterns |
 | `api-utils` | Formatting, parsing, security, pagination, scheduling, telemetry helpers |
 | `api-workers` | Cloudflare Workers runtime |
-| `tool-defs-analysis` | Audit MCP definition language across the surface — voice, leaks, defaults, recovery hints, output descriptions |
 
 When you complete a skill's checklist, check the boxes and add a completion timestamp at the end (e.g., `Completed: 2026-03-11`).
 
@@ -288,6 +291,8 @@ security: false                          # optional — true flags security fixe
 
 `breaking: true` renders a `· ⚠️ Breaking` badge — use it when consumers must update code on upgrade (signature changes, removed APIs, config renames). `security: true` renders a `· 🛡️ Security` badge and pairs with a `## Security` body section. When both are set, badges render `· ⚠️ Breaking · 🛡️ Security`.
 
+`agent-notes` is an optional free-form field for maintenance agents processing the release downstream. Content here won't appear in the rendered CHANGELOG — it's consumed by agents running the `maintenance` skill. Use it for adoption instructions that don't fit the human-facing sections: new files to create, fields to populate, one-time migration steps. Omit entirely when there's nothing to say.
+
 ---
 
 ## Publishing
@@ -320,4 +325,7 @@ Remind the user to run these after completing a release flow.
 - [ ] If wrapping external API: tests include at least one sparse payload case with omitted upstream fields
 - [ ] Registered in `createApp()` arrays (directly or via barrel exports)
 - [ ] Tests use `createMockContext()` from `@cyanheads/mcp-ts-core/testing`
+- [ ] `.codex-plugin/plugin.json` populated — `name`, `version`, `description`, `repository`, `license` from `package.json`; `interface.displayName` = package name; `interface.shortDescription` from `package.json` description
+- [ ] `.codex-plugin/mcp.json` updated — server name key matches `package.json` name; env vars added for any required API keys
+- [ ] `.claude-plugin/plugin.json` populated — `name`, `version`, `description`, `repository`, `license` from `package.json`; inline `mcpServers` entry with server name key, env vars for any required API keys
 - [ ] `bun run devcheck` passes

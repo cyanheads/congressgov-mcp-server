@@ -75,6 +75,7 @@ await createApp({
   landing: {
     repoRoot: REPO_ROOT,
     tagline: 'U.S. legislative data — bills, votes, members, committees — via MCP.',
+    requireAuth: false,
   },
   setup() {
     initCongressApi();
