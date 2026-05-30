@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.3.23](changelog/0.3.x/0.3.23.md) — 2026-05-30
+
+Enrichment adoption on browse/list tools — effectiveQuery, totalCount, and notice now surface in structuredContent and content[]; fixed field-name mismatch that broke structuredContent output on list tools; single-record get paths now populate enrichment
+
 ## [0.3.22](changelog/0.3.x/0.3.22.md) — 2026-05-28 · 🛡️ Security
 
 mcp-ts-core ^0.9.6 → ^0.9.13, MCP_HTTP_MAX_BODY_BYTES 413 body cap, HTTP session-init gate, quieter 401/403/400/404 logging, GET /mcp surfaces package.json keywords, manifest.json and keyword alignment
