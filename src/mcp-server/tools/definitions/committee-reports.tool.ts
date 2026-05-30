@@ -7,7 +7,11 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { validationError } from '@cyanheads/mcp-ts-core/errors';
 
 import { formatCommitteeReports } from '@/mcp-server/tools/format-helpers.js';
-import { buildQueryEcho, listOrDetail } from '@/mcp-server/tools/tool-helpers.js';
+import {
+  buildEffectiveQuery,
+  listEnrichment,
+  listOrDetail,
+} from '@/mcp-server/tools/tool-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 
 export const committeeReportsTool = tool('congressgov_committee_reports', {
@@ -33,6 +37,7 @@ export const committeeReportsTool = tool('congressgov_committee_reports', {
     'report',
     "the committee report (citation, title, committees, associated bill); for `text`, an alternative key 'text' carries an array of {type, url} format links.",
   ),
+  enrichment: listEnrichment,
   format: formatCommitteeReports,
 
   async handler(input, ctx) {
@@ -52,13 +57,18 @@ export const committeeReportsTool = tool('congressgov_committee_reports', {
         congress: input.congress,
         count: result.data.length,
       });
-      return {
-        ...result,
-        query: buildQueryEcho('committee reports', {
+      ctx.enrich.echo(
+        buildEffectiveQuery('committee reports', {
           congress: input.congress,
           reportType: input.reportType,
         }),
-      };
+      );
+      ctx.enrich.total(result.pagination.count);
+      if (result.data.length === 0)
+        ctx.enrich.notice(
+          'No committee reports found. Try removing the reportType filter or check the congress number.',
+        );
+      return result;
     }
 
     if (!input.reportType || !input.reportNumber) {
@@ -86,6 +96,10 @@ export const committeeReportsTool = tool('congressgov_committee_reports', {
         reportType: input.reportType,
         reportNumber: input.reportNumber,
       });
+      ctx.enrich.echo(
+        `text formats for ${input.reportType.toUpperCase()} ${input.reportNumber} (${input.congress}th Congress)`,
+      );
+      ctx.enrich.total(Array.isArray(result.text) ? result.text.length : 1);
       return result;
     }
 
@@ -102,6 +116,10 @@ export const committeeReportsTool = tool('congressgov_committee_reports', {
       reportType: input.reportType,
       reportNumber: input.reportNumber,
     });
+    ctx.enrich.echo(
+      `${input.reportType.toUpperCase()} ${input.reportNumber} (${input.congress}th Congress)`,
+    );
+    ctx.enrich.total(1);
     return result;
   },
 });

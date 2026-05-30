@@ -7,7 +7,11 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { validationError } from '@cyanheads/mcp-ts-core/errors';
 
 import { formatLaws } from '@/mcp-server/tools/format-helpers.js';
-import { buildQueryEcho, listOrDetail } from '@/mcp-server/tools/tool-helpers.js';
+import {
+  buildEffectiveQuery,
+  listEnrichment,
+  listOrDetail,
+} from '@/mcp-server/tools/tool-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 
 export const enactedLawsTool = tool('congressgov_enacted_laws', {
@@ -30,6 +34,7 @@ export const enactedLawsTool = tool('congressgov_enacted_laws', {
     'law',
     "Origin bill record for `get`; absent for `list`. The bill's `laws` array carries the law citation.",
   ),
+  enrichment: listEnrichment,
   format: formatLaws,
 
   async handler(input, ctx) {
@@ -46,13 +51,15 @@ export const enactedLawsTool = tool('congressgov_enacted_laws', {
         ctx,
       );
       ctx.log.info('Laws listed', { congress: input.congress, count: result.data.length });
-      return {
-        ...result,
-        query: buildQueryEcho('enacted laws', {
-          congress: input.congress,
-          lawType: input.lawType,
-        }),
-      };
+      ctx.enrich.echo(
+        buildEffectiveQuery('enacted laws', { congress: input.congress, lawType: input.lawType }),
+      );
+      ctx.enrich.total(result.pagination.count);
+      if (result.data.length === 0)
+        ctx.enrich.notice(
+          'No laws matched the filters. Verify the congress number or try a different lawType.',
+        );
+      return result;
     }
 
     if (!input.lawType || !input.lawNumber) {
@@ -75,6 +82,10 @@ export const enactedLawsTool = tool('congressgov_enacted_laws', {
       lawType: input.lawType,
       lawNumber: input.lawNumber,
     });
+    ctx.enrich.echo(
+      `${input.lawType === 'pub' ? 'Public' : 'Private'} Law ${input.congress}-${input.lawNumber}`,
+    );
+    ctx.enrich.total(1);
     return result;
   },
 });

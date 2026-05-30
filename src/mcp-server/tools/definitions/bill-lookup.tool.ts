@@ -8,7 +8,8 @@ import { validationError } from '@cyanheads/mcp-ts-core/errors';
 
 import { formatBills } from '@/mcp-server/tools/format-helpers.js';
 import {
-  buildQueryEcho,
+  buildEffectiveQuery,
+  listEnrichment,
   listOrDetail,
   normalizeOptionalString,
   validateIsoDateTime,
@@ -74,6 +75,7 @@ export const billLookupTool = tool('congressgov_bill_lookup', {
     'bill',
     'Bill record (sponsor, policy area, latest action, CBO estimates, law citation) for `get`; absent for `list` and sub-resources.',
   ),
+  enrichment: listEnrichment,
   format: formatBills,
 
   async handler(input, ctx) {
@@ -98,15 +100,20 @@ export const billLookupTool = tool('congressgov_bill_lookup', {
         ctx,
       );
       ctx.log.info('Bills listed', { congress: input.congress, count: result.data.length });
-      return {
-        ...result,
-        query: buildQueryEcho('bills', {
+      ctx.enrich.echo(
+        buildEffectiveQuery('bills', {
           congress: input.congress,
           billType: input.billType,
           fromDateTime,
           toDateTime,
         }),
-      };
+      );
+      ctx.enrich.total(result.pagination.count);
+      if (result.data.length === 0)
+        ctx.enrich.notice(
+          'No bills matched the filters. Try broadening the date range or removing billType.',
+        );
+      return result;
     }
 
     if (!input.billType || !input.billNumber) {
@@ -130,6 +137,10 @@ export const billLookupTool = tool('congressgov_bill_lookup', {
         billType: input.billType,
         billNumber: input.billNumber,
       });
+      ctx.enrich.echo(
+        `${input.billType.toUpperCase()} ${input.billNumber} in the ${input.congress}th Congress`,
+      );
+      ctx.enrich.total(1);
       return result;
     }
 
@@ -151,11 +162,14 @@ export const billLookupTool = tool('congressgov_bill_lookup', {
       billNumber: input.billNumber,
       subResource,
     });
-    return {
-      ...result,
-      query: buildQueryEcho(
-        `${input.operation} for ${input.billType.toUpperCase()} ${input.billNumber} in the ${input.congress}th Congress`,
-      ),
-    };
+    ctx.enrich.echo(
+      `${input.operation} for ${input.billType.toUpperCase()} ${input.billNumber} in the ${input.congress}th Congress`,
+    );
+    ctx.enrich.total(result.pagination.count);
+    if (result.data.length === 0)
+      ctx.enrich.notice(
+        `No ${input.operation} found for ${input.billType.toUpperCase()} ${input.billNumber}.`,
+      );
+    return result;
   },
 });

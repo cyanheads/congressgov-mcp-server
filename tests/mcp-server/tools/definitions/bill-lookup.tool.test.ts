@@ -3,7 +3,7 @@
  * @module tests/mcp-server/tools/definitions/bill-lookup.tool.test
  */
 
-import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/services/congress-api/congress-api-service.js', () => ({
@@ -39,6 +39,10 @@ describe('billLookupTool', () => {
       expect.objectContaining({ congress: 118, limit: 20, offset: 0 }),
       ctx,
     );
+    const enrichment = getEnrichment(ctx);
+    expect(enrichment.effectiveQuery).toContain('bills');
+    expect(enrichment.totalCount).toBe(2);
+    expect(enrichment.notice).toBeUndefined();
   });
 
   it('lists bills filtered by type', async () => {
@@ -78,6 +82,9 @@ describe('billLookupTool', () => {
       },
       ctx,
     );
+    const enrichment = getEnrichment(ctx);
+    expect(enrichment.effectiveQuery).toContain('HR 1234');
+    expect(enrichment.totalCount).toBe(1);
   });
 
   it('throws when get is missing billType or billNumber', async () => {
@@ -148,5 +155,18 @@ describe('billLookupTool', () => {
     const input = billLookupTool.input.parse({ operation: 'list', congress: 118 });
     expect(input.limit).toBe(20);
     expect(input.offset).toBe(0);
+  });
+
+  it('populates notice when list returns empty results', async () => {
+    const ctx = createMockContext();
+    mockApi.listBills.mockResolvedValue({
+      data: [],
+      pagination: { count: 0, nextOffset: null },
+    });
+    const input = billLookupTool.input.parse({ operation: 'list', congress: 118, billType: 'hr' });
+    await billLookupTool.handler(input, ctx);
+    const enrichment = getEnrichment(ctx);
+    expect(enrichment.totalCount).toBe(0);
+    expect(enrichment.notice).toMatch(/No bills/);
   });
 });

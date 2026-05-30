@@ -8,7 +8,11 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { validationError } from '@cyanheads/mcp-ts-core/errors';
 
 import { formatCommittees } from '@/mcp-server/tools/format-helpers.js';
-import { buildQueryEcho, listOrDetail } from '@/mcp-server/tools/tool-helpers.js';
+import {
+  buildEffectiveQuery,
+  listEnrichment,
+  listOrDetail,
+} from '@/mcp-server/tools/tool-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 import type { Chamber } from '@/services/congress-api/types.js';
 
@@ -52,6 +56,7 @@ export const committeeLookupTool = tool('congressgov_committee_lookup', {
     'committee',
     'Committee record for `get` (name, chamber, subcommittees, history, sub-resource counts); absent for `list` and sub-resources.',
   ),
+  enrichment: listEnrichment,
   format: formatCommittees,
 
   async handler(input, ctx) {
@@ -68,13 +73,15 @@ export const committeeLookupTool = tool('congressgov_committee_lookup', {
         ctx,
       );
       ctx.log.info('Committees listed', { count: result.data.length });
-      return {
-        ...result,
-        query: buildQueryEcho('committees', {
-          congress: input.congress,
-          chamber: input.chamber,
-        }),
-      };
+      ctx.enrich.echo(
+        buildEffectiveQuery('committees', { congress: input.congress, chamber: input.chamber }),
+      );
+      ctx.enrich.total(result.pagination.count);
+      if (result.data.length === 0)
+        ctx.enrich.notice(
+          'No committees found. Try removing the chamber filter or check the congress number.',
+        );
+      return result;
     }
 
     if (!input.committeeCode) {
@@ -95,6 +102,8 @@ export const committeeLookupTool = tool('congressgov_committee_lookup', {
     if (input.operation === 'get') {
       const result = await api.getCommittee(chamber, input.committeeCode, ctx);
       ctx.log.info('Committee retrieved', { committeeCode: input.committeeCode });
+      ctx.enrich.echo(`committee ${input.committeeCode}`);
+      ctx.enrich.total(1);
       return result;
     }
 
@@ -106,7 +115,7 @@ export const committeeLookupTool = tool('congressgov_committee_lookup', {
     }
 
     if (input.operation === 'bills' && input.order === 'recent') {
-      return fetchCommitteeBillsRecent(
+      const recentResult = await fetchCommitteeBillsRecent(
         {
           chamber,
           committeeCode: input.committeeCode,
@@ -115,6 +124,11 @@ export const committeeLookupTool = tool('congressgov_committee_lookup', {
         },
         ctx,
       );
+      ctx.enrich.echo(`bills for committee ${input.committeeCode} (recent order)`);
+      ctx.enrich.total(recentResult.pagination.count);
+      if (recentResult.data.length === 0)
+        ctx.enrich.notice(`No bills found for committee ${input.committeeCode}.`);
+      return recentResult;
     }
 
     const result = await api.getCommitteeSubResource(
@@ -131,10 +145,11 @@ export const committeeLookupTool = tool('congressgov_committee_lookup', {
       committeeCode: input.committeeCode,
       subResource: input.operation,
     });
-    return {
-      ...result,
-      query: buildQueryEcho(`${input.operation} for committee ${input.committeeCode}`),
-    };
+    ctx.enrich.echo(`${input.operation} for committee ${input.committeeCode}`);
+    ctx.enrich.total(result.pagination.count);
+    if (result.data.length === 0)
+      ctx.enrich.notice(`No ${input.operation} found for committee ${input.committeeCode}.`);
+    return result;
   },
 });
 

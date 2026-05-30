@@ -3,7 +3,7 @@
  * @module tests/mcp-server/tools/definitions/daily-record.tool.test
  */
 
-import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/services/congress-api/congress-api-service.js', () => ({
@@ -39,13 +39,16 @@ describe('dailyRecordTool', () => {
 
   it('gets issues for a volume', async () => {
     const ctx = createMockContext();
-    mockApi.getDailyIssues.mockResolvedValue({ issues: [{ issueNumber: 1 }] });
+    mockApi.getDailyIssues.mockResolvedValue({
+      data: [{ issueNumber: 1 }],
+      pagination: { count: 1, nextOffset: null },
+    });
     const input = dailyRecordTool.input.parse({
       operation: 'issues',
       volumeNumber: 170,
     });
     const result = await dailyRecordTool.handler(input, ctx);
-    expect(result.issues).toHaveLength(1);
+    expect(result.data).toHaveLength(1);
   });
 
   it('throws when issues is missing volumeNumber', async () => {
@@ -76,5 +79,31 @@ describe('dailyRecordTool', () => {
       volumeNumber: 170,
     });
     await expect(dailyRecordTool.handler(input, ctx)).rejects.toThrow(/issueNumber/);
+  });
+
+  it('populates enrichment on list', async () => {
+    const ctx = createMockContext();
+    mockApi.listDailyRecord.mockResolvedValue({
+      data: [{ volumeNumber: 170 }],
+      pagination: { count: 1, nextOffset: null },
+    });
+    const input = dailyRecordTool.input.parse({ operation: 'list' });
+    await dailyRecordTool.handler(input, ctx);
+    const enrichment = getEnrichment(ctx);
+    expect(enrichment.effectiveQuery).toContain('Congressional Record');
+    expect(enrichment.totalCount).toBe(1);
+    expect(enrichment.notice).toBeUndefined();
+  });
+
+  it('populates notice when list is empty', async () => {
+    const ctx = createMockContext();
+    mockApi.listDailyRecord.mockResolvedValue({
+      data: [],
+      pagination: { count: 0, nextOffset: null },
+    });
+    const input = dailyRecordTool.input.parse({ operation: 'list' });
+    await dailyRecordTool.handler(input, ctx);
+    const enrichment = getEnrichment(ctx);
+    expect(enrichment.notice).toMatch(/No Congressional Record/);
   });
 });

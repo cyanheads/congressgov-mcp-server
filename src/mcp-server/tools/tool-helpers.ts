@@ -45,12 +45,6 @@ export const listOutput = z
   .object({
     data: dataRows,
     pagination: paginationShape,
-    query: z
-      .string()
-      .optional()
-      .describe(
-        'Echo of the applied filters for this query. Rendered as the first line of the response so the caller can confirm what was searched.',
-      ),
   })
   .passthrough();
 
@@ -69,12 +63,6 @@ export function listOrDetail(entityKey: string, description?: string) {
     .object({
       data: dataRows.optional(),
       pagination: paginationShape.optional(),
-      query: z
-        .string()
-        .optional()
-        .describe(
-          'Echo of the applied filters for list-mode queries. Rendered as the first line of the response.',
-        ),
     })
     .passthrough()
     .describe(`Detail-mode key '${entityKey}' carries: ${detailDesc}`);
@@ -104,11 +92,35 @@ export function validateIsoDateTime(value: string | undefined, field: string): s
 }
 
 /**
- * Build the `query` echo for a list response. The formatter renders this as
- * the leading "Search:" line regardless of whether results are empty, so the
- * caller can always confirm what filters were applied.
+ * Enrichment block shared by all browse/list operations. Declares the three
+ * standard agent-facing fields: the effective query echo, the total result
+ * count, and an optional notice for empty results or edge cases.
+ *
+ * Usage in tool definitions:
+ * ```ts
+ * enrichment: listEnrichment,
+ * ```
+ * Usage in handlers:
+ * ```ts
+ * ctx.enrich.echo(buildEffectiveQuery('bills', { congress: 118 }));
+ * ctx.enrich.total(result.pagination.count);
+ * if (result.data.length === 0) ctx.enrich.notice('No matching results. Try adjusting the filters.');
+ * ```
  */
-export function buildQueryEcho(scope: string, filters?: Record<string, unknown>): string {
+export const listEnrichment = {
+  effectiveQuery: z.string().describe('The browse scope and applied filters.'),
+  totalCount: z.number().describe('Total results across all pages.'),
+  notice: z
+    .string()
+    .optional()
+    .describe('Guidance when results are empty, a page is past the end, or a caveat applies.'),
+};
+
+/**
+ * Build an effective-query string for enrichment echo. Returns the scope plus
+ * any non-empty filter values as a compact `(key=val, …)` suffix.
+ */
+export function buildEffectiveQuery(scope: string, filters?: Record<string, unknown>): string {
   if (!filters) return scope;
   const parts: string[] = [];
   for (const [key, val] of Object.entries(filters)) {

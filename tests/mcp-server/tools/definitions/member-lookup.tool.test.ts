@@ -3,7 +3,7 @@
  * @module tests/mcp-server/tools/definitions/member-lookup.tool.test
  */
 
-import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/services/congress-api/congress-api-service.js', () => ({
@@ -89,6 +89,9 @@ describe('memberLookupTool', () => {
     const result = await memberLookupTool.handler(input, ctx);
     expect(result.member).toEqual({ name: 'Pelosi' });
     expect(mockApi.getMember).toHaveBeenCalledWith('P000197', ctx);
+    const enrichment = getEnrichment(ctx);
+    expect(enrichment.effectiveQuery).toContain('P000197');
+    expect(enrichment.totalCount).toBe(1);
   });
 
   it('throws when get/sponsored/cosponsored is missing bioguideId', async () => {
@@ -100,7 +103,7 @@ describe('memberLookupTool', () => {
   it('fetches sponsored legislation', async () => {
     const ctx = createMockContext();
     mockApi.getMemberLegislation.mockResolvedValue({
-      legislation: [],
+      data: [],
       pagination: { count: 0, nextOffset: null },
     });
     const input = memberLookupTool.input.parse({
@@ -117,7 +120,7 @@ describe('memberLookupTool', () => {
   it('fetches cosponsored legislation', async () => {
     const ctx = createMockContext();
     mockApi.getMemberLegislation.mockResolvedValue({
-      legislation: [],
+      data: [],
       pagination: { count: 0, nextOffset: null },
     });
     const input = memberLookupTool.input.parse({

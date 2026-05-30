@@ -111,14 +111,9 @@ function pagHeader(result: Record<string, unknown>): string {
 }
 
 /** Render a paginated list with header and per-item rendering. */
-function renderList(
-  result: Record<string, unknown>,
-  renderItem?: ItemRenderer,
-  query?: string,
-): string {
+function renderList(result: Record<string, unknown>, renderItem?: ItemRenderer): string {
   const items = (result.data ?? []) as unknown[];
   const header = pagHeader(result);
-  const queryLine = query ? `_Search: ${query}_` : undefined;
 
   if (items.length === 0) {
     /** Distinguish "0 total" from "page is past the end" — the header alone reads
@@ -128,10 +123,8 @@ function renderList(
     const pageHint =
       total > 0
         ? `_Page is empty — offset is past the end of ${total} total item${total !== 1 ? 's' : ''}._`
-        : query
-          ? '_No matching results. Broaden the filter or check the criteria above._'
-          : '_No matching results._';
-    return [queryLine, header, '', pageHint].filter(Boolean).join('\n\n');
+        : '_No matching results._';
+    return [header, '', pageHint].filter(Boolean).join('\n\n');
   }
 
   const renderer = renderItem ?? renderGenericItem;
@@ -140,7 +133,7 @@ function renderList(
       ? renderer(item as Record<string, unknown>, i)
       : `${i + 1}. ${String(item)}`,
   );
-  return [queryLine, header, '', ...rendered].filter(Boolean).join('\n\n');
+  return [header, '', ...rendered].filter(Boolean).join('\n\n');
 }
 
 /**
@@ -1135,18 +1128,13 @@ function renderCommitteeReportListItem(item: Record<string, unknown>, i: number)
 
 // ── Per-Tool Format Exports ─────────────────────────────────────────
 
-/** Read `result.query` (a string) — handlers attach this to echo filter criteria. */
-function queryOf(result: Record<string, unknown>): string | undefined {
-  return typeof result.query === 'string' ? result.query : undefined;
-}
-
 function makeFormatter(
   detailKeys: string[],
   itemRenderer?: ItemRenderer,
   detailRenderer?: (item: Record<string, unknown>) => string,
 ): (result: Record<string, unknown>) => TextBlock[] {
   return (result) => {
-    if (Array.isArray(result.data)) return tb(renderList(result, itemRenderer, queryOf(result)));
+    if (Array.isArray(result.data)) return tb(renderList(result, itemRenderer));
     for (const key of detailKeys) {
       const detail = result[key];
       if (detail != null) {
@@ -1168,7 +1156,7 @@ export function formatBills(result: Record<string, unknown>): TextBlock[] {
     const firstRecord =
       typeof first === 'object' && first !== null ? (first as Record<string, unknown>) : undefined;
     const renderer = firstRecord ? pickBillListRenderer(firstRecord) : undefined;
-    return tb(renderList(result, renderer, queryOf(result)));
+    return tb(renderList(result, renderer));
   }
   if (result.bill != null) return tb(renderBillDetail(result.bill as Record<string, unknown>));
   return tb(renderDetail(result));
@@ -1215,12 +1203,10 @@ export const formatSummaries = makeFormatter([], renderSummaryItem);
 /** Member browse, detail, and sponsored/cosponsored legislation. */
 export function formatMembers(result: Record<string, unknown>): TextBlock[] {
   if (Array.isArray(result.data)) {
-    const hint = queryOf(result);
     const first = result.data[0];
     const firstRecord =
       typeof first === 'object' && first !== null ? (first as Record<string, unknown>) : undefined;
-    if (firstRecord && 'bioguideId' in firstRecord)
-      return tb(renderList(result, renderMemberItem, hint));
+    if (firstRecord && 'bioguideId' in firstRecord) return tb(renderList(result, renderMemberItem));
     /** Sponsored/cosponsored may mix bills (type+title) and amendments (amendmentNumber, null type/title).
      * Dispatch per-row so amendments don't render as 'Untitled'. */
     if (firstRecord && ('number' in firstRecord || 'amendmentNumber' in firstRecord)) {
@@ -1228,9 +1214,9 @@ export function formatMembers(result: Record<string, unknown>): TextBlock[] {
         'amendmentNumber' in item && item.amendmentNumber != null
           ? renderAmendmentItem(item, i)
           : renderBillItem(item, i);
-      return tb(renderList(result, dispatch, hint));
+      return tb(renderList(result, dispatch));
     }
-    return tb(renderList(result, undefined, hint));
+    return tb(renderList(result));
   }
   if (result.member != null)
     return tb(renderMemberDetail(result.member as Record<string, unknown>));
@@ -1249,15 +1235,14 @@ function extractCommitteeName(committee: Record<string, unknown>): string | unde
 /** Committee browse, detail, and sub-resources (bills, reports, nominations). */
 export function formatCommittees(result: Record<string, unknown>): TextBlock[] {
   if (Array.isArray(result.data)) {
-    const hint = queryOf(result);
     const first = result.data[0];
     const firstRecord =
       typeof first === 'object' && first !== null ? (first as Record<string, unknown>) : undefined;
     /** Committee list rows have `systemCode` + `name`. Sub-resource rows
      * (bills/reports/nominations) keep their generic / specialized renderers. */
     if (firstRecord && 'systemCode' in firstRecord && 'name' in firstRecord)
-      return tb(renderList(result, renderCommitteeListItem, hint));
-    return tb(renderList(result, undefined, hint));
+      return tb(renderList(result, renderCommitteeListItem));
+    return tb(renderList(result));
   }
   if (result.committee != null) {
     const committee = result.committee as Record<string, unknown>;
@@ -1270,8 +1255,7 @@ export function formatCommittees(result: Record<string, unknown>): TextBlock[] {
 
 /** Committee reports — list, detail, and text. */
 export function formatCommitteeReports(result: Record<string, unknown>): TextBlock[] {
-  if (Array.isArray(result.data))
-    return tb(renderList(result, renderCommitteeReportListItem, queryOf(result)));
+  if (Array.isArray(result.data)) return tb(renderList(result, renderCommitteeReportListItem));
   if (Array.isArray(result.text)) {
     const textResult = { data: result.text, pagination: { count: result.text.length } };
     return tb(renderList(textResult, renderCommitteeReportTextItem));
@@ -1283,14 +1267,12 @@ export function formatCommitteeReports(result: Record<string, unknown>): TextBlo
 
 /** CRS policy analysis reports. */
 export function formatCrsReports(result: Record<string, unknown>): TextBlock[] {
-  if (Array.isArray(result.data))
-    return tb(renderList(result, renderCrsReportItem, queryOf(result)));
+  if (Array.isArray(result.data)) return tb(renderList(result, renderCrsReportItem));
   if (result.report != null)
     return tb(renderCrsReportDetail(result.report as Record<string, unknown>));
   return tb(renderDetail(result));
 }
 
-/** Daily Congressional Record — volumes, issues, articles. */
 /** Daily Congressional Record. Dispatches between volumes/issues and flattened articles. */
 export function formatDailyRecord(result: Record<string, unknown>): TextBlock[] {
   if (Array.isArray(result.data)) {
@@ -1301,7 +1283,7 @@ export function formatDailyRecord(result: Record<string, unknown>): TextBlock[] 
       firstRecord && ('sectionName' in firstRecord || 'title' in firstRecord)
         ? renderDailyArticleItem
         : renderDailyRecordItem;
-    return tb(renderList(result, renderer, queryOf(result)));
+    return tb(renderList(result, renderer));
   }
   return tb(renderDetail(result));
 }
@@ -1311,8 +1293,7 @@ export const formatLaws = makeFormatter(['law'], renderBillItem, renderBillDetai
 
 /** House roll call votes and member voting positions. */
 export function formatVotes(result: Record<string, unknown>): TextBlock[] {
-  if (Array.isArray(result.data))
-    return tb(renderList(result, renderRollVoteItem, queryOf(result)));
+  if (Array.isArray(result.data)) return tb(renderList(result, renderRollVoteItem));
   if (result.vote != null) return tb(renderRollVoteDetail(result.vote as Record<string, unknown>));
   return tb(renderDetail(result));
 }
@@ -1320,14 +1301,13 @@ export function formatVotes(result: Record<string, unknown>): TextBlock[] {
 /** Presidential nominations and Senate confirmation pipeline. */
 export function formatNominations(result: Record<string, unknown>): TextBlock[] {
   if (Array.isArray(result.data)) {
-    const hint = queryOf(result);
     const first = result.data[0];
     const firstRecord =
       typeof first === 'object' && first !== null ? (first as Record<string, unknown>) : undefined;
     const renderer = firstRecord
       ? pickNominationListRenderer(firstRecord)
       : renderNominationListItem;
-    return tb(renderList(result, renderer, hint));
+    return tb(renderList(result, renderer));
   }
   if (result.nomination != null)
     return tb(renderNominationDetail(result.nomination as Record<string, unknown>));

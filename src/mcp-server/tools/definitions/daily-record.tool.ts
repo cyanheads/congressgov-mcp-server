@@ -7,7 +7,7 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { validationError } from '@cyanheads/mcp-ts-core/errors';
 
 import { formatDailyRecord } from '@/mcp-server/tools/format-helpers.js';
-import { buildQueryEcho, listOutput } from '@/mcp-server/tools/tool-helpers.js';
+import { listEnrichment, listOutput } from '@/mcp-server/tools/tool-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 
 export const dailyRecordTool = tool('congressgov_daily_record', {
@@ -31,6 +31,7 @@ export const dailyRecordTool = tool('congressgov_daily_record', {
     offset: z.number().int().min(0).default(0).describe('Pagination offset.'),
   }),
   output: listOutput,
+  enrichment: listEnrichment,
   format: formatDailyRecord,
 
   async handler(input, ctx) {
@@ -39,7 +40,10 @@ export const dailyRecordTool = tool('congressgov_daily_record', {
     if (input.operation === 'list') {
       const result = await api.listDailyRecord({ limit: input.limit, offset: input.offset }, ctx);
       ctx.log.info('Daily record listed');
-      return { ...result, query: buildQueryEcho('Congressional Record volumes') };
+      ctx.enrich.echo('Congressional Record volumes');
+      ctx.enrich.total(result.pagination.count);
+      if (result.data.length === 0) ctx.enrich.notice('No Congressional Record volumes found.');
+      return result;
     }
 
     if (!input.volumeNumber) {
@@ -59,10 +63,11 @@ export const dailyRecordTool = tool('congressgov_daily_record', {
         ctx,
       );
       ctx.log.info('Daily record issues retrieved', { volumeNumber: input.volumeNumber });
-      return {
-        ...result,
-        query: buildQueryEcho(`issues for volume ${input.volumeNumber}`),
-      };
+      ctx.enrich.echo(`issues for volume ${input.volumeNumber}`);
+      ctx.enrich.total(result.pagination.count);
+      if (result.data.length === 0)
+        ctx.enrich.notice(`No issues found for volume ${input.volumeNumber}.`);
+      return result;
     }
 
     if (!input.issueNumber) {
@@ -85,11 +90,12 @@ export const dailyRecordTool = tool('congressgov_daily_record', {
       volumeNumber: input.volumeNumber,
       issueNumber: input.issueNumber,
     });
-    return {
-      ...result,
-      query: buildQueryEcho(
-        `articles for volume ${input.volumeNumber}, issue ${input.issueNumber}`,
-      ),
-    };
+    ctx.enrich.echo(`articles for volume ${input.volumeNumber}, issue ${input.issueNumber}`);
+    ctx.enrich.total(result.pagination.count);
+    if (result.data.length === 0)
+      ctx.enrich.notice(
+        `No articles found for volume ${input.volumeNumber}, issue ${input.issueNumber}.`,
+      );
+    return result;
   },
 });

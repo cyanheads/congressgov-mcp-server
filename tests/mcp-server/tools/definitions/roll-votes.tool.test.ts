@@ -56,7 +56,10 @@ describe('rollVotesTool', () => {
 
   it('gets vote member positions', async () => {
     const ctx = createMockContext();
-    mockApi.getVoteMembers.mockResolvedValue({ vote: [{ member: 'Smith', position: 'Yea' }] });
+    mockApi.getVoteMembers.mockResolvedValue({
+      vote: { results: [{ member: 'Smith', position: 'Yea' }] },
+      pagination: { count: 1, nextOffset: null },
+    });
     const input = rollVotesTool.input.parse({
       operation: 'members',
       congress: 118,
@@ -64,7 +67,7 @@ describe('rollVotesTool', () => {
       voteNumber: 42,
     });
     const result = await rollVotesTool.handler(input, ctx);
-    expect(result.vote).toHaveLength(1);
+    expect((result.vote as { results: unknown[] }).results).toHaveLength(1);
   });
 
   it('throws when get/members is missing voteNumber', async () => {

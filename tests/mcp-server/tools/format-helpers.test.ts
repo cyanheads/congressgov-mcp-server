@@ -642,17 +642,15 @@ describe('shared renderers preserved (regression)', () => {
     expect(text).not.toContain('isMilitary');
   });
 
-  it('formatNominations surfaces partitioned-form hint via query when result is empty', () => {
+  it('formatNominations renders empty results correctly (partitioned-form hint is now in enrichment notice)', () => {
     const text = textOf(
       formatNominations({
         data: [],
         pagination: { count: 0, nextOffset: null },
-        query: 'If `851` is a multi-part parent, try `851-1`.',
       }),
     );
     expect(text).toContain('**0 results**');
-    expect(text).toContain('multi-part parent');
-    expect(text).toContain('851-1');
+    expect(text).toContain('No matching results');
   });
 });
 

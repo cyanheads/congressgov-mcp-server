@@ -8,7 +8,8 @@ import { validationError } from '@cyanheads/mcp-ts-core/errors';
 
 import { formatSummaries } from '@/mcp-server/tools/format-helpers.js';
 import {
-  buildQueryEcho,
+  buildEffectiveQuery,
+  listEnrichment,
   listOutput,
   normalizeOptionalString,
   validateIsoDateTime,
@@ -45,6 +46,7 @@ export const billSummariesTool = tool('congressgov_bill_summaries', {
     offset: z.number().int().min(0).default(0).describe('Pagination offset.'),
   }),
   output: listOutput,
+  enrichment: listEnrichment,
   format: formatSummaries,
 
   async handler(input, ctx) {
@@ -83,14 +85,19 @@ export const billSummariesTool = tool('congressgov_bill_summaries', {
       ctx,
     );
     ctx.log.info('Summaries listed', { count: result.data.length });
-    return {
-      ...result,
-      query: buildQueryEcho('bill summaries', {
+    ctx.enrich.echo(
+      buildEffectiveQuery('bill summaries', {
         congress: input.congress,
         billType: input.billType,
         fromDateTime,
         toDateTime: toDateTimeInput,
       }),
-    };
+    );
+    ctx.enrich.total(result.pagination.count);
+    if (result.data.length === 0)
+      ctx.enrich.notice(
+        'No summaries found. Try broadening the date range or removing billType/congress filters.',
+      );
+    return result;
   },
 });

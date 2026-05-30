@@ -7,7 +7,11 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { validationError } from '@cyanheads/mcp-ts-core/errors';
 
 import { formatMembers } from '@/mcp-server/tools/format-helpers.js';
-import { buildQueryEcho, listOrDetail } from '@/mcp-server/tools/tool-helpers.js';
+import {
+  buildEffectiveQuery,
+  listEnrichment,
+  listOrDetail,
+} from '@/mcp-server/tools/tool-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 
 export const memberLookupTool = tool('congressgov_member_lookup', {
@@ -48,6 +52,7 @@ export const memberLookupTool = tool('congressgov_member_lookup', {
     'member',
     'Member profile for `get` (name, state, terms, party history, leadership, legislation counts); absent for `list`, `sponsored`, `cosponsored`.',
   ),
+  enrichment: listEnrichment,
   format: formatMembers,
 
   async handler(input, ctx) {
@@ -72,15 +77,20 @@ export const memberLookupTool = tool('congressgov_member_lookup', {
         ctx,
       );
       ctx.log.info('Members listed', { count: result.data.length });
-      return {
-        ...result,
-        query: buildQueryEcho('members', {
+      ctx.enrich.echo(
+        buildEffectiveQuery('members', {
           congress: input.congress,
           stateCode: input.stateCode,
           district: input.district,
           currentMember: input.currentMember,
         }),
-      };
+      );
+      ctx.enrich.total(result.pagination.count);
+      if (result.data.length === 0)
+        ctx.enrich.notice(
+          'No members matched the filters. Try removing stateCode or district, or check the congress number.',
+        );
+      return result;
     }
 
     if (!input.bioguideId) {
@@ -93,6 +103,8 @@ export const memberLookupTool = tool('congressgov_member_lookup', {
     if (input.operation === 'get') {
       const result = await api.getMember(input.bioguideId, ctx);
       ctx.log.info('Member retrieved', { bioguideId: input.bioguideId });
+      ctx.enrich.echo(`member ${input.bioguideId}`);
+      ctx.enrich.total(1);
       return result;
     }
 
@@ -111,9 +123,10 @@ export const memberLookupTool = tool('congressgov_member_lookup', {
       bioguideId: input.bioguideId,
       type: input.operation,
     });
-    return {
-      ...result,
-      query: buildQueryEcho(`${input.operation} legislation for ${input.bioguideId}`),
-    };
+    ctx.enrich.echo(`${input.operation} legislation for ${input.bioguideId}`);
+    ctx.enrich.total(result.pagination.count);
+    if (result.data.length === 0)
+      ctx.enrich.notice(`No ${input.operation} legislation found for member ${input.bioguideId}.`);
+    return result;
   },
 });

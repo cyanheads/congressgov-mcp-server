@@ -3,11 +3,15 @@
  * @module mcp-server/tools/definitions/senate-nominations
  */
 
+import type { Context } from '@cyanheads/mcp-ts-core';
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { validationError } from '@cyanheads/mcp-ts-core/errors';
-
 import { formatNominations } from '@/mcp-server/tools/format-helpers.js';
-import { buildQueryEcho, listOrDetail } from '@/mcp-server/tools/tool-helpers.js';
+import {
+  buildEffectiveQuery,
+  listEnrichment,
+  listOrDetail,
+} from '@/mcp-server/tools/tool-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 
 export const senateNominationsTool = tool('congressgov_senate_nominations', {
@@ -39,6 +43,7 @@ export const senateNominationsTool = tool('congressgov_senate_nominations', {
     'nomination',
     'Nomination record for `get` (description, dates, nominees array, sub-resource counts); absent for `list` and sub-resources.',
   ),
+  enrichment: listEnrichment,
   format: formatNominations,
 
   async handler(input, ctx) {
@@ -57,10 +62,11 @@ export const senateNominationsTool = tool('congressgov_senate_nominations', {
         congress: input.congress,
         count: result.data.length,
       });
-      return {
-        ...result,
-        query: buildQueryEcho('nominations', { congress: input.congress }),
-      };
+      ctx.enrich.echo(buildEffectiveQuery('nominations', { congress: input.congress }));
+      ctx.enrich.total(result.pagination.count);
+      if (result.data.length === 0)
+        ctx.enrich.notice('No nominations found for this congress. Verify the congress number.');
+      return result;
     }
 
     if (!input.nominationNumber) {
@@ -76,6 +82,8 @@ export const senateNominationsTool = tool('congressgov_senate_nominations', {
         congress: input.congress,
         nominationNumber: input.nominationNumber,
       });
+      ctx.enrich.echo(`nomination PN${input.nominationNumber} in the ${input.congress}th Congress`);
+      ctx.enrich.total(1);
       return result;
     }
 
@@ -101,7 +109,12 @@ export const senateNominationsTool = tool('congressgov_senate_nominations', {
         nominationNumber: input.nominationNumber,
         ordinal: input.ordinal,
       });
-      return withParentFormHint(result, input.nominationNumber);
+      ctx.enrich.echo(
+        `nominees for nomination ${input.nominationNumber}, ordinal ${input.ordinal}`,
+      );
+      ctx.enrich.total(result.pagination.count);
+      applyParentFormNotice(ctx, result, input.nominationNumber);
+      return result;
     }
 
     const result = await api.getNominationSubResource(
@@ -119,7 +132,10 @@ export const senateNominationsTool = tool('congressgov_senate_nominations', {
       nominationNumber: input.nominationNumber,
       subResource: input.operation,
     });
-    return withParentFormHint(result, input.nominationNumber);
+    ctx.enrich.echo(`${input.operation} for nomination ${input.nominationNumber}`);
+    ctx.enrich.total(result.pagination.count);
+    applyParentFormNotice(ctx, result, input.nominationNumber);
+    return result;
   },
 });
 
@@ -127,13 +143,15 @@ export const senateNominationsTool = tool('congressgov_senate_nominations', {
  * Sub-resource calls (actions/committees/hearings/nominees) against a bare
  * parent number (e.g. '851') silently return 0 results when the nomination is
  * a multi-part parent — those sub-resources live on the partitioned children.
- * Attach a hint the formatter can render so callers know to try the partitioned
- * form.
+ * Emits an enrichment notice so agents know to try the partitioned form.
  */
-function withParentFormHint<T extends { data: unknown[] }>(result: T, nominationNumber: string): T {
-  if (result.data.length > 0 || nominationNumber.includes('-')) return result;
-  return {
-    ...result,
-    query: `If \`${nominationNumber}\` is a multi-part parent, its actions/committees/hearings/nominees live on the partitioned children. Try \`${nominationNumber}-1\` (and -2, -3, …) instead.`,
-  };
+function applyParentFormNotice(
+  ctx: Context,
+  result: { data: unknown[] },
+  nominationNumber: string,
+): void {
+  if (result.data.length > 0 || nominationNumber.includes('-')) return;
+  ctx.enrich.notice(
+    `If \`${nominationNumber}\` is a multi-part parent, its actions/committees/hearings/nominees live on the partitioned children. Try \`${nominationNumber}-1\` (and -2, -3, …) instead.`,
+  );
 }

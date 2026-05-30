@@ -8,7 +8,11 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { validationError } from '@cyanheads/mcp-ts-core/errors';
 
 import { formatVotes } from '@/mcp-server/tools/format-helpers.js';
-import { buildQueryEcho, listOrDetail } from '@/mcp-server/tools/tool-helpers.js';
+import {
+  buildEffectiveQuery,
+  listEnrichment,
+  listOrDetail,
+} from '@/mcp-server/tools/tool-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 
 export const rollVotesTool = tool('congressgov_roll_votes', {
@@ -42,13 +46,14 @@ export const rollVotesTool = tool('congressgov_roll_votes', {
     'vote',
     'Vote record for `get` and `members` (question, result, party totals, member positions); absent for `list`.',
   ),
+  enrichment: listEnrichment,
   format: formatVotes,
 
   async handler(input, ctx) {
     const api = getCongressApi();
 
     if (input.operation === 'list') {
-      const hint = buildQueryEcho('roll call votes', {
+      const effectiveQuery = buildEffectiveQuery('roll call votes', {
         congress: input.congress,
         session: input.session,
       });
@@ -62,7 +67,11 @@ export const rollVotesTool = tool('congressgov_roll_votes', {
           },
           ctx,
         );
-        return { ...recent, query: hint };
+        ctx.enrich.echo(effectiveQuery);
+        ctx.enrich.total(recent.pagination.count);
+        if (recent.data.length === 0)
+          ctx.enrich.notice('No votes found. Verify the congress and session numbers.');
+        return recent;
       }
       const result = await api.listVotes(
         {
@@ -74,7 +83,11 @@ export const rollVotesTool = tool('congressgov_roll_votes', {
         ctx,
       );
       ctx.log.info('Votes listed', { congress: input.congress, session: input.session });
-      return { ...result, query: hint };
+      ctx.enrich.echo(effectiveQuery);
+      ctx.enrich.total(result.pagination.count);
+      if (result.data.length === 0)
+        ctx.enrich.notice('No votes found. Verify the congress and session numbers.');
+      return result;
     }
 
     if (!input.voteNumber) {
@@ -98,13 +111,28 @@ export const rollVotesTool = tool('congressgov_roll_votes', {
       ...voteParams,
       operation: input.operation,
     });
+    if (input.operation === 'get') {
+      ctx.enrich.echo(
+        `roll call ${input.voteNumber} in the ${input.congress}th Congress, session ${input.session}`,
+      );
+      ctx.enrich.total(1);
+      return result;
+    }
     if (input.operation === 'members') {
-      return {
-        ...result,
-        query: buildQueryEcho(
-          `member votes for roll ${input.voteNumber} in the ${input.congress}th Congress, session ${input.session}`,
-        ),
+      const membersResult = result as {
+        vote: Record<string, unknown>;
+        pagination?: { count: number };
       };
+      ctx.enrich.echo(
+        `member votes for roll ${input.voteNumber} in the ${input.congress}th Congress, session ${input.session}`,
+      );
+      ctx.enrich.total(membersResult.pagination?.count ?? 0);
+      const voteResults = Array.isArray(membersResult.vote?.results)
+        ? (membersResult.vote.results as unknown[])
+        : [];
+      if (voteResults.length === 0)
+        ctx.enrich.notice(`No member vote records found for roll ${input.voteNumber}.`);
+      return result;
     }
     return result;
   },
