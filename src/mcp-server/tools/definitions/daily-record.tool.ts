@@ -7,12 +7,17 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { validationError } from '@cyanheads/mcp-ts-core/errors';
 
 import { formatDailyRecord } from '@/mcp-server/tools/format-helpers.js';
-import { listEnrichment, listOutput } from '@/mcp-server/tools/tool-helpers.js';
+import {
+  congressErrorContracts,
+  listEnrichment,
+  listOutput,
+} from '@/mcp-server/tools/tool-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 
 export const dailyRecordTool = tool('congressgov_daily_record', {
   description: `Browse the daily Congressional Record — floor speeches, debates, and legislative text published each day Congress is in session. Navigation is hierarchical: volumes (via 'list') → issues (via 'issues') → articles (via 'articles'). Use 'list' to find recent volumes, 'issues' to see what's in a volume, and 'articles' to access individual speeches and debate sections.`,
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
+  errors: congressErrorContracts,
   input: z.object({
     operation: z.enum(['list', 'issues', 'articles']).describe('Which data to retrieve.'),
     volumeNumber: z

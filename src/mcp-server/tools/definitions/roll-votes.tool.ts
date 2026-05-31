@@ -10,6 +10,7 @@ import { validationError } from '@cyanheads/mcp-ts-core/errors';
 import { formatVotes } from '@/mcp-server/tools/format-helpers.js';
 import {
   buildEffectiveQuery,
+  congressErrorContracts,
   listEnrichment,
   listOrDetail,
 } from '@/mcp-server/tools/tool-helpers.js';
@@ -18,6 +19,7 @@ import { getCongressApi } from '@/services/congress-api/congress-api-service.js'
 export const rollVotesTool = tool('congressgov_roll_votes', {
   description: `Retrieve House roll call vote data and individual member voting positions — House-only, as Senate vote data is not yet in the Congress.gov API. Use 'list' to find votes by congress and session (defaults to most-recently-updated first), 'get' for vote details (question, result, associated bill), or 'members' for how each representative voted.`,
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
+  errors: congressErrorContracts,
   input: z.object({
     operation: z.enum(['list', 'get', 'members']).describe('Which data to retrieve.'),
     congress: z.number().int().positive().describe('Congress number.'),

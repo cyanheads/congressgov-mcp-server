@@ -9,6 +9,7 @@ import { validationError } from '@cyanheads/mcp-ts-core/errors';
 import { formatLaws } from '@/mcp-server/tools/format-helpers.js';
 import {
   buildEffectiveQuery,
+  congressErrorContracts,
   listEnrichment,
   listOrDetail,
 } from '@/mcp-server/tools/tool-helpers.js';
@@ -17,6 +18,7 @@ import { getCongressApi } from '@/services/congress-api/congress-api-service.js'
 export const enactedLawsTool = tool('congressgov_enacted_laws', {
   description: `Browse enacted public and private laws from Congress.gov by congress and law type ('pub' for public laws, 'priv' for private). 'list' filters by enactment status and law type — the discovery path 'bill_lookup' does not offer. 'get' returns the origin bill record (sponsor, actions, summaries, text), with the public/private law citation on the bill's 'laws' array (e.g. {"number":"118-2","type":"Public Law"}).`,
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
+  errors: congressErrorContracts,
   input: z.object({
     operation: z.enum(['list', 'get']).describe('Which data to retrieve.'),
     congress: z.number().int().positive().describe('Congress number.'),

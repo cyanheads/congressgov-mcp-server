@@ -10,6 +10,7 @@ import { validationError } from '@cyanheads/mcp-ts-core/errors';
 import { formatCommittees } from '@/mcp-server/tools/format-helpers.js';
 import {
   buildEffectiveQuery,
+  congressErrorContracts,
   listEnrichment,
   listOrDetail,
 } from '@/mcp-server/tools/tool-helpers.js';
@@ -28,6 +29,7 @@ function inferChamberFromCode(code: string): Chamber | undefined {
 export const committeeLookupTool = tool('congressgov_committee_lookup', {
   description: `Browse congressional committees and their legislation, reports, and nominations. Committee codes follow the pattern chamber-prefix (h/s/j) + abbreviation + number — use 'list' to discover codes, then 'get' or drill into 'bills', 'reports', or 'nominations' ('nominations' is Senate-only). 'get' and sub-resources only need committeeCode (chamber is inferred from the prefix); pass chamber explicitly to override. The 'bills' sub-resource defaults to 'recent' order (newest update-date first); pass order='oldest' for ascending update-date order. Upstream omits bill titles from the 'bills' sub-resource — rows carry only {congress, billType, billNumber, actionDate, relationshipType, url}; chain 'congressgov_bill_lookup get' per row to retrieve titles and policy area.`,
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
+  errors: congressErrorContracts,
   input: z.object({
     operation: z
       .enum(['list', 'get', 'bills', 'reports', 'nominations'])

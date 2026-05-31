@@ -9,6 +9,7 @@ import { validationError } from '@cyanheads/mcp-ts-core/errors';
 import { formatMembers } from '@/mcp-server/tools/format-helpers.js';
 import {
   buildEffectiveQuery,
+  congressErrorContracts,
   listEnrichment,
   listOrDetail,
 } from '@/mcp-server/tools/tool-helpers.js';
@@ -17,6 +18,7 @@ import { getCongressApi } from '@/services/congress-api/congress-api-service.js'
 export const memberLookupTool = tool('congressgov_member_lookup', {
   description: `Discover congressional members and their legislative activity. No name search. For 'list', filter by stateCode (optionally with district), by congress, or by both together (e.g., 118th Congress + CA, or CA district 12 in the 118th). Add currentMember=true to restrict to currently serving members. Once you have a bioguideId, use 'get' for full profile or 'sponsored'/'cosponsored' for their legislative portfolio.`,
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
+  errors: congressErrorContracts,
   input: z.object({
     operation: z
       .enum(['list', 'get', 'sponsored', 'cosponsored'])

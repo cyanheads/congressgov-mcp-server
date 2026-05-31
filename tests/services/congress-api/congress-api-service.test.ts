@@ -3,7 +3,7 @@
  * @module tests/services/congress-api/congress-api-service.test
  */
 
-import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { JsonRpcErrorCode, type McpError } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -110,6 +110,48 @@ describe('CongressApiService', () => {
       await expect(service.getCurrentCongress(createMockContext())).rejects.toMatchObject({
         code: JsonRpcErrorCode.NotFound,
       });
+    });
+
+    it('classifies an upstream 400 as invalid_request and never echoes the URL (#34)', async () => {
+      mockFetch.mockResolvedValue(errorResponse(400, 'Bad Request', 'Bad Request'));
+      const error = (await service
+        .listBills({ congress: 118 }, createMockContext())
+        .catch((e: unknown) => e)) as McpError;
+      expect(error.code).toBe(JsonRpcErrorCode.InvalidParams);
+      expect(error.data?.reason).toBe('invalid_request');
+      expect((error.data?.recovery as { hint: string }).hint).toMatch(/ISO 8601/);
+      expect(error.message).not.toContain('api.congress.gov');
+      expect(error.message).not.toContain('Fetch failed');
+    });
+
+    it('classifies an upstream 403 as invalid_request without leaking the path (#34)', async () => {
+      mockFetch.mockResolvedValue(errorResponse(403, 'Forbidden', 'Forbidden'));
+      const error = (await service
+        .getMember("P000197' OR '1'='1", createMockContext())
+        .catch((e: unknown) => e)) as McpError;
+      expect(error.code).toBe(JsonRpcErrorCode.InvalidParams);
+      expect(error.data?.reason).toBe('invalid_request');
+      expect(error.message).not.toContain('api.congress.gov');
+    });
+
+    it('attaches a machine-readable reason and recovery hint on 404 (#32)', async () => {
+      mockFetch.mockResolvedValue(errorResponse(404, 'Not Found', 'Not Found'));
+      const error = (await service
+        .getCurrentCongress(createMockContext())
+        .catch((e: unknown) => e)) as McpError;
+      expect(error.code).toBe(JsonRpcErrorCode.NotFound);
+      expect(error.data?.reason).toBe('not_found');
+      expect((error.data?.recovery as { hint: string }).hint).toBeTruthy();
+      expect(error.message).not.toContain('api.congress.gov');
+    });
+
+    it('attaches the rate_limited reason on 429 (#32)', async () => {
+      mockFetch.mockResolvedValue(errorResponse(429, 'Too Many Requests', 'Too Many Requests'));
+      const error = (await service
+        .getCurrentCongress(createMockContext())
+        .catch((e: unknown) => e)) as McpError;
+      expect(error.code).toBe(JsonRpcErrorCode.RateLimited);
+      expect(error.data?.reason).toBe('rate_limited');
     });
 
     it('wraps network failures as service unavailable and retries them', async () => {

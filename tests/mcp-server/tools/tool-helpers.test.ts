@@ -75,6 +75,37 @@ describe('validateIsoDateTime', () => {
     const oversized = '2026-01-15T00:00:00Z' + 'x'.repeat(5000);
     expect(() => validateIsoDateTime(oversized, 'fromDateTime')).toThrow(/ISO 8601/);
   });
+
+  // ── Calendar validity (shape matches but the date is impossible) — #35 ──────
+
+  it('accepts a real leap-day datetime', () => {
+    expect(validateIsoDateTime('2024-02-29T12:00:00Z', 'fromDateTime')).toBe(
+      '2024-02-29T12:00:00Z',
+    );
+  });
+
+  it('rejects February 30 even with a valid time component', () => {
+    expect(() => validateIsoDateTime('2023-02-30T00:00:00Z', 'fromDateTime')).toThrow(/ISO 8601/);
+  });
+
+  it('rejects month 13', () => {
+    expect(() => validateIsoDateTime('2023-13-01T00:00:00Z', 'fromDateTime')).toThrow(/ISO 8601/);
+  });
+
+  it('rejects February 29 in a non-leap year', () => {
+    expect(() => validateIsoDateTime('2023-02-29T00:00:00Z', 'toDateTime')).toThrow(/ISO 8601/);
+  });
+
+  it('rejects day 00 and month 00', () => {
+    expect(() => validateIsoDateTime('2023-01-00T00:00:00Z', 'fromDateTime')).toThrow(/ISO 8601/);
+    expect(() => validateIsoDateTime('2023-00-15T00:00:00Z', 'fromDateTime')).toThrow(/ISO 8601/);
+  });
+
+  it('rejects impossible time components (hour 25, minute 60, second 60)', () => {
+    expect(() => validateIsoDateTime('2023-05-01T25:00:00Z', 'fromDateTime')).toThrow(/ISO 8601/);
+    expect(() => validateIsoDateTime('2023-05-01T00:60:00Z', 'fromDateTime')).toThrow(/ISO 8601/);
+    expect(() => validateIsoDateTime('2023-05-01T00:00:60Z', 'fromDateTime')).toThrow(/ISO 8601/);
+  });
 });
 
 describe('buildEffectiveQuery', () => {

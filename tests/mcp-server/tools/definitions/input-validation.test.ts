@@ -414,3 +414,23 @@ describe('committeeReportsTool — enrichment', () => {
     expect(enrichment.totalCount).toBe(1);
   });
 });
+
+// ── Error contract advertisement (#32/#34) ───────────────────────────────────
+
+describe('error contracts', () => {
+  const REQUIRED_REASONS = ['not_found', 'rate_limited', 'invalid_request', 'upstream_error'];
+  const contractTools = {
+    bill_lookup: billLookupTool,
+    crs_reports: crsReportsTool,
+    daily_record: dailyRecordTool,
+    member_lookup: memberLookupTool,
+    senate_nominations: senateNominationsTool,
+  };
+
+  for (const [name, contractTool] of Object.entries(contractTools)) {
+    it(`${name} advertises the shared upstream error contract`, () => {
+      const reasons = (contractTool.errors ?? []).map((entry) => entry.reason);
+      expect(reasons).toEqual(expect.arrayContaining(REQUIRED_REASONS));
+    });
+  }
+});

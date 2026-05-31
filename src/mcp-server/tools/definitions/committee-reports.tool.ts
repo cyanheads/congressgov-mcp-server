@@ -9,6 +9,7 @@ import { validationError } from '@cyanheads/mcp-ts-core/errors';
 import { formatCommitteeReports } from '@/mcp-server/tools/format-helpers.js';
 import {
   buildEffectiveQuery,
+  congressErrorContracts,
   listEnrichment,
   listOrDetail,
 } from '@/mcp-server/tools/tool-helpers.js';
@@ -17,6 +18,7 @@ import { getCongressApi } from '@/services/congress-api/congress-api-service.js'
 export const committeeReportsTool = tool('congressgov_committee_reports', {
   description: `Browse and retrieve committee reports from Congress.gov — reports accompany legislation reported out of committee and explain the bill's purpose, committee amendments, dissenting views, and the committee vote. Report types are 'hrpt' (House), 'srpt' (Senate), and 'erpt' (Executive).`,
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
+  errors: congressErrorContracts,
   input: z.object({
     operation: z.enum(['list', 'get', 'text']).describe('Which data to retrieve.'),
     congress: z.number().int().positive().describe('Congress number.'),

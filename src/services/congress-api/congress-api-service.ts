@@ -5,6 +5,7 @@
 
 import type { Context } from '@cyanheads/mcp-ts-core';
 import {
+  invalidParams,
   JsonRpcErrorCode,
   McpError,
   notFound,
@@ -190,6 +191,87 @@ const RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000;
 const RATE_LIMIT_MAX = 5000;
 const REQUEST_TIMEOUT_MS = 10_000;
 const HTML_RESPONSE_RE = /^\s*<(!DOCTYPE\s+html|html[\s>])/i;
+
+const RATE_LIMIT_MESSAGE =
+  'Congress.gov API rate limit reached (5,000 requests/hour). Wait before retrying — the limit resets hourly.';
+
+/**
+ * `data.reason` + `data.recovery.hint` payloads matching the `errors[]` contract
+ * declared on every tool (`congressErrorContracts` in tool-helpers). Spread into
+ * the factory `data` so each failure is machine-readable on the wire.
+ */
+const NOT_FOUND_RECOVERY = {
+  reason: 'not_found',
+  recovery: { hint: 'Use the list or browse operation to find valid identifiers, then retry.' },
+} as const;
+const RATE_LIMITED_RECOVERY = {
+  reason: 'rate_limited',
+  recovery: { hint: 'Wait for the hourly rate limit to reset before retrying.' },
+} as const;
+const INVALID_REQUEST_RECOVERY = {
+  reason: 'invalid_request',
+  recovery: {
+    hint: 'Check parameter formats — dates must be ISO 8601 (2026-05-01T00:00:00Z) and identifiers must match their documented shape.',
+  },
+} as const;
+const UPSTREAM_ERROR_RECOVERY = {
+  reason: 'upstream_error',
+  recovery: {
+    hint: 'Retry after a short delay; the Congress.gov service may be temporarily degraded.',
+  },
+} as const;
+
+/**
+ * Map an McpError raised by fetchWithTimeout — whose message embeds the full
+ * upstream URL and which carries no machine-readable reason — into a clean
+ * domain error: a stable `data.reason`, an actionable `data.recovery.hint`, and
+ * a message that never echoes the request URL. The framework's status-mapped
+ * code is preserved for the upstream-error bucket (retry semantics and the 500
+ * DoesNotExist path key off InternalError vs ServiceUnavailable), and
+ * `statusCode`/`responseBody` are carried through so tryNotFound() can still
+ * classify the 404 and 500 cases at call sites.
+ * Resolves cyanheads/congressgov-mcp-server#34.
+ */
+function classifyUpstreamError(error: McpError, path: string): McpError {
+  const statusCode = typeof error.data?.statusCode === 'number' ? error.data.statusCode : undefined;
+  const responseBody =
+    typeof error.data?.responseBody === 'string' ? error.data.responseBody : undefined;
+  const meta: Record<string, unknown> = { path };
+  if (statusCode !== undefined) meta.statusCode = statusCode;
+  if (responseBody !== undefined) meta.responseBody = responseBody;
+  const opts = { cause: error };
+  const suffix = statusCode !== undefined ? ` (HTTP ${statusCode})` : '';
+
+  switch (error.code) {
+    case JsonRpcErrorCode.RateLimited:
+      return rateLimited(RATE_LIMIT_MESSAGE, { ...meta, ...RATE_LIMITED_RECOVERY }, opts);
+    case JsonRpcErrorCode.NotFound:
+      return notFound(
+        'Congress.gov has no resource matching the request.',
+        { ...meta, ...NOT_FOUND_RECOVERY },
+        opts,
+      );
+    case JsonRpcErrorCode.InvalidParams:
+    case JsonRpcErrorCode.Forbidden:
+    case JsonRpcErrorCode.Unauthorized:
+    case JsonRpcErrorCode.ValidationError:
+      return invalidParams(
+        `Congress.gov rejected the request as malformed${suffix}.`,
+        { ...meta, ...INVALID_REQUEST_RECOVERY },
+        opts,
+      );
+    default:
+      // 5xx / Timeout / anything else — preserve the framework's status-mapped
+      // code (retry behavior and the 500 DoesNotExist path depend on it), but
+      // strip the upstream URL from the message.
+      return new McpError(
+        error.code,
+        `Congress.gov returned an unexpected error${suffix}.`,
+        { ...meta, ...UPSTREAM_ERROR_RECOVERY },
+        opts,
+      );
+  }
+}
 
 export class CongressApiService {
   private readonly apiKey: string;
@@ -487,7 +569,7 @@ export class CongressApiService {
     if (!report || (typeof report === 'object' && Object.keys(report).length === 0)) {
       throw notFound(
         `Committee report ${params.reportType.toUpperCase()} ${params.congress}-${params.reportNumber} not found.`,
-        { ...params },
+        { ...params, ...NOT_FOUND_RECOVERY },
       );
     }
     return { report: report as ApiRecord };
@@ -576,7 +658,7 @@ export class CongressApiService {
           error.code === JsonRpcErrorCode.NotFound ||
           (statusCode === 500 && this.isMissingEntityErrorBody(responseBody))
         ) {
-          throw notFound(message, data, { cause: error });
+          throw notFound(message, { ...data, ...NOT_FOUND_RECOVERY }, { cause: error });
         }
       }
       throw error;
@@ -646,9 +728,7 @@ export class CongressApiService {
       this.requestCount = 0;
     }
     if (this.requestCount >= RATE_LIMIT_MAX) {
-      throw rateLimited(
-        'Congress.gov API rate limit reached (5,000 requests/hour). Wait before retrying — the limit resets hourly.',
-      );
+      throw rateLimited(RATE_LIMIT_MESSAGE, { ...RATE_LIMITED_RECOVERY });
     }
   }
 
@@ -731,15 +811,13 @@ export class CongressApiService {
         ...(signal ? { signal } : {}),
       });
     } catch (error) {
-      /** fetchWithTimeout maps HTTP status → typed McpError directly (e.g. 429 → RateLimited).
-       *  Rewrap RateLimited here to preserve the domain-specific quota message; 404 rewrapping
-       *  happens at call sites via tryNotFound() with identifier-rich data. */
-      if (error instanceof McpError && error.code === JsonRpcErrorCode.RateLimited) {
-        throw rateLimited(
-          'Congress.gov API rate limit reached (5,000 requests/hour). Wait before retrying — the limit resets hourly.',
-          { path },
-          { cause: error },
-        );
+      /** fetchWithTimeout throws a status-mapped McpError whose message embeds the
+       *  full upstream URL and which carries no reason/recovery. Rewrap every
+       *  non-2xx into a clean, classified domain error (no URL leak). The 404 and
+       *  500 DoesNotExist cases are rewrapped again with identifier-rich data at
+       *  call sites via tryNotFound(). */
+      if (error instanceof McpError) {
+        throw classifyUpstreamError(error, path);
       }
       throw error;
     }
@@ -759,11 +837,15 @@ export class CongressApiService {
   private parseJsonResponse(text: string, path: string): Record<string, unknown> {
     const trimmed = text.trim();
     if (!trimmed) {
-      throw serviceUnavailable('Congress.gov API returned an empty response body.', { path });
+      throw serviceUnavailable('Congress.gov API returned an empty response body.', {
+        path,
+        ...UPSTREAM_ERROR_RECOVERY,
+      });
     }
     if (HTML_RESPONSE_RE.test(trimmed)) {
       throw serviceUnavailable('Congress.gov API returned HTML instead of JSON.', {
         path,
+        ...UPSTREAM_ERROR_RECOVERY,
       });
     }
 
@@ -772,7 +854,7 @@ export class CongressApiService {
     } catch (error) {
       throw serviceUnavailable(
         'Congress.gov API returned invalid JSON.',
-        { path },
+        { path, ...UPSTREAM_ERROR_RECOVERY },
         { cause: error },
       );
     }

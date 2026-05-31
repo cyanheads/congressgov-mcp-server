@@ -7,12 +7,17 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { validationError } from '@cyanheads/mcp-ts-core/errors';
 
 import { formatCrsReports } from '@/mcp-server/tools/format-helpers.js';
-import { listEnrichment, listOrDetail } from '@/mcp-server/tools/tool-helpers.js';
+import {
+  congressErrorContracts,
+  listEnrichment,
+  listOrDetail,
+} from '@/mcp-server/tools/tool-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 
 export const crsReportsTool = tool('congressgov_crs_reports', {
   description: `Browse and retrieve CRS (Congressional Research Service) reports — nonpartisan policy analyses by subject-matter experts at the Library of Congress, covering policy areas, legislative proposals, and legal questions. Report IDs use letter-number codes (e.g., R40097, RL33612, IF12345). Use 'list' to browse available reports or 'get' for full detail (authors, topics, summary, download formats).`,
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
+  errors: congressErrorContracts,
   input: z.object({
     operation: z.enum(['list', 'get']).describe('Which data to retrieve.'),
     reportNumber: z

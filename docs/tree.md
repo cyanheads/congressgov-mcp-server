@@ -1,6 +1,6 @@
 # congressgov-mcp-server - Directory Structure
 
-Generated on: 2026-05-30 09:11:32
+Generated on: 2026-05-31 11:14:57
 
 ```text
 congressgov-mcp-server/
@@ -167,13 +167,17 @@ congressgov-mcp-server/
 │   │       │   ├── crs-reports.tool.test.ts
 │   │       │   ├── daily-record.tool.test.ts
 │   │       │   ├── enacted-laws.tool.test.ts
+│   │       │   ├── input-validation.test.ts
 │   │       │   ├── member-lookup.tool.test.ts
 │   │       │   ├── roll-votes.tool.test.ts
 │   │       │   └── senate-nominations.tool.test.ts
-│   │       └── format-helpers.test.ts
+│   │       ├── format-helpers-extended.test.ts
+│   │       ├── format-helpers.test.ts
+│   │       └── tool-helpers.test.ts
 │   └── services/
 │       └── congress-api/
-│           └── congress-api-service.test.ts
+│           ├── congress-api-service.test.ts
+│           └── normalizers.test.ts
 ├── .dockerignore
 ├── .env.example
 ├── .gitignore

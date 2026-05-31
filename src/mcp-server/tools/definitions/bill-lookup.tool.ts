@@ -9,6 +9,7 @@ import { validationError } from '@cyanheads/mcp-ts-core/errors';
 import { formatBills } from '@/mcp-server/tools/format-helpers.js';
 import {
   buildEffectiveQuery,
+  congressErrorContracts,
   listEnrichment,
   listOrDetail,
   normalizeOptionalString,
@@ -40,6 +41,7 @@ const SUB_RESOURCE_MAP: Record<string, string> = {
 export const billLookupTool = tool('congressgov_bill_lookup', {
   description: `Browse and retrieve U.S. legislative bill data from Congress.gov. Discover bills by filtering on congress, bill type, and date range — there is no keyword search. Use 'list' to browse (requires congress, defaults to most-recently-updated first), 'get' for full bill detail (sponsor, policy area, CBO estimates, law info), or drill into a specific bill with 'actions', 'amendments', 'cosponsors', 'committees', 'subjects', 'summaries', 'text', 'titles', or 'related' (each requires congress + billType + billNumber).`,
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
+  errors: congressErrorContracts,
   input: z.object({
     operation: OperationEnum.describe('Which data to retrieve.'),
     congress: z.number().int().positive().describe('Congress number (e.g., 118, 119).'),
