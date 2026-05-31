@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.3.25](changelog/0.3.x/0.3.25.md) — 2026-05-31
+
+roll_votes members roster moved to top-level data[] — aligns with fleet-wide paginated envelope
+
 ## [0.3.24](changelog/0.3.x/0.3.24.md) — 2026-05-31
 
 Typed error contracts on all 10 tools, classified upstream errors (no URL leak), and client-side calendar validation for impossible dates

@@ -435,7 +435,7 @@ export class CongressApiService {
   async getVoteMembers(
     params: GetVoteParams & PaginationParams,
     ctx?: Context,
-  ): Promise<EntityResult<'vote'> & { pagination: Pagination }> {
+  ): Promise<{ data: ApiRecord[]; vote: ApiRecord; pagination: Pagination }> {
     /** Congress.gov returns the full member list in a single response — the `members` endpoint ignores limit/offset query params — so paginate client-side. */
     const data = await this.tryNotFound(
       () =>
@@ -446,15 +446,20 @@ export class CongressApiService {
       `House roll call vote ${params.voteNumber} not found in the ${ordinal(params.congress)} Congress, session ${params.session}.`,
       { ...params },
     );
+    /** Normalize to the fleet envelope: roster in top-level `data[]`, the vote
+     * record as a sibling `vote` (minus `results`, which becomes the page), and
+     * `pagination` counting `data`. Aligns `members` with every other paginated
+     * op (cyanheads/congressgov-mcp-server#36). */
     const voteRaw = (data.houseRollCallVoteMemberVotes ?? data) as ApiRecord;
-    const rawResults = Array.isArray(voteRaw.results) ? voteRaw.results : [];
-    const allResults = rawResults.map(normalizeVoteResult);
+    const { results, ...vote } = voteRaw;
+    const allResults = (Array.isArray(results) ? results : []).map(normalizeVoteResult);
     const limit = params.limit ?? 20;
     const offset = params.offset ?? 0;
     const paged = allResults.slice(offset, offset + limit);
     const nextOffset = offset + paged.length < allResults.length ? offset + paged.length : null;
     return {
-      vote: { ...voteRaw, results: paged },
+      data: paged,
+      vote,
       pagination: { count: allResults.length, nextOffset },
     };
   }

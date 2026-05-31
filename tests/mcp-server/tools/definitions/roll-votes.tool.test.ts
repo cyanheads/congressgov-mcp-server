@@ -54,10 +54,11 @@ describe('rollVotesTool', () => {
     expect(result.vote).toEqual({ question: 'On Passage' });
   });
 
-  it('gets vote member positions', async () => {
+  it('returns member positions as a roster in data[] with the vote as a sibling (issue #36)', async () => {
     const ctx = createMockContext();
     mockApi.getVoteMembers.mockResolvedValue({
-      vote: { results: [{ member: 'Smith', position: 'Yea' }] },
+      data: [{ bioguideId: 'S000148', lastName: 'Smith', voteCast: 'Yea' }],
+      vote: { rollCallNumber: 42, voteQuestion: 'On Passage', result: 'Passed' },
       pagination: { count: 1, nextOffset: null },
     });
     const input = rollVotesTool.input.parse({
@@ -67,7 +68,8 @@ describe('rollVotesTool', () => {
       voteNumber: 42,
     });
     const result = await rollVotesTool.handler(input, ctx);
-    expect((result.vote as { results: unknown[] }).results).toHaveLength(1);
+    expect(result.data).toHaveLength(1);
+    expect((result.vote as { results?: unknown }).results).toBeUndefined();
   });
 
   it('throws when get/members is missing voteNumber', async () => {

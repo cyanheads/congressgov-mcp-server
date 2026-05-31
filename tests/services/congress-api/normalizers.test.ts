@@ -262,9 +262,11 @@ describe('CongressApiService — getVoteMembers client-side pagination', () => {
       { congress: 119, session: 1, voteNumber: 10, limit: 3, offset: 2 },
       createMockContext(),
     );
-    expect(result.vote.results).toHaveLength(3);
+    expect(result.data).toHaveLength(3);
     expect(result.pagination.count).toBe(10);
     expect(result.pagination.nextOffset).toBe(5);
+    /** Roster lives in data[]; the sibling vote record no longer nests it (issue #36). */
+    expect(result.vote).not.toHaveProperty('results');
   });
 
   it('normalizes bioguideID to bioguideId in member results', async () => {
@@ -279,7 +281,7 @@ describe('CongressApiService — getVoteMembers client-side pagination', () => {
       { congress: 119, session: 1, voteNumber: 10 },
       createMockContext(),
     );
-    const member = (result.vote.results as Record<string, unknown>[])[0];
+    const member = result.data[0] as Record<string, unknown>;
     expect(member).toHaveProperty('bioguideId', 'P000197');
     expect(member).not.toHaveProperty('bioguideID');
   });

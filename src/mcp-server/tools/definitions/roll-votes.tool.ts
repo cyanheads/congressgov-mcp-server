@@ -105,37 +105,27 @@ export const rollVotesTool = tool('congressgov_roll_votes', {
       voteNumber: input.voteNumber,
     };
 
-    const result =
-      input.operation === 'members'
-        ? await api.getVoteMembers({ ...voteParams, limit: input.limit, offset: input.offset }, ctx)
-        : await api.getVote(voteParams, ctx);
-    ctx.log.info('Vote retrieved', {
-      ...voteParams,
-      operation: input.operation,
-    });
-    if (input.operation === 'get') {
-      ctx.enrich.echo(
-        `roll call ${input.voteNumber} in the ${input.congress}th Congress, session ${input.session}`,
-      );
-      ctx.enrich.total(1);
-      return result;
-    }
     if (input.operation === 'members') {
-      const membersResult = result as {
-        vote: Record<string, unknown>;
-        pagination?: { count: number };
-      };
+      const membersResult = await api.getVoteMembers(
+        { ...voteParams, limit: input.limit, offset: input.offset },
+        ctx,
+      );
+      ctx.log.info('Vote retrieved', { ...voteParams, operation: input.operation });
       ctx.enrich.echo(
         `member votes for roll ${input.voteNumber} in the ${input.congress}th Congress, session ${input.session}`,
       );
-      ctx.enrich.total(membersResult.pagination?.count ?? 0);
-      const voteResults = Array.isArray(membersResult.vote?.results)
-        ? (membersResult.vote.results as unknown[])
-        : [];
-      if (voteResults.length === 0)
+      ctx.enrich.total(membersResult.pagination.count);
+      if (membersResult.data.length === 0)
         ctx.enrich.notice(`No member vote records found for roll ${input.voteNumber}.`);
-      return result;
+      return membersResult;
     }
+
+    const result = await api.getVote(voteParams, ctx);
+    ctx.log.info('Vote retrieved', { ...voteParams, operation: input.operation });
+    ctx.enrich.echo(
+      `roll call ${input.voteNumber} in the ${input.congress}th Congress, session ${input.session}`,
+    );
+    ctx.enrich.total(1);
     return result;
   },
 });

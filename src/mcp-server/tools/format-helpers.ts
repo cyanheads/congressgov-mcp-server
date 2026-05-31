@@ -868,28 +868,84 @@ function renderRollVoteDetail(item: Record<string, unknown>): string {
     }
   }
 
-  const results = item.results;
-  if (Array.isArray(results) && results.length > 0) {
-    lines.push(`\n**Member Votes:** ${results.length} on this page`);
-    for (const r of results.slice(0, 20) as Record<string, unknown>[]) {
-      const name =
-        s(r, 'firstName') && s(r, 'lastName')
-          ? `${s(r, 'firstName')} ${s(r, 'lastName')}`
-          : (s(r, 'bioguideId') ?? '?');
-      const vote = s(r, 'voteCast');
-      const party = s(r, 'voteParty');
-      const state = s(r, 'voteState');
-      const parts = [
-        name,
-        party && state ? `(${party}-${state})` : undefined,
-        vote ? `→ ${vote}` : undefined,
-      ].filter(Boolean);
-      lines.push(`- ${parts.join(' ')}`);
-    }
-    if (results.length > 20) lines.push(`- _...${results.length - 20} more_`);
+  if (sourceUrl) lines.push(`\n**Source Data URL:** ${sourceUrl}`);
+  return lines.join('\n');
+}
+
+/** One member's position: "Warren Davidson (R-OH) → Nay". */
+function renderMemberVoteRow(r: Record<string, unknown>): string {
+  const first = s(r, 'firstName');
+  const last = s(r, 'lastName');
+  const name = first && last ? `${first} ${last}` : (last ?? first ?? s(r, 'bioguideId') ?? '?');
+  const party = s(r, 'voteParty');
+  const state = s(r, 'voteState');
+  const cast = s(r, 'voteCast');
+  const loc =
+    party && state
+      ? `(${party}-${state})`
+      : party
+        ? `(${party})`
+        : state
+          ? `(${state})`
+          : undefined;
+  return `- ${[name, loc, cast ? `→ ${cast}` : undefined].filter(Boolean).join(' ')}`;
+}
+
+/**
+ * Member voting positions for one roll call — vote-context header, the
+ * `pagination`-derived range footer, then the paginated roster from `data[]`.
+ * The `vote` sibling carries the vote record (sans the roster); `get` adds party
+ * totals this `/members` endpoint omits.
+ */
+function renderVoteMembers(result: Record<string, unknown>): string {
+  const vote = (result.vote ?? {}) as Record<string, unknown>;
+  const rows = (result.data ?? []) as unknown[];
+  const pagination = result.pagination as Record<string, unknown> | undefined;
+  const total = (pagination?.count as number) ?? rows.length;
+  const nextOffset = pagination?.nextOffset as number | null | undefined;
+
+  const roll = s(vote, 'rollCallNumber');
+  const congress = s(vote, 'congress');
+  const session = s(vote, 'sessionNumber');
+  const rollLabel = roll ? `Roll ${roll}` : 'Roll call';
+  const scope = join(
+    [congress ? `${congress}th Congress` : undefined, session ? `session ${session}` : undefined],
+    ', ',
+  );
+  const lines = [`# ${scope ? `${rollLabel} — ${scope}` : rollLabel}`];
+
+  const context = join(
+    [s(vote, 'voteQuestion') ? `**${s(vote, 'voteQuestion')}**` : undefined, s(vote, 'result')],
+    ' — ',
+  );
+  if (context) lines.push(context);
+  const legType = s(vote, 'legislationType')?.toUpperCase();
+  const legNum = s(vote, 'legislationNumber');
+  if (legType && legNum) lines.push(`**Legislation:** ${legType} ${legNum}`);
+
+  if (rows.length === 0) {
+    lines.push(
+      '',
+      total > 0
+        ? `_Page is empty — offset is past the end of ${total} member position${total !== 1 ? 's' : ''}._`
+        : '_No member positions recorded for this roll call._',
+    );
+    return lines.join('\n');
   }
 
-  if (sourceUrl) lines.push(`\n**Source Data URL:** ${sourceUrl}`);
+  /** `pagination` omits the current offset; derive the page's 1-based range from
+   * the row count and `nextOffset` (= offset + page length, or null on the last page). */
+  const end = nextOffset ?? total;
+  const start = end - rows.length + 1;
+  lines.push(
+    '',
+    `**Members ${start}–${end} of ${total}**${nextOffset != null ? ` · next offset: ${nextOffset}` : ''}`,
+    '',
+  );
+  for (const r of rows) {
+    if (typeof r === 'object' && r !== null)
+      lines.push(renderMemberVoteRow(r as Record<string, unknown>));
+  }
   return lines.join('\n');
 }
 
@@ -1293,6 +1349,8 @@ export const formatLaws = makeFormatter(['law'], renderBillItem, renderBillDetai
 
 /** House roll call votes and member voting positions. */
 export function formatVotes(result: Record<string, unknown>): TextBlock[] {
+  /** `members`: roster in `data[]` with the vote record as a sibling context object. */
+  if (Array.isArray(result.data) && result.vote != null) return tb(renderVoteMembers(result));
   if (Array.isArray(result.data)) return tb(renderList(result, renderRollVoteItem));
   if (result.vote != null) return tb(renderRollVoteDetail(result.vote as Record<string, unknown>));
   return tb(renderDetail(result));

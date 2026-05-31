@@ -309,6 +309,69 @@ describe('formatVotes (issue #4)', () => {
     expect(text).toContain('**Congress:** 119');
     expect(text).toContain('**Type:** Yea-And-Nay');
   });
+
+  it('renders member positions as a roster in data[] with a vote-context header (issue #36)', () => {
+    /** Real /members shape: roster in data[], vote sibling (no votePartyTotal upstream). */
+    const text = textOf(
+      formatVotes({
+        data: [
+          {
+            bioguideId: 'D000626',
+            firstName: 'Warren',
+            lastName: 'Davidson',
+            voteCast: 'Nay',
+            voteParty: 'R',
+            voteState: 'OH',
+          },
+          {
+            bioguideId: 'C001069',
+            firstName: 'Joe',
+            lastName: 'Courtney',
+            voteCast: 'Yea',
+            voteParty: 'D',
+            voteState: 'CT',
+          },
+        ],
+        pagination: { count: 434, nextOffset: 2 },
+        vote: {
+          rollCallNumber: 99,
+          congress: 118,
+          sessionNumber: 1,
+          voteQuestion: 'On Motion to Recommit',
+          result: 'Failed',
+          legislationType: 'HR',
+          legislationNumber: '382',
+        },
+      }),
+    );
+    expect(text).toContain('# Roll 99 — 118th Congress, session 1');
+    expect(text).toContain('**On Motion to Recommit** — Failed');
+    expect(text).toContain('**Legislation:** HR 382');
+    expect(text).toContain('**Members 1–2 of 434** · next offset: 2');
+    expect(text).toContain('- Warren Davidson (R-OH) → Nay');
+    expect(text).toContain('- Joe Courtney (D-CT) → Yea');
+  });
+
+  it('renders the last page of member positions without a next-offset hint (issue #36)', () => {
+    const text = textOf(
+      formatVotes({
+        data: [
+          {
+            bioguideId: 'B001297',
+            lastName: 'Buck',
+            voteCast: 'Nay',
+            voteParty: 'R',
+            voteState: 'CO',
+          },
+        ],
+        pagination: { count: 434, nextOffset: null },
+        vote: { rollCallNumber: 99, result: 'Failed' },
+      }),
+    );
+    expect(text).toContain('**Members 434–434 of 434**');
+    expect(text).not.toContain('next offset');
+    expect(text).toContain('- Buck (R-CO) → Nay');
+  });
 });
 
 describe('formatBills — actions sub-resource (issue #5)', () => {
