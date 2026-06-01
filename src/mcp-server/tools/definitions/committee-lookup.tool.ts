@@ -17,6 +17,85 @@ import {
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 import type { Chamber } from '@/services/congress-api/types.js';
 
+// ── Client-side committee name filter ────────────────────────────────────────
+
+/** Normalize a string for matching: lowercase, strip punctuation/diacritics, collapse whitespace. */
+function normalizeForMatch(str: string): string {
+  return str
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[^\w\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** Extract bigrams from a normalized string. */
+function bigrams(str: string): Set<string> {
+  const result = new Set<string>();
+  for (let i = 0; i < str.length - 1; i++) result.add(str.slice(i, i + 2));
+  return result;
+}
+
+/** Dice coefficient between two bigram sets. */
+function diceCoeff(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 && b.size === 0) return 1;
+  if (a.size === 0 || b.size === 0) return 0;
+  let intersection = 0;
+  for (const bg of a) if (b.has(bg)) intersection++;
+  return (2 * intersection) / (a.size + b.size);
+}
+
+const FUZZY_THRESHOLD = 0.5;
+const FUZZY_MAX_RESULTS = 5;
+
+type ApiRecord = Record<string, unknown>;
+
+/**
+ * Filter a committee list by name using a two-pass strategy:
+ * 1. Primary: every token in `filter` appears in the normalized committee name.
+ * 2. Fuzzy fallback (only when primary is empty): rank by bigram-Dice similarity of
+ *    the query against each name's best-matching token (full-name scoring lets long
+ *    names accrue spurious overlap), keep the top few above the threshold, labeled
+ *    `approximate: true`.
+ *
+ * Never throws — no match returns an empty array.
+ */
+function filterCommittees(items: ApiRecord[], filter: string): ApiRecord[] {
+  const normFilter = normalizeForMatch(filter);
+  const tokens = normFilter.split(' ').filter(Boolean);
+  if (tokens.length === 0) return items;
+
+  // Primary: all-token match (order-independent, partial-word OK)
+  const primary = items.filter((item) => {
+    const name = typeof item.name === 'string' ? normalizeForMatch(item.name) : '';
+    return tokens.every((tok) => name.includes(tok));
+  });
+  if (primary.length > 0) return primary;
+
+  // Fuzzy fallback: score the query against each name's best-matching token, not
+  // the whole name — long committee names share common bigrams with the query and
+  // would otherwise rank as spurious "approximate" matches. Keep the top few.
+  const filterBigrams = bigrams(normFilter);
+  const scored = items
+    .map((item) => {
+      const name = typeof item.name === 'string' ? normalizeForMatch(item.name) : '';
+      const score = Math.max(
+        0,
+        ...name
+          .split(' ')
+          .filter(Boolean)
+          .map((tok) => diceCoeff(filterBigrams, bigrams(tok))),
+      );
+      return { item, score };
+    })
+    .filter(({ score }) => score >= FUZZY_THRESHOLD)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, FUZZY_MAX_RESULTS);
+
+  return scored.map(({ item }) => ({ ...item, approximate: true }));
+}
+
 /** Committee codes carry chamber in the first letter (h=House, s=Senate, j=Joint). */
 function inferChamberFromCode(code: string): Chamber | undefined {
   const first = code[0]?.toLowerCase();
@@ -27,7 +106,7 @@ function inferChamberFromCode(code: string): Chamber | undefined {
 }
 
 export const committeeLookupTool = tool('congressgov_committee_lookup', {
-  description: `Browse congressional committees and their legislation, reports, and nominations. Committee codes follow the pattern chamber-prefix (h/s/j) + abbreviation + number — use 'list' to discover codes, then 'get' or drill into 'bills', 'reports', or 'nominations' ('nominations' is Senate-only). 'get' and sub-resources only need committeeCode (chamber is inferred from the prefix); pass chamber explicitly to override. The 'bills' sub-resource defaults to 'recent' order (newest update-date first); pass order='oldest' for ascending update-date order. Upstream omits bill titles from the 'bills' sub-resource — rows carry only {congress, billType, billNumber, actionDate, relationshipType, url}; chain 'congressgov_bill_lookup get' per row to retrieve titles and policy area.`,
+  description: `Browse congressional committees and their legislation, reports, and nominations. Committee codes follow the pattern chamber-prefix (h/s/j) + abbreviation + number — use 'list' (with optional 'filter' for name→code resolution) to discover codes, then 'get' or drill into 'bills', 'reports', or 'nominations' ('nominations' is Senate-only). 'get' and sub-resources only need committeeCode (chamber is inferred from the prefix); pass chamber explicitly to override. The 'bills' sub-resource defaults to 'recent' order (newest update-date first); pass order='oldest' for ascending update-date order. Upstream omits bill titles from the 'bills' sub-resource — rows carry only {congress, billType, billNumber, actionDate, relationshipType, url}; chain 'congressgov_bill_lookup get' per row to retrieve titles and policy area.`,
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
   errors: congressErrorContracts,
   input: z.object({
@@ -45,6 +124,13 @@ export const committeeLookupTool = tool('congressgov_committee_lookup', {
       .string()
       .optional()
       .describe("Committee system code (e.g., 'hsju00'). Required for get and sub-resources."),
+    // Provisional param name — tracking fleet-wide convention in cyanheads/mcp-ts-core#186.
+    filter: z
+      .string()
+      .optional()
+      .describe(
+        "Filter committee list results by name (e.g., 'transportation', 'armed services'). Only meaningful for 'list'. Fetches the full chamber set and matches client-side; fuzzy-matched rows are labeled approximate.",
+      ),
     limit: z.number().int().min(1).max(250).default(20).describe('Results per page (1-250).'),
     offset: z.number().int().min(0).default(0).describe('Pagination offset.'),
     order: z
@@ -65,31 +151,58 @@ export const committeeLookupTool = tool('congressgov_committee_lookup', {
     const api = getCongressApi();
 
     if (input.operation === 'list') {
+      const filter = input.filter?.trim() || undefined;
+      // When filtering, fetch the full chamber set so client-side matching covers all rows.
+      const fetchLimit = filter ? 250 : input.limit;
+      const fetchOffset = filter ? 0 : input.offset;
+
       const result = await api.listCommittees(
         {
           congress: input.congress,
           chamber: input.chamber,
-          limit: input.limit,
-          offset: input.offset,
+          limit: fetchLimit,
+          offset: fetchOffset,
         },
         ctx,
       );
-      ctx.log.info('Committees listed', { count: result.data.length });
+
+      const matched = filter ? filterCommittees(result.data as ApiRecord[], filter) : result.data;
+      ctx.log.info('Committees listed', {
+        count: matched.length,
+        total: result.pagination.count,
+        filter,
+      });
       ctx.enrich.echo(
-        buildEffectiveQuery('committees', { congress: input.congress, chamber: input.chamber }),
+        buildEffectiveQuery('committees', {
+          congress: input.congress,
+          chamber: input.chamber,
+          filter,
+        }),
       );
-      ctx.enrich.total(result.pagination.count);
-      if (result.data.length === 0)
+      ctx.enrich.total(filter ? matched.length : result.pagination.count);
+      if (matched.length === 0)
         ctx.enrich.notice(
-          'No committees found. Try removing the chamber filter or check the congress number.',
+          filter
+            ? `No committees matched '${filter}'. Call 'list' without filter to browse all committees.`
+            : 'No committees found. Try removing the chamber filter or check the congress number.',
         );
-      return result;
+      return filter
+        ? { ...result, data: matched, pagination: { count: matched.length, nextOffset: null } }
+        : { ...result, data: matched };
     }
 
     if (!input.committeeCode) {
       throw validationError(
         `The '${input.operation}' operation requires committeeCode. Use 'list' to discover available committees.`,
         { operation: input.operation, committeeCode: input.committeeCode },
+      );
+    }
+
+    // Pre-validate: a committeeCode containing whitespace is a name, not a code.
+    if (/\s/.test(input.committeeCode)) {
+      throw validationError(
+        `committeeCode '${input.committeeCode}' contains whitespace — that looks like a committee name, not a code. Committee system codes look like \`hspw00\` (chamber prefix + abbreviation + digits). Use \`operation: 'list'\` with \`filter\` to find the code for a committee by name.`,
+        { field: 'committeeCode', committeeCode: input.committeeCode },
       );
     }
 

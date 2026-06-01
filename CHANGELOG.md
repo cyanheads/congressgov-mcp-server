@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.3.27](changelog/0.3.x/0.3.27.md) — 2026-05-31
+
+committee_lookup: filter param on list for name→code resolution; actionable not-found errors with code-shape hint and list redirect; whitespace guard rejects names passed as committeeCode
+
 ## [0.3.26](changelog/0.3.x/0.3.26.md) — 2026-05-31
 
 congressgov_roll_votes: Senate chamber support via LIS XML feed — list/get/members for both chambers

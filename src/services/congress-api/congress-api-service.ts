@@ -389,7 +389,7 @@ export class CongressApiService {
   ): Promise<EntityResult<'committee'>> {
     const data = await this.tryNotFound(
       () => this.get(`/committee/${chamber}/${committeeCode}`, ctx),
-      `Committee ${committeeCode} not found in the ${chamber} chamber.`,
+      `Committee ${committeeCode} not found in the ${chamber} chamber. Committee system codes look like \`hspw00\` (chamber prefix + abbreviation + digits). Call \`congressgov_committee_lookup\` with \`operation: 'list'\` and an optional \`filter\` to discover valid codes.`,
       { chamber, committeeCode },
     );
     return { committee: data.committee as ApiRecord };
@@ -403,7 +403,7 @@ export class CongressApiService {
     const key = this.inferListKey(params.subResource);
     const result = await this.tryNotFound(
       () => this.fetchList(path, key, params, ctx),
-      `Committee ${params.committeeCode} (${params.chamber}) or its ${params.subResource} not found.`,
+      `Committee ${params.committeeCode} (${params.chamber}) or its ${params.subResource} not found. Committee system codes look like \`hspw00\` (chamber prefix + abbreviation + digits). Call \`congressgov_committee_lookup\` with \`operation: 'list'\` and an optional \`filter\` to discover valid codes.`,
       { ...params },
     );
     if (params.subResource === 'reports') {

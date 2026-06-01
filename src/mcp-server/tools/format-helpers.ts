@@ -1337,10 +1337,11 @@ function renderMemberDetail(item: Record<string, unknown>): string {
   return lines.join('\n');
 }
 
-/** Committee list item — name + key fields. */
+/** Committee list item — name + key fields. Fuzzy-matched rows carry `approximate: true`. */
 function renderCommitteeListItem(item: Record<string, unknown>, i: number): string {
   const name = s(item, 'name') ?? s(item, 'systemCode') ?? 'Committee';
-  const lines = [`### ${i + 1}. ${name}`];
+  const approx = item.approximate === true ? ' _(approximate match)_' : '';
+  const lines = [`### ${i + 1}. ${name}${approx}`];
   const meta = join([
     f('Code', s(item, 'systemCode')),
     f('Chamber', s(item, 'chamber')),

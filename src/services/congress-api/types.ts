@@ -100,6 +100,8 @@ export type CommitteeSubResource = 'bills' | 'reports' | 'nominations';
 export interface ListCommitteesParams extends PaginationParams {
   chamber?: Chamber | undefined;
   congress?: number | undefined;
+  /** Client-side name filter — matched in the tool layer, not sent upstream. */
+  filter?: string | undefined;
 }
 
 export interface CommitteeSubResourceParams extends PaginationParams {

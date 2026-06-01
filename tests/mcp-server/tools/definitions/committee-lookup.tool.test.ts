@@ -14,6 +14,23 @@ vi.mock('@/services/congress-api/congress-api-service.js', () => ({
 import { committeeLookupTool } from '@/mcp-server/tools/definitions/committee-lookup.tool.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 
+const HOUSE_COMMITTEES = [
+  { name: 'Transportation and Infrastructure Committee', systemCode: 'hspw00', chamber: 'house' },
+  { name: 'Judiciary Committee', systemCode: 'hsju00', chamber: 'house' },
+  { name: 'Armed Services Committee', systemCode: 'hsas00', chamber: 'house' },
+  { name: 'Ways and Means Committee', systemCode: 'hswm00', chamber: 'house' },
+  { name: 'Science, Space, and Technology Committee', systemCode: 'hssy00', chamber: 'house' },
+  {
+    name: 'Coast Guard and Maritime Transportation Subcommittee',
+    systemCode: 'hspw07',
+    chamber: 'house',
+  },
+  // Noise control: on a full-name bigram match this shares enough with "transportation"
+  // to surface, but its best token ("population") stays below the fuzzy threshold — it
+  // must NOT appear as an approximate match.
+  { name: 'Population Committee', systemCode: 'hlze00', chamber: 'house' },
+];
+
 describe('committeeLookupTool', () => {
   const mockApi = {
     listCommittees: vi.fn(),
@@ -74,6 +91,29 @@ describe('committeeLookupTool', () => {
     await expect(committeeLookupTool.handler(input, ctx)).rejects.toThrow(/requires/);
   });
 
+  it('rejects committeeCode containing whitespace before any API call', async () => {
+    const ctx = createMockContext();
+    const input = committeeLookupTool.input.parse({
+      operation: 'get',
+      committeeCode: 'house transportation',
+      chamber: 'house',
+    });
+    await expect(committeeLookupTool.handler(input, ctx)).rejects.toMatchObject({
+      message: expect.stringMatching(/whitespace|name.*not.*code|list.*filter/i),
+    });
+    expect(mockApi.getCommittee).not.toHaveBeenCalled();
+  });
+
+  it('whitespace rejection message mentions list operation', async () => {
+    const ctx = createMockContext();
+    const input = committeeLookupTool.input.parse({
+      operation: 'get',
+      committeeCode: 'house armed services',
+      chamber: 'house',
+    });
+    await expect(committeeLookupTool.handler(input, ctx)).rejects.toThrow(/list/);
+  });
+
   it('throws when nominations requested for non-senate committee', async () => {
     const ctx = createMockContext();
     const input = committeeLookupTool.input.parse({
@@ -82,6 +122,108 @@ describe('committeeLookupTool', () => {
       committeeCode: 'hsju00',
     });
     await expect(committeeLookupTool.handler(input, ctx)).rejects.toThrow(/Senate/);
+  });
+
+  // ── #38: filter param on list ─────────────────────────────────────────────
+
+  describe('filter on list', () => {
+    beforeEach(() => {
+      mockApi.listCommittees.mockResolvedValue({
+        data: HOUSE_COMMITTEES,
+        pagination: { count: HOUSE_COMMITTEES.length, nextOffset: null },
+      });
+    });
+
+    it('fetches with limit=250 when filter is set', async () => {
+      const ctx = createMockContext();
+      const input = committeeLookupTool.input.parse({
+        operation: 'list',
+        chamber: 'house',
+        filter: 'transportation',
+      });
+      await committeeLookupTool.handler(input, ctx);
+      expect(mockApi.listCommittees).toHaveBeenCalledWith(
+        expect.objectContaining({ limit: 250 }),
+        ctx,
+      );
+    });
+
+    it('exact token match — transportation returns Transportation and Infrastructure + subcommittee', async () => {
+      const ctx = createMockContext();
+      const input = committeeLookupTool.input.parse({
+        operation: 'list',
+        chamber: 'house',
+        filter: 'transportation',
+      });
+      const result = await committeeLookupTool.handler(input, ctx);
+      expect(result.data).toHaveLength(2);
+      const codes = (result.data as Array<Record<string, unknown>>).map((r) => r.systemCode);
+      expect(codes).toContain('hspw00');
+      expect(codes).toContain('hspw07');
+    });
+
+    it('partial multi-token match — "science technology" matches Science, Space, and Technology', async () => {
+      const ctx = createMockContext();
+      const input = committeeLookupTool.input.parse({
+        operation: 'list',
+        chamber: 'house',
+        filter: 'science technology',
+      });
+      const result = await committeeLookupTool.handler(input, ctx);
+      const codes = (result.data as Array<Record<string, unknown>>).map((r) => r.systemCode);
+      expect(codes).toContain('hssy00');
+      // Should not pull in armed services etc.
+      expect(codes).not.toContain('hsas00');
+    });
+
+    it('fuzzy fallback — typo "trasnportation" returns approximate match', async () => {
+      const ctx = createMockContext();
+      const input = committeeLookupTool.input.parse({
+        operation: 'list',
+        chamber: 'house',
+        filter: 'trasnportation',
+      });
+      const result = await committeeLookupTool.handler(input, ctx);
+      expect(result.data!.length).toBeGreaterThan(0);
+      const rows = result.data as Array<Record<string, unknown>>;
+      // All fuzzy results should be labeled approximate
+      expect(rows.every((r) => r.approximate === true)).toBe(true);
+      const codes = rows.map((r) => r.systemCode);
+      // Transportation committee should surface via fuzzy
+      expect(codes).toContain('hspw00');
+      // Noise must NOT surface: best-token scoring keeps unrelated long names out,
+      // and the result is capped to the top few.
+      expect(codes).not.toContain('hlze00'); // Population Committee
+      expect(codes).not.toContain('hsju00'); // Judiciary
+      expect(codes.length).toBeLessThanOrEqual(5);
+    });
+
+    it('no-match returns empty data and a notice', async () => {
+      const ctx = createMockContext();
+      const input = committeeLookupTool.input.parse({
+        operation: 'list',
+        chamber: 'house',
+        filter: 'zzznomatch',
+      });
+      const result = await committeeLookupTool.handler(input, ctx);
+      expect(result.data).toHaveLength(0);
+      // The handler populates ctx.enrich.notice for no-match
+      // (enrichment is carried in structuredContent — we verify the handler doesn't throw)
+    });
+
+    it('primary match beats fuzzy — exact hits are not labeled approximate', async () => {
+      const ctx = createMockContext();
+      const input = committeeLookupTool.input.parse({
+        operation: 'list',
+        chamber: 'house',
+        filter: 'judiciary',
+      });
+      const result = await committeeLookupTool.handler(input, ctx);
+      expect(result.data!.length).toBeGreaterThan(0);
+      const rows = result.data as Array<Record<string, unknown>>;
+      expect(rows.every((r) => !r.approximate)).toBe(true);
+      expect(rows.map((r) => r.systemCode)).toContain('hsju00');
+    });
   });
 
   it("fetches committee bills sub-resource (order='oldest' passes through in one call)", async () => {
