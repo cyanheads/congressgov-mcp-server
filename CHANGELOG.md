@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.3.26](changelog/0.3.x/0.3.26.md) — 2026-05-31
+
+congressgov_roll_votes: Senate chamber support via LIS XML feed — list/get/members for both chambers
+
 ## [0.3.25](changelog/0.3.x/0.3.25.md) — 2026-05-31
 
 roll_votes members roster moved to top-level data[] — aligns with fleet-wide paginated envelope

@@ -1,6 +1,6 @@
 # congressgov-mcp-server - Directory Structure
 
-Generated on: 2026-05-31 11:14:57
+Generated on: 2026-06-01 02:17:01
 
 ```text
 congressgov-mcp-server/
@@ -141,8 +141,12 @@ congressgov-mcp-server/
 │   │       ├── format-helpers.ts
 │   │       └── tool-helpers.ts
 │   ├── services/
-│   │   └── congress-api/
-│   │       ├── congress-api-service.ts
+│   │   ├── congress-api/
+│   │   │   ├── congress-api-service.ts
+│   │   │   └── types.ts
+│   │   └── senate-lis/
+│   │       ├── parse.ts
+│   │       ├── senate-vote-service.ts
 │   │       └── types.ts
 │   └── index.ts
 ├── tests/
@@ -173,11 +177,19 @@ congressgov-mcp-server/
 │   │       │   └── senate-nominations.tool.test.ts
 │   │       ├── format-helpers-extended.test.ts
 │   │       ├── format-helpers.test.ts
+│   │       ├── senate-votes.format.test.ts
 │   │       └── tool-helpers.test.ts
 │   └── services/
-│       └── congress-api/
-│           ├── congress-api-service.test.ts
-│           └── normalizers.test.ts
+│       ├── congress-api/
+│       │   ├── congress-api-service.test.ts
+│       │   └── normalizers.test.ts
+│       └── senate-lis/
+│           ├── fixtures/
+│           │   ├── menu.xml
+│           │   ├── vote-amendment.xml
+│           │   └── vote-cloture.xml
+│           ├── parse.test.ts
+│           └── senate-vote-service.test.ts
 ├── .dockerignore
 ├── .env.example
 ├── .gitignore
