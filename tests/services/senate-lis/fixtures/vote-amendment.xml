@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="UTF-8"?><roll_call_vote>
+  <congress>118</congress>
+  <session>2</session>
+  <congress_year>2024</congress_year>
+  <vote_number>336</vote_number>
+  <vote_date>December 20, 2024,  11:39 PM</vote_date>
+  <modify_date>December 21, 2024,  12:15 AM</modify_date>
+  <vote_question_text>On the Amendment S.Amdt. 3331 to H.R. 82 (No short title on file)</vote_question_text>
+  <vote_document_text>To delay the repeal of the Government pension offset and windfall elimination provisions until additional changes are made to offset any negative impacts on the actuarial balance of the Social Security Trust Funds.</vote_document_text>
+  <vote_result_text>Amendment Rejected (34-62, 3/5 majority required)</vote_result_text>
+  <question>On the Amendment</question>
+  <vote_title>Crapo Amdt. No. 3331</vote_title>
+  <majority_requirement>3/5</majority_requirement>
+  <vote_result>Amendment Rejected</vote_result>
+  <document>
+    <document_congress>118</document_congress>
+    <document_type>S.Amdt.</document_type>
+    <document_number/>
+    <document_name/>
+    <document_title/>
+    <document_short_title/>
+  </document>
+  <amendment>
+    <amendment_number>S.Amdt. 3331</amendment_number>
+    <amendment_to_amendment_number/>
+    <amendment_to_amendment_to_amendment_number/>
+    <amendment_to_document_number>H.R. 82</amendment_to_document_number>
+    <amendment_to_document_short_title>No short title on file</amendment_to_document_short_title>
+    <amendment_purpose>To delay the repeal of the Government pension offset and windfall elimination provisions until additional changes are made to offset any negative impacts on the actuarial balance of the Social Security Trust Funds.</amendment_purpose>
+  </amendment>
+  <count>
+    <yeas>2</yeas>
+    <nays>4</nays>
+    <present/>
+    <absent>0</absent>
+  </count>
+  <tie_breaker>
+    <by_whom/>
+    <tie_breaker_vote/>
+  </tie_breaker>
+  <members>
+    <member>
+      <member_full>Baldwin (D-WI)</member_full>
+      <last_name>Baldwin</last_name>
+      <first_name>Tammy</first_name>
+      <party>D</party>
+      <state>WI</state>
+      <vote_cast>Nay</vote_cast>
+      <lis_member_id>S354</lis_member_id>
+    </member>
+    <member>
+      <member_full>Barrasso (R-WY)</member_full>
+      <last_name>Barrasso</last_name>
+      <first_name>John</first_name>
+      <party>R</party>
+      <state>WY</state>
+      <vote_cast>Yea</vote_cast>
+      <lis_member_id>S317</lis_member_id>
+    </member>
+    <member>
+      <member_full>Bennet (D-CO)</member_full>
+      <last_name>Bennet</last_name>
+      <first_name>Michael</first_name>
+      <party>D</party>
+      <state>CO</state>
+      <vote_cast>Nay</vote_cast>
+      <lis_member_id>S330</lis_member_id>
+    </member>
+    <member>
+      <member_full>Blackburn (R-TN)</member_full>
+      <last_name>Blackburn</last_name>
+      <first_name>Marsha</first_name>
+      <party>R</party>
+      <state>TN</state>
+      <vote_cast>Yea</vote_cast>
+      <lis_member_id>S396</lis_member_id>
+    </member>
+    <member>
+      <member_full>Blumenthal (D-CT)</member_full>
+      <last_name>Blumenthal</last_name>
+      <first_name>Richard</first_name>
+      <party>D</party>
+      <state>CT</state>
+      <vote_cast>Nay</vote_cast>
+      <lis_member_id>S341</lis_member_id>
+    </member>
+    <member>
+      <member_full>Booker (D-NJ)</member_full>
+      <last_name>Booker</last_name>
+      <first_name>Cory</first_name>
+      <party>D</party>
+      <state>NJ</state>
+      <vote_cast>Nay</vote_cast>
+      <lis_member_id>S370</lis_member_id>
+    </member>
+  </members>
+</roll_call_vote>

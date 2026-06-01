@@ -1,7 +1,7 @@
 # Agent Protocol
 
 **Server:** congressgov-mcp-server
-**Version:** 0.3.25
+**Version:** 0.3.26
 **Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.9.16`
 **Engines:** Bun ≥1.3.0, Node ≥24.0.0
 **MCP SDK:** `@modelcontextprotocol/sdk` ^1.29.0
@@ -68,7 +68,7 @@ Tailor suggestions to what's actually missing or stale — don't recite the full
 | `congressgov_enacted_laws` | Browse enacted public and private laws by congress |
 | `congressgov_member_lookup` | Discover members by state/district/congress, retrieve legislative portfolios |
 | `congressgov_committee_lookup` | Browse committees and retrieve legislation, reports, nominations |
-| `congressgov_roll_votes` | Retrieve House roll call votes and member voting positions |
+| `congressgov_roll_votes` | Retrieve House and Senate roll call votes and member voting positions |
 | `congressgov_senate_nominations` | Browse presidential nominations, track Senate confirmation pipeline |
 | `congressgov_bill_summaries` | Browse recent CRS bill summaries — the "what's happening" feed |
 | `congressgov_crs_reports` | Browse and retrieve nonpartisan CRS policy analysis reports |
@@ -105,6 +105,10 @@ src/
     congress-api/
       congress-api-service.ts           # API client — auth, pagination, rate limiting
       types.ts                          # API response types
+    senate-lis/
+      senate-vote-service.ts            # Senate LIS XML client — fetch, retry, not-found
+      parse.ts                          # pure XML → domain parsers (fast-xml-parser)
+      types.ts                          # Senate vote domain types
   mcp-server/
     tools/definitions/
       bill-lookup.tool.ts              # congressgov_bill_lookup
@@ -130,16 +134,22 @@ src/
 
 ---
 
-## Service
+## Services
 
-Single service: `CongressApiService`. Wraps the Congress.gov REST API v3.
+Two services. `CongressApiService` backs nine tools and the House branch of `congressgov_roll_votes`; `SenateVoteService` backs only the Senate branch of `congressgov_roll_votes` (the Congress.gov API exposes no Senate vote namespace).
 
-**Key concerns:**
-- API key via `?api_key=` query param (never logged)
+**`CongressApiService`** — wraps the Congress.gov REST API v3:
+- API key via `X-Api-Key` header (never logged; kept out of the URL so it can't leak in upstream error messages)
 - Pagination: `offset` + `limit` query params, max 250 per request
 - Rate limiting: 5,000 requests/hour per key
 - Response normalization: request `format=json`, return typed data
 - Native `fetch` — no SDK dependency
+
+**`SenateVoteService`** — wraps the Senate's official LIS roll-call XML feed (`senate.gov/legislative/LIS`):
+- No API key, no JSON. XML parsed via `fast-xml-parser` in `parse.ts` (pure, fixture-tested)
+- The whole session menu is one file; each vote's roster ships inline — pagination is client-side
+- The host returns HTTP 200 with an HTML page for unknown congress/session/vote, so "not found" is detected from the body, not the status code
+- Party totals are derived from the roster (the feed publishes none)
 
 **Usage in tools:**
 ```ts

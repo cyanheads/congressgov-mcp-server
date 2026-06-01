@@ -1,0 +1,115 @@
+<?xml version="1.0" encoding="UTF-8"?><roll_call_vote>
+  <congress>118</congress>
+  <session>2</session>
+  <congress_year>2024</congress_year>
+  <vote_number>1</vote_number>
+  <vote_date>January 8, 2024,  05:27 PM</vote_date>
+  <modify_date>January 30, 2024,  06:53 PM</modify_date>
+  <vote_question_text>On the Cloture Motion PN1020</vote_question_text>
+  <vote_document_text>John A. Kazen, of Texas, to be United States District Judge for the Southern District of Texas</vote_document_text>
+  <vote_result_text>Cloture Motion Agreed to (73-15)</vote_result_text>
+  <question>On the Cloture Motion</question>
+  <vote_title>Motion to Invoke Cloture: John A. Kazen to be U.S. District Judge for the Southern District of Texas</vote_title>
+  <majority_requirement>1/2</majority_requirement>
+  <vote_result>Cloture Motion Agreed to</vote_result>
+  <document>
+    <document_congress>118</document_congress>
+    <document_type>PN</document_type>
+    <document_number>1020</document_number>
+    <document_name>PN1020</document_name>
+    <document_title>John A. Kazen, of Texas, to be United States District Judge for the Southern District of Texas</document_title>
+    <document_short_title/>
+  </document>
+  <amendment>
+    <amendment_number/>
+    <amendment_to_amendment_number/>
+    <amendment_to_amendment_to_amendment_number/>
+    <amendment_to_document_number/>
+    <amendment_to_document_short_title/>
+    <amendment_purpose>No Statement of Purpose on File.</amendment_purpose>
+  </amendment>
+  <count>
+    <yeas>5</yeas>
+    <nays>2</nays>
+    <present/>
+    <absent>1</absent>
+  </count>
+  <tie_breaker>
+    <by_whom/>
+    <tie_breaker_vote/>
+  </tie_breaker>
+  <members>
+    <member>
+      <member_full>Baldwin (D-WI)</member_full>
+      <last_name>Baldwin</last_name>
+      <first_name>Tammy</first_name>
+      <party>D</party>
+      <state>WI</state>
+      <vote_cast>Yea</vote_cast>
+      <lis_member_id>S354</lis_member_id>
+    </member>
+    <member>
+      <member_full>Barrasso (R-WY)</member_full>
+      <last_name>Barrasso</last_name>
+      <first_name>John</first_name>
+      <party>R</party>
+      <state>WY</state>
+      <vote_cast>Not Voting</vote_cast>
+      <lis_member_id>S317</lis_member_id>
+    </member>
+    <member>
+      <member_full>Bennet (D-CO)</member_full>
+      <last_name>Bennet</last_name>
+      <first_name>Michael</first_name>
+      <party>D</party>
+      <state>CO</state>
+      <vote_cast>Yea</vote_cast>
+      <lis_member_id>S330</lis_member_id>
+    </member>
+    <member>
+      <member_full>Blumenthal (D-CT)</member_full>
+      <last_name>Blumenthal</last_name>
+      <first_name>Richard</first_name>
+      <party>D</party>
+      <state>CT</state>
+      <vote_cast>Yea</vote_cast>
+      <lis_member_id>S341</lis_member_id>
+    </member>
+    <member>
+      <member_full>Braun (R-IN)</member_full>
+      <last_name>Braun</last_name>
+      <first_name>Mike</first_name>
+      <party>R</party>
+      <state>IN</state>
+      <vote_cast>Nay</vote_cast>
+      <lis_member_id>S397</lis_member_id>
+    </member>
+    <member>
+      <member_full>Britt (R-AL)</member_full>
+      <last_name>Britt</last_name>
+      <first_name>Katie</first_name>
+      <party>R</party>
+      <state>AL</state>
+      <vote_cast>Nay</vote_cast>
+      <lis_member_id>S408</lis_member_id>
+    </member>
+    <member>
+      <member_full>King (I-ME)</member_full>
+      <last_name>King</last_name>
+      <first_name>Angus</first_name>
+      <party>I</party>
+      <state>ME</state>
+      <vote_cast>Yea</vote_cast>
+      <lis_member_id>S363</lis_member_id>
+    </member>
+    <member>
+      <member_full>Sanders (I-VT)</member_full>
+      <last_name>Sanders</last_name>
+      <first_name>Bernard</first_name>
+      <party>I</party>
+      <state>VT</state>
+      <vote_cast>Yea</vote_cast>
+      <lis_member_id>S313</lis_member_id>
+    </member>
+  </members>
+</roll_call_vote>

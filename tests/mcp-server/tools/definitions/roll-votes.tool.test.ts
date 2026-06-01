@@ -11,8 +11,14 @@ vi.mock('@/services/congress-api/congress-api-service.js', () => ({
   initCongressApi: vi.fn(),
 }));
 
+vi.mock('@/services/senate-lis/senate-vote-service.js', () => ({
+  getSenateVoteService: vi.fn(),
+  initSenateVoteService: vi.fn(),
+}));
+
 import { rollVotesTool } from '@/mcp-server/tools/definitions/roll-votes.tool.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
+import { getSenateVoteService } from '@/services/senate-lis/senate-vote-service.js';
 
 describe('rollVotesTool', () => {
   const mockApi = {
@@ -141,5 +147,102 @@ describe('rollVotesTool', () => {
     /** The strictly-newest 3 come from the second-page tail (rolls 300, 299, 298 by date). */
     const rolls = (result.data as Array<{ rollCallNumber: number }>).map((r) => r.rollCallNumber);
     expect(rolls[0]).toBe(300);
+  });
+
+  it("defaults chamber to 'house' and routes to the Congress.gov API", async () => {
+    const ctx = createMockContext();
+    mockApi.listVotes.mockResolvedValue({ data: [], pagination: { count: 0, nextOffset: null } });
+    const input = rollVotesTool.input.parse({ operation: 'list', congress: 118, session: 1 });
+    expect(input.chamber).toBe('house');
+    await rollVotesTool.handler(input, ctx);
+    expect(mockApi.listVotes).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('rollVotesTool — Senate chamber', () => {
+  const mockSenate = {
+    listVotes: vi.fn(),
+    getVote: vi.fn(),
+    getVoteMembers: vi.fn(),
+  };
+  const mockApi = { listVotes: vi.fn(), getVote: vi.fn(), getVoteMembers: vi.fn() };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getSenateVoteService).mockReturnValue(mockSenate as any);
+    vi.mocked(getCongressApi).mockReturnValue(mockApi as any);
+  });
+
+  it('routes list to the Senate service, not the Congress.gov API', async () => {
+    const ctx = createMockContext();
+    mockSenate.listVotes.mockResolvedValue({
+      chamber: 'senate',
+      data: [{ chamber: 'senate', voteNumber: 339 }],
+      pagination: { count: 339, nextOffset: 20 },
+    });
+    const input = rollVotesTool.input.parse({
+      operation: 'list',
+      chamber: 'senate',
+      congress: 118,
+      session: 2,
+    });
+    const result = await rollVotesTool.handler(input, ctx);
+    expect(mockSenate.listVotes).toHaveBeenCalledTimes(1);
+    expect(mockApi.listVotes).not.toHaveBeenCalled();
+    expect(result.data).toHaveLength(1);
+    expect(result.pagination?.count).toBe(339);
+  });
+
+  it('gets a specific Senate vote', async () => {
+    const ctx = createMockContext();
+    mockSenate.getVote.mockResolvedValue({
+      chamber: 'senate',
+      vote: { chamber: 'senate', voteNumber: 1, voteResult: 'Cloture Motion Agreed to' },
+    });
+    const input = rollVotesTool.input.parse({
+      operation: 'get',
+      chamber: 'senate',
+      congress: 118,
+      session: 2,
+      voteNumber: 1,
+    });
+    const result = await rollVotesTool.handler(input, ctx);
+    expect(mockSenate.getVote).toHaveBeenCalledWith(
+      { congress: 118, session: 2, voteNumber: 1 },
+      ctx,
+    );
+    expect((result.vote as { voteNumber: number }).voteNumber).toBe(1);
+  });
+
+  it('returns the Senate roster for members', async () => {
+    const ctx = createMockContext();
+    mockSenate.getVoteMembers.mockResolvedValue({
+      chamber: 'senate',
+      data: [{ chamber: 'senate', memberFull: 'Baldwin (D-WI)', voteCast: 'Yea' }],
+      vote: { chamber: 'senate', voteNumber: 1 },
+      pagination: { count: 100, nextOffset: 20 },
+    });
+    const input = rollVotesTool.input.parse({
+      operation: 'members',
+      chamber: 'senate',
+      congress: 118,
+      session: 2,
+      voteNumber: 1,
+    });
+    const result = await rollVotesTool.handler(input, ctx);
+    expect(result.data).toHaveLength(1);
+    expect(result.vote).toBeDefined();
+  });
+
+  it('throws when get/members is missing voteNumber', async () => {
+    const ctx = createMockContext();
+    const input = rollVotesTool.input.parse({
+      operation: 'members',
+      chamber: 'senate',
+      congress: 118,
+      session: 2,
+    });
+    await expect(rollVotesTool.handler(input, ctx)).rejects.toThrow(/voteNumber/);
+    expect(mockSenate.getVoteMembers).not.toHaveBeenCalled();
   });
 });

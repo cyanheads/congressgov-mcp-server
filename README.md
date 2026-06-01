@@ -7,7 +7,7 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-0.3.25-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/congressgov-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.29.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/congressgov-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/congressgov-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^6.0.3-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.2-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-0.3.26-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/congressgov-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.29.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/congressgov-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/congressgov-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^6.0.3-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.2-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -37,7 +37,7 @@ Ten read-only tools for querying U.S. legislative data:
 | `congressgov_enacted_laws` | Browse enacted public and private laws by congress |
 | `congressgov_member_lookup` | Discover congressional members by state/district/congress, retrieve legislative portfolios |
 | `congressgov_committee_lookup` | Browse congressional committees and their legislation, reports, and nominations |
-| `congressgov_roll_votes` | Retrieve House roll call vote data and individual member voting positions |
+| `congressgov_roll_votes` | Retrieve House and Senate roll call votes and individual member voting positions |
 | `congressgov_senate_nominations` | Browse presidential nominations to federal positions and track the Senate confirmation process |
 | `congressgov_bill_summaries` | Browse recent CRS bill summaries — the "what's happening" feed |
 | `congressgov_crs_reports` | Browse and retrieve nonpartisan CRS policy analysis reports |
@@ -78,11 +78,12 @@ Browse congressional committees and their legislation, reports, and nominations.
 
 ### `congressgov_roll_votes`
 
-Retrieve House roll call vote data and individual member voting positions.
+Retrieve House and Senate roll call votes and individual member voting positions.
 
-- Browse roll call votes by congress and session
-- Retrieve individual member voting positions per roll call
-- `list` defaults to `order='recent'` (newest update-date first); pass `order='oldest'` for ascending
+- Set `chamber` to `house` (default, from the Congress.gov API) or `senate` (from the Senate's official LIS feed — the API exposes no Senate votes)
+- `list` browses votes by congress and session, newest first; pass `order='oldest'` for ascending
+- `get` returns the question, result, tallies, party breakdown, and associated bill/nomination/amendment
+- `members` returns each member's recorded position
 
 ---
 

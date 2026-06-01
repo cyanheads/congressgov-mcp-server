@@ -949,6 +949,205 @@ function renderVoteMembers(result: Record<string, unknown>): string {
   return lines.join('\n');
 }
 
+// ── Senate roll call votes (LIS feed) ───────────────────────────────
+
+/**
+ * Senate vote payloads come from the LIS XML feed, not the Congress.gov JSON API,
+ * so they carry a distinct field set (and a `chamber: 'senate'` marker). These
+ * renderers handle that shape; `formatVotes` routes to them via `isSenateResult`.
+ */
+
+/** Senate vote list row (from the session menu). */
+function renderSenateVoteItem(item: Record<string, unknown>, i: number): string {
+  const num = s(item, 'voteNumber');
+  const issue = s(item, 'issue');
+  const result = s(item, 'result');
+  const question = s(item, 'question');
+  const measure = s(item, 'measure');
+
+  const left = num ? `Vote ${num}` : 'Senate vote';
+  const headingLeft = issue ? `${left}: ${issue}` : left;
+  const heading = result ? `${headingLeft} — ${result}` : headingLeft;
+  const lines = [`### ${i + 1}. ${heading}`];
+
+  if (question) lines.push(`**Question:** ${measure ? `${question} (${measure})` : question}`);
+
+  const meta = join([
+    f('Date', s(item, 'voteDate')),
+    f('Yeas', s(item, 'yeas')),
+    f('Nays', s(item, 'nays')),
+  ]);
+  if (meta) lines.push(meta);
+
+  const title = s(item, 'title');
+  if (title) lines.push(title);
+  return lines.join('\n');
+}
+
+/** One Senate member's position — uses the feed's pre-formatted "Baldwin (D-WI)" label. */
+function renderSenateMemberRow(r: Record<string, unknown>): string {
+  const cast = s(r, 'voteCast');
+  const full = s(r, 'memberFull');
+  if (full) return `- ${full}${cast ? ` → ${cast}` : ''}`;
+
+  const first = s(r, 'firstName');
+  const last = s(r, 'lastName');
+  const name = first && last ? `${first} ${last}` : (last ?? first ?? s(r, 'lisMemberId') ?? '?');
+  const party = s(r, 'party');
+  const state = s(r, 'state');
+  const loc =
+    party && state
+      ? `(${party}-${state})`
+      : party
+        ? `(${party})`
+        : state
+          ? `(${state})`
+          : undefined;
+  return `- ${[name, loc, cast ? `→ ${cast}` : undefined].filter(Boolean).join(' ')}`;
+}
+
+/** Senate vote detail — question, result, tally, derived party totals, document/amendment. */
+function renderSenateVoteDetail(item: Record<string, unknown>): string {
+  const num = s(item, 'voteNumber');
+  const resultText = s(item, 'voteResultText') ?? s(item, 'voteResult');
+
+  const headingLeft = num ? `Senate Vote ${num}` : 'Senate roll call';
+  const heading = resultText ? `${headingLeft} — ${resultText}` : headingLeft;
+  const lines = [`# ${heading}`];
+
+  const questionText = s(item, 'voteQuestionText') ?? s(item, 'question');
+  if (questionText) lines.push(`**Question:** ${questionText}`);
+  const voteTitle = s(item, 'voteTitle');
+  if (voteTitle) lines.push(`**Title:** ${voteTitle}`);
+
+  const meta = join([
+    f('Congress', s(item, 'congress')),
+    f('Session', s(item, 'session')),
+    f('Date', s(item, 'voteDate')),
+    f('Majority Required', s(item, 'majorityRequirement')),
+  ]);
+  if (meta) lines.push(meta);
+
+  const count = item.count as Record<string, unknown> | undefined;
+  if (count) {
+    lines.push(
+      `\n**Tally:** ${join(
+        [
+          `Yea ${s(count, 'yeas') ?? 0}`,
+          `Nay ${s(count, 'nays') ?? 0}`,
+          `Present ${s(count, 'present') ?? 0}`,
+          `Not Voting ${s(count, 'absent') ?? 0}`,
+        ],
+        ' · ',
+      )}`,
+    );
+  }
+
+  const totals = item.partyTotals;
+  if (Array.isArray(totals) && totals.length > 0) {
+    lines.push('\n**Party Totals** _(derived from the roster)_:');
+    for (const t of totals as Record<string, unknown>[]) {
+      const party = s(t, 'party') ?? '?';
+      lines.push(
+        `- **${party}:** Yea ${s(t, 'yea') ?? 0}, Nay ${s(t, 'nay') ?? 0}, Present ${s(t, 'present') ?? 0}, Not Voting ${s(t, 'notVoting') ?? 0}`,
+      );
+    }
+  }
+
+  const doc = item.document as Record<string, unknown> | undefined;
+  const docTitle = doc ? (s(doc, 'title') ?? s(doc, 'shortTitle')) : undefined;
+  if (doc) {
+    const parts = [s(doc, 'type'), s(doc, 'name') ?? s(doc, 'number'), docTitle].filter(Boolean);
+    if (parts.length) lines.push(`\n**Document:** ${parts.join(' — ')}`);
+  }
+
+  const amd = item.amendment as Record<string, unknown> | undefined;
+  let amendmentPurpose: string | undefined;
+  if (amd) {
+    const amdNum = s(amd, 'number');
+    const to = s(amd, 'toDocumentNumber');
+    amendmentPurpose = s(amd, 'purpose');
+    const head = [amdNum, to ? `to ${to}` : undefined].filter(Boolean).join(' ');
+    if (head) lines.push(`\n**Amendment:** ${head}`);
+    if (amendmentPurpose) lines.push(`**Purpose:** ${amendmentPurpose}`);
+  }
+
+  /** Surface the matter narrative only when it adds something the document title and
+   * amendment purpose haven't already shown. */
+  const docText = s(item, 'voteDocumentText');
+  if (docText && docText !== amendmentPurpose && docText !== docTitle) lines.push(`\n${docText}`);
+
+  return lines.join('\n');
+}
+
+/** Senate member voting positions for one roll call — mirrors the House members view. */
+function renderSenateVoteMembers(result: Record<string, unknown>): string {
+  const vote = (result.vote ?? {}) as Record<string, unknown>;
+  const rows = (result.data ?? []) as unknown[];
+  const pagination = result.pagination as Record<string, unknown> | undefined;
+  const total = (pagination?.count as number) ?? rows.length;
+  const nextOffset = pagination?.nextOffset as number | null | undefined;
+
+  const num = s(vote, 'voteNumber');
+  const congress = s(vote, 'congress');
+  const session = s(vote, 'session');
+  const label = num ? `Senate Vote ${num}` : 'Senate roll call';
+  const scope = join(
+    [congress ? `${congress}th Congress` : undefined, session ? `session ${session}` : undefined],
+    ', ',
+  );
+  const lines = [`# ${scope ? `${label} — ${scope}` : label}`];
+
+  const context = join(
+    [
+      s(vote, 'voteQuestionText')
+        ? `**${s(vote, 'voteQuestionText')}**`
+        : s(vote, 'question')
+          ? `**${s(vote, 'question')}**`
+          : undefined,
+      s(vote, 'voteResultText') ?? s(vote, 'voteResult'),
+    ],
+    ' — ',
+  );
+  if (context) lines.push(context);
+
+  if (rows.length === 0) {
+    lines.push(
+      '',
+      total > 0
+        ? `_Page is empty — offset is past the end of ${total} member position${total !== 1 ? 's' : ''}._`
+        : '_No member positions recorded for this roll call._',
+    );
+    return lines.join('\n');
+  }
+
+  const end = nextOffset ?? total;
+  const start = end - rows.length + 1;
+  lines.push(
+    '',
+    `**Members ${start}–${end} of ${total}**${nextOffset != null ? ` · next offset: ${nextOffset}` : ''}`,
+    '',
+  );
+  for (const r of rows) {
+    if (typeof r === 'object' && r !== null)
+      lines.push(renderSenateMemberRow(r as Record<string, unknown>));
+  }
+  return lines.join('\n');
+}
+
+/** Senate payloads carry a `chamber: 'senate'` marker on the envelope, vote, and items. */
+function isSenateResult(result: Record<string, unknown>): boolean {
+  if (result.chamber === 'senate') return true;
+  const vote = result.vote as Record<string, unknown> | undefined;
+  if (vote?.chamber === 'senate') return true;
+  const first = Array.isArray(result.data) ? result.data[0] : undefined;
+  return !!(
+    first &&
+    typeof first === 'object' &&
+    (first as Record<string, unknown>).chamber === 'senate'
+  );
+}
+
 /** Bill / law detail — title-first header, then the rest of the structured fields. */
 function renderBillDetail(item: Record<string, unknown>): string {
   const type = s(item, 'type')?.toUpperCase() ?? '';
@@ -1347,12 +1546,24 @@ export function formatDailyRecord(result: Record<string, unknown>): TextBlock[] 
 /** Enacted public and private laws. Upstream /law mirrors /bill, so reuse bill formatters. */
 export const formatLaws = makeFormatter(['law'], renderBillItem, renderBillDetail);
 
-/** House roll call votes and member voting positions. */
+/**
+ * Roll call votes and member voting positions for both chambers. House payloads
+ * come from the Congress.gov JSON API; Senate payloads from the LIS XML feed and
+ * carry a `chamber: 'senate'` marker — dispatch to the matching renderer set.
+ */
 export function formatVotes(result: Record<string, unknown>): TextBlock[] {
+  const senate = isSenateResult(result);
   /** `members`: roster in `data[]` with the vote record as a sibling context object. */
-  if (Array.isArray(result.data) && result.vote != null) return tb(renderVoteMembers(result));
-  if (Array.isArray(result.data)) return tb(renderList(result, renderRollVoteItem));
-  if (result.vote != null) return tb(renderRollVoteDetail(result.vote as Record<string, unknown>));
+  if (Array.isArray(result.data) && result.vote != null)
+    return tb(senate ? renderSenateVoteMembers(result) : renderVoteMembers(result));
+  if (Array.isArray(result.data))
+    return tb(renderList(result, senate ? renderSenateVoteItem : renderRollVoteItem));
+  if (result.vote != null)
+    return tb(
+      senate
+        ? renderSenateVoteDetail(result.vote as Record<string, unknown>)
+        : renderRollVoteDetail(result.vote as Record<string, unknown>),
+    );
   return tb(renderDetail(result));
 }
 

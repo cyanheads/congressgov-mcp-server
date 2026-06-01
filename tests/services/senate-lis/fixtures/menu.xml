@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?><vote_summary>
+  <congress>118</congress>
+  <session>2</session>
+  <congress_year>2024</congress_year>
+  <votes>
+    <vote>
+      <vote_number>00339</vote_number>
+      <vote_date>21-Dec</vote_date>
+      <issue>H.R. 10545</issue>
+      <question>On Passage of the Bill
+         </question>
+      <result>Passed</result>
+      <vote_tally>
+        <yeas>85</yeas>
+        <nays>11</nays>
+      </vote_tally>
+      <title>H.R. 10545; A bill making further continuing appropriations for the fiscal year ending September 30, 2025, and for other purposes.</title>
+    </vote>
+    <vote>
+      <vote_number>00337</vote_number>
+      <vote_date>20-Dec</vote_date>
+      <issue>H.R. 82</issue>
+      <question>On the Motion
+         </question>
+      <result>Agreed to</result>
+      <vote_tally>
+        <yeas>66</yeas>
+        <nays>30</nays>
+      </vote_tally>
+      <title>Motion to Waive All Applicable Budgetary Discipline Re: H.R. 82; A bill to amend title II of the Social Security Act to repeal the Government pension offset and windfall elimination provisions.</title>
+    </vote>
+    <vote>
+      <vote_number>00336</vote_number>
+      <vote_date>20-Dec</vote_date>
+      <issue>H.R. 82</issue>
+      <question>On the Amendment
+        <measure>S.Amdt. 3331</measure></question>
+      <result>Rejected</result>
+      <vote_tally>
+        <yeas>34</yeas>
+        <nays>62</nays>
+      </vote_tally>
+      <title>Crapo Amdt. No. 3331; To delay the repeal of the Government pension offset and windfall elimination provisions until additional changes are made to offset any negative impacts on the actuarial balance of the Social Security Trust Funds.</title>
+    </vote>
+    <vote>
+      <vote_number>00001</vote_number>
+      <vote_date>08-Jan</vote_date>
+      <issue>PN1020</issue>
+      <question>On the Cloture Motion
+         </question>
+      <result>Agreed to</result>
+      <vote_tally>
+        <yeas>73</yeas>
+        <nays>15</nays>
+      </vote_tally>
+      <title>Motion to Invoke Cloture: John A. Kazen to be U.S. District Judge for the Southern District of Texas</title>
+    </vote>
+  </votes>
+</vote_summary>

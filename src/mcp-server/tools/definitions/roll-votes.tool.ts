@@ -1,5 +1,7 @@
 /**
- * @fileoverview Tool for retrieving House roll call vote data and member voting positions.
+ * @fileoverview Tool for retrieving House and Senate roll call vote data and member
+ * voting positions. House votes come from the Congress.gov API; Senate votes from the
+ * Senate's official LIS XML feed (the API exposes no Senate vote namespace).
  * @module mcp-server/tools/definitions/roll-votes
  */
 
@@ -15,13 +17,20 @@ import {
   listOrDetail,
 } from '@/mcp-server/tools/tool-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
+import { getSenateVoteService } from '@/services/senate-lis/senate-vote-service.js';
 
 export const rollVotesTool = tool('congressgov_roll_votes', {
-  description: `Retrieve House roll call vote data and individual member voting positions — House-only, as Senate vote data is not yet in the Congress.gov API. Use 'list' to find votes by congress and session (defaults to most-recently-updated first), 'get' for vote details (question, result, associated bill), or 'members' for how each representative voted.`,
+  description: `Retrieve U.S. congressional roll call votes and individual member voting positions for either chamber. Set 'chamber' to 'house' (default, from the Congress.gov API) or 'senate' (from the Senate's official LIS feed). Use 'list' to find votes by congress and session (newest first by default), 'get' for vote details (question, result, tallies, party breakdown, associated bill/nomination/amendment), or 'members' for how each member voted.`,
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
   errors: congressErrorContracts,
   input: z.object({
     operation: z.enum(['list', 'get', 'members']).describe('Which data to retrieve.'),
+    chamber: z
+      .enum(['house', 'senate'])
+      .default('house')
+      .describe(
+        "Chamber whose votes to query. 'house' (default) draws from the Congress.gov API; 'senate' draws from the Senate's official LIS roll-call feed. Roll call numbers reset each session and are specific to one chamber.",
+      ),
     congress: z.number().int().positive().describe('Congress number.'),
     session: z
       .number()
@@ -39,7 +48,7 @@ export const rollVotesTool = tool('congressgov_roll_votes', {
       .enum(['recent', 'oldest'])
       .default('recent')
       .describe(
-        "Sort order for 'list', by vote update date. 'recent' (default) returns newest first; 'oldest' returns ascending. With 'recent', offset=0 always returns the strictly newest page. Ignored by 'get' and 'members'.",
+        "Sort order for 'list'. 'recent' (default) returns newest first; 'oldest' returns ascending. House sorts by vote update date (with 'recent', offset=0 always returns the strictly newest page); Senate sorts by roll call number. Ignored by 'get' and 'members'.",
       ),
     limit: z.number().int().min(1).max(250).default(20).describe('Results per page (1-250).'),
     offset: z.number().int().min(0).default(0).describe('Pagination offset.'),
@@ -52,6 +61,10 @@ export const rollVotesTool = tool('congressgov_roll_votes', {
   format: formatVotes,
 
   async handler(input, ctx) {
+    if (input.chamber === 'senate') {
+      return handleSenateVotes(input, ctx);
+    }
+
     const api = getCongressApi();
 
     if (input.operation === 'list') {
@@ -129,6 +142,90 @@ export const rollVotesTool = tool('congressgov_roll_votes', {
     return result;
   },
 });
+
+type SenateVoteInput = {
+  operation: 'list' | 'get' | 'members';
+  congress: number;
+  session: number;
+  voteNumber?: number | undefined;
+  order: 'recent' | 'oldest';
+  limit: number;
+  offset: number;
+};
+
+/**
+ * Senate branch of `congressgov_roll_votes`. Mirrors the House operation surface
+ * (`list` / `get` / `members`) but sources data from the Senate LIS XML feed via
+ * `SenateVoteService`. The feed serves a whole session's menu in one file and each
+ * vote's roster inline, so pagination is client-side (handled in the service).
+ */
+async function handleSenateVotes(input: SenateVoteInput, ctx: Context) {
+  const senate = getSenateVoteService();
+
+  if (input.operation === 'list') {
+    const result = await senate.listVotes(
+      {
+        congress: input.congress,
+        session: input.session,
+        order: input.order,
+        limit: input.limit,
+        offset: input.offset,
+      },
+      ctx,
+    );
+    ctx.log.info('Senate votes listed', { congress: input.congress, session: input.session });
+    ctx.enrich.echo(
+      buildEffectiveQuery('Senate roll call votes', {
+        congress: input.congress,
+        session: input.session,
+      }),
+    );
+    ctx.enrich.total(result.pagination.count);
+    if (result.data.length === 0) {
+      ctx.enrich.notice(
+        'No Senate votes found. Verify the congress and session — the Senate publishes roll call votes from the 101st Congress (1989) onward.',
+      );
+    }
+    return result;
+  }
+
+  if (!input.voteNumber) {
+    throw validationError(
+      `The '${input.operation}' operation requires voteNumber. Use 'list' to browse available votes.`,
+      { field: 'voteNumber', operation: input.operation },
+    );
+  }
+
+  const voteParams = {
+    congress: input.congress,
+    session: input.session,
+    voteNumber: input.voteNumber,
+  };
+
+  if (input.operation === 'members') {
+    const result = await senate.getVoteMembers(
+      { ...voteParams, limit: input.limit, offset: input.offset },
+      ctx,
+    );
+    ctx.log.info('Senate vote retrieved', { ...voteParams, operation: input.operation });
+    ctx.enrich.echo(
+      `member votes for Senate roll ${input.voteNumber} in the ${input.congress}th Congress, session ${input.session}`,
+    );
+    ctx.enrich.total(result.pagination.count);
+    if (result.data.length === 0) {
+      ctx.enrich.notice(`No member vote records found for Senate roll ${input.voteNumber}.`);
+    }
+    return result;
+  }
+
+  const result = await senate.getVote(voteParams, ctx);
+  ctx.log.info('Senate vote retrieved', { ...voteParams, operation: input.operation });
+  ctx.enrich.echo(
+    `Senate roll call ${input.voteNumber} in the ${input.congress}th Congress, session ${input.session}`,
+  );
+  ctx.enrich.total(1);
+  return result;
+}
 
 /**
  * Fetch roll call votes in strict newest-first order. The /house-vote/{c}/{s}
