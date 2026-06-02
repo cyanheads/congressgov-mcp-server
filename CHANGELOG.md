@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.3.28](changelog/0.3.x/0.3.28.md) — 2026-06-02
+
+adopt @cyanheads/mcp-ts-core 0.9.21 — per-request log context fix, secret-scrubbing in fetchWithTimeout, withRetry fail-fast on non-retryable errors
+
 ## [0.3.27](changelog/0.3.x/0.3.27.md) — 2026-05-31
 
 committee_lookup: filter param on list for name→code resolution; actionable not-found errors with code-shape hint and list redirect; whitespace guard rejects names passed as committeeCode

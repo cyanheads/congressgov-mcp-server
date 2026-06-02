@@ -1,8 +1,8 @@
 # Agent Protocol
 
 **Server:** congressgov-mcp-server
-**Version:** 0.3.27
-**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.9.16`
+**Version:** 0.3.28
+**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.9.21`
 **Engines:** Bun ≥1.3.0, Node ≥24.0.0
 **MCP SDK:** `@modelcontextprotocol/sdk` ^1.29.0
 **Zod:** ^4.4.3
@@ -239,11 +239,13 @@ Available skills:
 | `api-errors` | McpError, JsonRpcErrorCode, error patterns |
 | `api-linter` | MCP definition linter rules reference — look up `format-parity`, `schema-*`, `name-*`, `server-json-*` diagnostics |
 | `api-canvas` | DataCanvas: register tabular data, run SQL, export, plus the `spillover()` helper — Tier 3 opt-in |
+| `api-mirror` | MirrorService: persistent local SQLite mirror of bulk upstream datasets — Tier 3 opt-in |
 | `api-services` | LLM, Speech, Graph services |
 | `api-telemetry` | OTel catalog: spans, metrics, completion logs, env config, cardinality rules |
 | `api-testing` | createMockContext, test patterns |
 | `api-utils` | Formatting, parsing, security, pagination, scheduling, telemetry helpers |
 | `api-workers` | Cloudflare Workers runtime |
+| `orchestrations` | Multi-server pipeline workflows — phase tables, gate patterns, fanout orchestration |
 
 When you complete a skill's checklist, check the boxes and add a completion timestamp at the end (e.g., `Completed: 2026-03-11`).
 
@@ -266,6 +268,7 @@ When you complete a skill's checklist, check the boxes and add a completion time
 | `bun run bundle` | Build and pack as `.mcpb` for one-click Claude Desktop install |
 | `bun run changelog:build` | Regenerate `CHANGELOG.md` from `changelog/*.md` |
 | `bun run changelog:check` | Verify `CHANGELOG.md` is in sync (used by devcheck) |
+| `bun run release:github` | Create GitHub Release from the current annotated tag |
 | `bun run test` | Run tests |
 | `bun run dev:stdio` | Dev mode (stdio) |
 | `bun run dev:http` | Dev mode (HTTP) |
