@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.3.29](changelog/0.3.x/0.3.29.md) — 2026-06-04
+
+congressgov_committee_lookup: auto-resolve name-like committeeCode inputs, schema pattern guard on malformed codes (#39)
+
 ## [0.3.28](changelog/0.3.x/0.3.28.md) — 2026-06-02
 
 adopt @cyanheads/mcp-ts-core 0.9.21 — per-request log context fix, secret-scrubbing in fetchWithTimeout, withRetry fail-fast on non-retryable errors
