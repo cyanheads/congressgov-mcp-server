@@ -106,7 +106,7 @@ function inferChamberFromCode(code: string): Chamber | undefined {
 }
 
 export const committeeLookupTool = tool('congressgov_committee_lookup', {
-  description: `Browse congressional committees and their legislation, reports, and nominations. Committee codes follow the pattern chamber-prefix (h/s/j) + abbreviation + number — use 'list' (with optional 'filter' for name→code resolution) to discover codes, then 'get' or drill into 'bills', 'reports', or 'nominations' ('nominations' is Senate-only). 'get' and sub-resources only need committeeCode (chamber is inferred from the prefix); pass chamber explicitly to override. The 'bills' sub-resource defaults to 'recent' order (newest update-date first); pass order='oldest' for ascending update-date order. Upstream omits bill titles from the 'bills' sub-resource — rows carry only {congress, billType, billNumber, actionDate, relationshipType, url}; chain 'congressgov_bill_lookup get' per row to retrieve titles and policy area.`,
+  description: `Browse congressional committees and their legislation, reports, and nominations. Committee codes follow the pattern chamber-prefix (h/s/j) + abbreviation + 2-digit number — use 'list' (with optional 'filter' for name→code resolution) to discover codes, then 'get' or drill into 'bills', 'reports', or 'nominations' ('nominations' is Senate-only). 'get' and sub-resources only need committeeCode (chamber is inferred from the prefix); pass chamber explicitly to override. The 'bills' sub-resource defaults to 'recent' order (newest update-date first); pass order='oldest' for ascending update-date order. Upstream omits bill titles from the 'bills' sub-resource — rows carry only {congress, billType, billNumber, actionDate, relationshipType, url}; chain 'congressgov_bill_lookup get' per row to retrieve titles and policy area.`,
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
   errors: congressErrorContracts,
   input: z.object({
@@ -122,8 +122,14 @@ export const committeeLookupTool = tool('congressgov_committee_lookup', {
       ),
     committeeCode: z
       .string()
+      .regex(
+        /^([a-z]{2,6}\d{2}|.*\s.*)$/,
+        "Committee codes are lowercase letters + a 2-digit suffix (e.g. 'hsju00'). Use operation:'list' with filter to resolve a name to its code.",
+      )
       .optional()
-      .describe("Committee system code (e.g., 'hsju00'). Required for get and sub-resources."),
+      .describe(
+        "Committee system code, e.g. 'hsju00'. Required for 'get' and sub-resources. Codes are lowercase letters + 2-digit suffix. Pass a committee name here and the tool will attempt to resolve it automatically — or use operation:'list' with filter to browse.",
+      ),
     // Provisional param name — tracking fleet-wide convention in cyanheads/mcp-ts-core#186.
     filter: z
       .string()
@@ -198,26 +204,57 @@ export const committeeLookupTool = tool('congressgov_committee_lookup', {
       );
     }
 
-    // Pre-validate: a committeeCode containing whitespace is a name, not a code.
-    if (/\s/.test(input.committeeCode)) {
-      throw validationError(
-        `committeeCode '${input.committeeCode}' contains whitespace — that looks like a committee name, not a code. Committee system codes look like \`hspw00\` (chamber prefix + abbreviation + digits). Use \`operation: 'list'\` with \`filter\` to find the code for a committee by name.`,
-        { field: 'committeeCode', committeeCode: input.committeeCode },
+    // Name-like input: a committeeCode containing whitespace looks like a committee name.
+    // Attempt to auto-resolve via the same primary (all-token) match the 'list' + filter
+    // path uses, restricted to parent committees (systemCode ending '00').
+    let committeeCode = input.committeeCode;
+    if (/\s/.test(committeeCode)) {
+      const all = await api.listCommittees({ limit: 250, offset: 0 }, ctx);
+      const parents = (all.data as ApiRecord[]).filter(
+        (c) => typeof c.systemCode === 'string' && c.systemCode.endsWith('00'),
       );
+      const matches = filterCommittees(parents, committeeCode);
+
+      if (matches.length !== 1) {
+        // Zero or multiple — return candidates so the caller can choose.
+        const notice =
+          matches.length === 0
+            ? `No committee matched '${committeeCode}'. Use operation:'list' with filter to browse.`
+            : `'${committeeCode}' matched ${matches.length} committees. Use the systemCode from one of these results, or narrow your name.`;
+        ctx.enrich.notice(notice);
+        ctx.enrich.total(matches.length);
+        ctx.log.info('Committee name resolution — candidates returned', {
+          name: committeeCode,
+          count: matches.length,
+        });
+        return { data: matches, pagination: { count: matches.length, nextOffset: null } };
+      }
+
+      // Exactly one match — proceed with the resolved code.
+      const resolved = matches[0] as ApiRecord;
+      const resolvedCode = resolved.systemCode as string;
+      ctx.log.info('Committee name resolved', {
+        name: committeeCode,
+        resolvedCode,
+      });
+      ctx.enrich.notice(
+        `Resolved '${committeeCode}' → ${resolvedCode} (${resolved.name as string})`,
+      );
+      committeeCode = resolvedCode;
     }
 
-    const chamber = input.chamber ?? inferChamberFromCode(input.committeeCode);
+    const chamber = input.chamber ?? inferChamberFromCode(committeeCode);
     if (!chamber) {
       throw validationError(
-        `Could not infer chamber from committeeCode '${input.committeeCode}'. Pass chamber explicitly ('house', 'senate', or 'joint').`,
-        { field: 'committeeCode', committeeCode: input.committeeCode },
+        `Could not infer chamber from committeeCode '${committeeCode}'. Pass chamber explicitly ('house', 'senate', or 'joint').`,
+        { field: 'committeeCode', committeeCode },
       );
     }
 
     if (input.operation === 'get') {
-      const result = await api.getCommittee(chamber, input.committeeCode, ctx);
-      ctx.log.info('Committee retrieved', { committeeCode: input.committeeCode });
-      ctx.enrich.echo(`committee ${input.committeeCode}`);
+      const result = await api.getCommittee(chamber, committeeCode, ctx);
+      ctx.log.info('Committee retrieved', { committeeCode });
+      ctx.enrich.echo(`committee ${committeeCode}`);
       ctx.enrich.total(1);
       return result;
     }
@@ -233,23 +270,23 @@ export const committeeLookupTool = tool('congressgov_committee_lookup', {
       const recentResult = await fetchCommitteeBillsRecent(
         {
           chamber,
-          committeeCode: input.committeeCode,
+          committeeCode,
           limit: input.limit,
           offset: input.offset,
         },
         ctx,
       );
-      ctx.enrich.echo(`bills for committee ${input.committeeCode} (recent order)`);
+      ctx.enrich.echo(`bills for committee ${committeeCode} (recent order)`);
       ctx.enrich.total(recentResult.pagination.count);
       if (recentResult.data.length === 0)
-        ctx.enrich.notice(`No bills found for committee ${input.committeeCode}.`);
+        ctx.enrich.notice(`No bills found for committee ${committeeCode}.`);
       return recentResult;
     }
 
     const result = await api.getCommitteeSubResource(
       {
         chamber,
-        committeeCode: input.committeeCode,
+        committeeCode,
         subResource: input.operation,
         limit: input.limit,
         offset: input.offset,
@@ -257,13 +294,13 @@ export const committeeLookupTool = tool('congressgov_committee_lookup', {
       ctx,
     );
     ctx.log.info('Committee sub-resource retrieved', {
-      committeeCode: input.committeeCode,
+      committeeCode,
       subResource: input.operation,
     });
-    ctx.enrich.echo(`${input.operation} for committee ${input.committeeCode}`);
+    ctx.enrich.echo(`${input.operation} for committee ${committeeCode}`);
     ctx.enrich.total(result.pagination.count);
     if (result.data.length === 0)
-      ctx.enrich.notice(`No ${input.operation} found for committee ${input.committeeCode}.`);
+      ctx.enrich.notice(`No ${input.operation} found for committee ${committeeCode}.`);
     return result;
   },
 });

@@ -91,27 +91,99 @@ describe('committeeLookupTool', () => {
     await expect(committeeLookupTool.handler(input, ctx)).rejects.toThrow(/requires/);
   });
 
-  it('rejects committeeCode containing whitespace before any API call', async () => {
-    const ctx = createMockContext();
-    const input = committeeLookupTool.input.parse({
-      operation: 'get',
-      committeeCode: 'house transportation',
-      chamber: 'house',
-    });
-    await expect(committeeLookupTool.handler(input, ctx)).rejects.toMatchObject({
-      message: expect.stringMatching(/whitespace|name.*not.*code|list.*filter/i),
-    });
-    expect(mockApi.getCommittee).not.toHaveBeenCalled();
+  // ── #39: committeeCode auto-resolve + schema pattern guard ───────────────────
+
+  it('rejects malformed non-whitespace codes at schema parse time', () => {
+    // ssbk (no digit suffix) fails the pattern /^([a-z]{2,6}\d{2}|.*\s.*)$/
+    expect(() =>
+      committeeLookupTool.input.parse({
+        operation: 'get',
+        committeeCode: 'ssbk',
+      }),
+    ).toThrow();
   });
 
-  it('whitespace rejection message mentions list operation', async () => {
-    const ctx = createMockContext();
-    const input = committeeLookupTool.input.parse({
-      operation: 'get',
-      committeeCode: 'house armed services',
-      chamber: 'house',
+  describe('committeeCode auto-resolve for name-like input', () => {
+    const PARENT_COMMITTEES = [
+      {
+        name: 'Transportation and Infrastructure Committee',
+        systemCode: 'hspw00',
+        chamber: 'house',
+      },
+      { name: 'Judiciary Committee', systemCode: 'hsju00', chamber: 'house' },
+      { name: 'Armed Services Committee', systemCode: 'hsas00', chamber: 'house' },
+      { name: 'Senate Banking Committee', systemCode: 'ssbk00', chamber: 'senate' },
+      { name: 'Senate Finance Committee', systemCode: 'ssfi00', chamber: 'senate' },
+      {
+        name: 'Senate Small Business and Entrepreneurship',
+        systemCode: 'sssb00',
+        chamber: 'senate',
+      },
+      // Subcommittee — excluded from parent-only filter (systemCode does not end '00')
+      {
+        name: 'Coast Guard and Maritime Transportation Subcommittee',
+        systemCode: 'hspw07',
+        chamber: 'house',
+      },
+    ];
+
+    beforeEach(() => {
+      mockApi.listCommittees.mockResolvedValue({
+        data: PARENT_COMMITTEES,
+        pagination: { count: PARENT_COMMITTEES.length, nextOffset: null },
+      });
     });
-    await expect(committeeLookupTool.handler(input, ctx)).rejects.toThrow(/list/);
+
+    it('zero matches — returns empty candidates without calling getCommittee', async () => {
+      const ctx = createMockContext();
+      const input = committeeLookupTool.input.parse({
+        operation: 'get',
+        committeeCode: 'house zzznomatch',
+      });
+      const result = await committeeLookupTool.handler(input, ctx);
+      expect(result.data).toHaveLength(0);
+      expect(mockApi.getCommittee).not.toHaveBeenCalled();
+    });
+
+    it('one match — resolves to code and proceeds with get', async () => {
+      const ctx = createMockContext();
+      mockApi.getCommittee.mockResolvedValue({ committee: { name: 'Senate Banking Committee' } });
+      const input = committeeLookupTool.input.parse({
+        operation: 'get',
+        committeeCode: 'senate banking',
+      });
+      const result = await committeeLookupTool.handler(input, ctx);
+      expect(result.committee).toEqual({ name: 'Senate Banking Committee' });
+      expect(mockApi.getCommittee).toHaveBeenCalledWith('senate', 'ssbk00', ctx);
+    });
+
+    it('multiple matches — returns candidates without calling getCommittee', async () => {
+      const ctx = createMockContext();
+      // 'senate committee' matches both Senate Banking and Senate Small Business
+      const input = committeeLookupTool.input.parse({
+        operation: 'get',
+        committeeCode: 'senate committee',
+      });
+      const result = await committeeLookupTool.handler(input, ctx);
+      expect((result.data as unknown[]).length).toBeGreaterThan(1);
+      expect(mockApi.getCommittee).not.toHaveBeenCalled();
+    });
+
+    it('subcommittees excluded from auto-resolve candidates (parent-only filter)', async () => {
+      const ctx = createMockContext();
+      // 'maritime transportation' would match the subcommittee hspw07 but not any parent
+      mockApi.getCommittee.mockResolvedValue({
+        committee: { name: 'Transportation and Infrastructure Committee' },
+      });
+      const input = committeeLookupTool.input.parse({
+        operation: 'get',
+        committeeCode: 'transportation infrastructure',
+      });
+      const result = await committeeLookupTool.handler(input, ctx);
+      // hspw00 matches; hspw07 is excluded (not ending '00')
+      expect(mockApi.getCommittee).toHaveBeenCalledWith('house', 'hspw00', ctx);
+      expect(result.committee).toEqual({ name: 'Transportation and Infrastructure Committee' });
+    });
   });
 
   it('throws when nominations requested for non-senate committee', async () => {
