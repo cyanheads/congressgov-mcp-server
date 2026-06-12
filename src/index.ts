@@ -49,6 +49,8 @@ const withSource = <T extends AnyToolDefinition | AnyResourceDefinition | AnyPro
 ): T => ({ ...def, sourceUrl: srcUrl(kind, file) });
 
 await createApp({
+  name: 'congressgov-mcp-server',
+  title: 'congressgov-mcp-server',
   tools: [
     withSource(billLookupTool, 'tools', 'bill-lookup.tool.ts'),
     withSource(enactedLawsTool, 'tools', 'enacted-laws.tool.ts'),
