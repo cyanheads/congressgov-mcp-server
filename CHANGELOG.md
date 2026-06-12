@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.3.30](changelog/0.3.x/0.3.30.md) — 2026-06-11
+
+Maintenance: @cyanheads/mcp-ts-core ^0.9.21 → ^0.10.6; server identity name/title pair, de-scoped plugin display name, Dockerfile version label + writable data dirs + HEALTHCHECK, post-pack bundle cleaner, anchored .mcpbignore.
+
 ## [0.3.29](changelog/0.3.x/0.3.29.md) — 2026-06-04
 
 congressgov_committee_lookup: auto-resolve name-like committeeCode inputs, schema pattern guard on malformed codes (#39)
