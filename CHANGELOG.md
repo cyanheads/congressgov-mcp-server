@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.3.31](changelog/0.3.x/0.3.31.md) — 2026-06-20
+
+Maintenance: @cyanheads/mcp-ts-core ^0.10.6 → ^0.10.9; devcheck gains floating-specifier and plugin-manifest guards, re-synced framework skills and scripts, dependency refresh. No tool/resource/prompt surface changes.
+
 ## [0.3.30](changelog/0.3.x/0.3.30.md) — 2026-06-11
 
 Maintenance: @cyanheads/mcp-ts-core ^0.9.21 → ^0.10.6; server identity name/title pair, de-scoped plugin display name, Dockerfile version label + writable data dirs + HEALTHCHECK, post-pack bundle cleaner, anchored .mcpbignore.
