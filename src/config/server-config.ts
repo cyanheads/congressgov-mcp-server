@@ -11,7 +11,7 @@ const ServerConfigSchema = z.object({
     .string()
     .default('DEMO_KEY')
     .describe(
-      'Congress.gov API key from api.data.gov — optional (DEMO_KEY: 30 req/hr, own key: 1000 req/hr)',
+      'Congress.gov API key from api.data.gov — optional (DEMO_KEY: 30 req/hr, own key: 5000 req/hr)',
     ),
   baseUrl: z
     .string()
