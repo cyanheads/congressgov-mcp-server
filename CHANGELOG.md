@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.4.1](changelog/0.4.x/0.4.1.md) — 2026-06-30
+
+Packaging fix — ships the 0.4.0 mirror feature's GHCR image, which 0.4.0 couldn't build. The build-stage bun install skips better-sqlite3's node-gyp postinstall (the image uses bun:sqlite), and better-sqlite3 becomes a regular dependency so npm/Node consumers of the opt-in mirror install it. No runtime change.
+
 ## [0.4.0](changelog/0.4.x/0.4.0.md) — 2026-06-30
 
 New congressgov_search_bills tool — keyword search over a local SQLite + FTS5 mirror of bill titles and CRS summaries, the discovery path the Congress.gov API lacks. Opt-in, off by default (CONGRESS_MIRROR_ENABLED); adds node-cron + optional better-sqlite3, four optional mirror env vars, and mirror:init/refresh/verify scripts.
