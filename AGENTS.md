@@ -1,8 +1,8 @@
 # Agent Protocol
 
 **Server:** congressgov-mcp-server
-**Version:** 0.3.31
-**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.10.9`
+**Version:** 0.3.32
+**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.10.10`
 **Engines:** Bun ≥1.3.0, Node ≥24.0.0
 **MCP SDK:** `@modelcontextprotocol/sdk` ^1.29.0
 **Zod:** ^4.4.3
@@ -40,7 +40,7 @@ Tailor suggestions to what's actually missing or stale — don't recite the full
 
 | Env Var | Required | Description |
 |:--------|:---------|:------------|
-| `CONGRESS_API_KEY` | No | Optional. Defaults to `DEMO_KEY` (30 req/hr). Own key from [api.data.gov](https://api.data.gov/signup/): 1,000 req/hr. |
+| `CONGRESS_API_KEY` | No | Optional. Defaults to `DEMO_KEY` (30 req/hr). Own key from [api.data.gov](https://api.data.gov/signup/): 5,000 req/hr. |
 | `CONGRESS_API_BASE_URL` | No | Defaults to `https://api.congress.gov/v3` |
 
 ---

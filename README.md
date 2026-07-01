@@ -7,7 +7,7 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-0.3.31-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/congressgov-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.29.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/congressgov-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/congressgov-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^6.0.3-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.2-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-0.3.32-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/congressgov-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.29.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/congressgov-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/congressgov-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^6.0.3-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.2-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -143,7 +143,7 @@ Built on [`@cyanheads/mcp-ts-core`](https://github.com/cyanheads/mcp-ts-core):
 Congress.gov-specific:
 
 - Type-safe client for the Congress.gov REST API v3
-- Optional API key from [api.data.gov](https://api.data.gov/signup/) — defaults to `DEMO_KEY` (30 req/hr); own key gets 1,000 req/hr
+- Optional API key from [api.data.gov](https://api.data.gov/signup/) — defaults to `DEMO_KEY` (30 req/hr); own key gets 5,000 req/hr
 - Automatic pagination and response normalization
 - Rate limiting awareness
 - All tools are read-only and idempotent
@@ -201,7 +201,7 @@ Or with npx (no Bun required):
 }
 ```
 
-Get a free API key at [api.data.gov/signup](https://api.data.gov/signup/) for 1,000 req/hr. Without a key the server falls back to `DEMO_KEY` (30 req/hr).
+Get a free API key at [api.data.gov/signup](https://api.data.gov/signup/) for 5,000 req/hr. Without a key the server falls back to `DEMO_KEY` (30 req/hr).
 
 ### Prerequisites
 
@@ -233,7 +233,7 @@ All configuration is validated at startup via Zod schemas in `src/config/server-
 
 | Variable | Description | Default |
 |:---|:---|:---|
-| `CONGRESS_API_KEY` | Optional. API key from [api.data.gov](https://api.data.gov/signup/). Omit to use `DEMO_KEY` (30 req/hr); own key: 1,000 req/hr. | `DEMO_KEY` |
+| `CONGRESS_API_KEY` | Optional. API key from [api.data.gov](https://api.data.gov/signup/). Omit to use `DEMO_KEY` (30 req/hr); own key: 5,000 req/hr. | `DEMO_KEY` |
 | `CONGRESS_API_BASE_URL` | Congress.gov API base URL | `https://api.congress.gov/v3` |
 | `MCP_TRANSPORT_TYPE` | Transport: `stdio` or `http` | `stdio` |
 | `MCP_HTTP_PORT` | HTTP server port | `3010` |

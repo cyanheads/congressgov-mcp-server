@@ -1,7 +1,7 @@
 {
   "manifest_version": "0.3",
   "name": "congressgov-mcp-server",
-  "version": "0.3.31",
+  "version": "0.3.32",
   "description": "Access U.S. congressional data - bills, votes, members, committees - through MCP. STDIO & Streamable HTTP.",
   "author": {
     "name": "cyanheads"
@@ -36,7 +36,7 @@
     "CONGRESS_API_KEY": {
       "type": "string",
       "title": "Congress.gov API Key",
-      "description": "Optional. Defaults to DEMO_KEY (30 req/hr). Get your own key at api.data.gov for 1,000 req/hr.",
+      "description": "Optional. Defaults to DEMO_KEY (30 req/hr). Get your own key at api.data.gov for 5,000 req/hr.",
       "required": false,
       "default": ""
     }
