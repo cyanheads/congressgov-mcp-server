@@ -158,19 +158,20 @@ export const committeeLookupTool = tool('congressgov_committee_lookup', {
 
     if (input.operation === 'list') {
       const filter = input.filter?.trim() || undefined;
-      // When filtering, fetch the full chamber set so client-side matching covers all rows.
-      const fetchLimit = filter ? 250 : input.limit;
-      const fetchOffset = filter ? 0 : input.offset;
-
-      const result = await api.listCommittees(
-        {
-          congress: input.congress,
-          chamber: input.chamber,
-          limit: fetchLimit,
-          offset: fetchOffset,
-        },
-        ctx,
-      );
+      // When filtering, page through the complete scoped committee set before
+      // matching client-side — the roster (455 House, 818 all chambers) exceeds
+      // the 250-row request cap, so a single fetch drops matches past row 250.
+      const result = filter
+        ? await fetchAllCommittees({ congress: input.congress, chamber: input.chamber }, ctx)
+        : await api.listCommittees(
+            {
+              congress: input.congress,
+              chamber: input.chamber,
+              limit: input.limit,
+              offset: input.offset,
+            },
+            ctx,
+          );
 
       const matched = filter ? filterCommittees(result.data as ApiRecord[], filter) : result.data;
       ctx.log.info('Committees listed', {
@@ -209,7 +210,9 @@ export const committeeLookupTool = tool('congressgov_committee_lookup', {
     // path uses, restricted to parent committees (systemCode ending '00').
     let committeeCode = input.committeeCode;
     if (/\s/.test(committeeCode)) {
-      const all = await api.listCommittees({ limit: 250, offset: 0 }, ctx);
+      // Page the complete cross-chamber committee set so name resolution matches
+      // rows past the 250-row request cap.
+      const all = await fetchAllCommittees({}, ctx);
       const parents = (all.data as ApiRecord[]).filter(
         (c) => typeof c.systemCode === 'string' && c.systemCode.endsWith('00'),
       );
@@ -304,6 +307,40 @@ export const committeeLookupTool = tool('congressgov_committee_lookup', {
     return result;
   },
 });
+
+/**
+ * Fetch the COMPLETE committee set for a scope, paging past the 250-row request
+ * cap. `/committee/{chamber}` returns the full historical roster — 455 for the
+ * House, 818 across all chambers — but one request returns at most 250 rows, so
+ * client-side name filtering (`list` + `filter`) and name→code resolution must
+ * page until the upstream `pagination.nextOffset` is exhausted and aggregate
+ * every row. Mirrors `fetchCommitteeBillsRecent`: multi-request orchestration
+ * lives in the tool layer, not the service. Worst case ≈4 requests (818 ÷ 250).
+ * Resolves cyanheads/congressgov-mcp-server#41.
+ */
+async function fetchAllCommittees(
+  params: { congress?: number | undefined; chamber?: Chamber | undefined },
+  ctx: Context,
+) {
+  const api = getCongressApi();
+  const PAGE_SIZE = 250;
+  const data: ApiRecord[] = [];
+  let offset = 0;
+  let count = 0;
+
+  for (;;) {
+    const page = await api.listCommittees(
+      { congress: params.congress, chamber: params.chamber, limit: PAGE_SIZE, offset },
+      ctx,
+    );
+    data.push(...(page.data as ApiRecord[]));
+    count = page.pagination.count;
+    if (page.pagination.nextOffset == null) break;
+    offset = page.pagination.nextOffset;
+  }
+
+  return { data, pagination: { count, nextOffset: null } };
+}
 
 /**
  * Fetch committee bills in newest-first order.

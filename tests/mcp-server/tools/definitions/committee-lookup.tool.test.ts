@@ -184,6 +184,39 @@ describe('committeeLookupTool', () => {
       expect(mockApi.getCommittee).toHaveBeenCalledWith('house', 'hspw00', ctx);
       expect(result.committee).toEqual({ name: 'Transportation and Infrastructure Committee' });
     });
+
+    it('pages the full multi-chamber set to resolve a name past the first 250', async () => {
+      const ctx = createMockContext();
+      // Resolution fetches across all chambers (818 total). The match sits on the
+      // second page — the single-fetch bug would never have seen it.
+      const page1 = Array.from({ length: 250 }, (_, i) => ({
+        name: `Placeholder Committee ${i}`,
+        systemCode: `xxpl${String(i).padStart(3, '0')}`,
+        chamber: 'house',
+      }));
+      const page2 = [
+        { name: 'Veterans Affairs Committee', systemCode: 'hsvr00', chamber: 'house' },
+      ];
+      mockApi.listCommittees
+        .mockResolvedValueOnce({ data: page1, pagination: { count: 251, nextOffset: 250 } })
+        .mockResolvedValueOnce({ data: page2, pagination: { count: 251, nextOffset: null } });
+      mockApi.getCommittee.mockResolvedValue({
+        committee: { name: 'Veterans Affairs Committee' },
+      });
+      const input = committeeLookupTool.input.parse({
+        operation: 'get',
+        committeeCode: 'veterans affairs',
+      });
+      const result = await committeeLookupTool.handler(input, ctx);
+      expect(mockApi.listCommittees).toHaveBeenCalledTimes(2);
+      expect(mockApi.listCommittees).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({ limit: 250, offset: 250 }),
+        ctx,
+      );
+      expect(mockApi.getCommittee).toHaveBeenCalledWith('house', 'hsvr00', ctx);
+      expect(result.committee).toEqual({ name: 'Veterans Affairs Committee' });
+    });
   });
 
   it('throws when nominations requested for non-senate committee', async () => {
@@ -206,18 +239,65 @@ describe('committeeLookupTool', () => {
       });
     });
 
-    it('fetches with limit=250 when filter is set', async () => {
+    it('pages through the full committee set (250 per page) until nextOffset is null', async () => {
       const ctx = createMockContext();
+      mockApi.listCommittees
+        .mockResolvedValueOnce({
+          data: HOUSE_COMMITTEES,
+          pagination: { count: 260, nextOffset: 250 },
+        })
+        .mockResolvedValueOnce({
+          data: [{ name: 'Rules Committee', systemCode: 'hsru00', chamber: 'house' }],
+          pagination: { count: 260, nextOffset: null },
+        });
       const input = committeeLookupTool.input.parse({
         operation: 'list',
         chamber: 'house',
         filter: 'transportation',
       });
       await committeeLookupTool.handler(input, ctx);
-      expect(mockApi.listCommittees).toHaveBeenCalledWith(
-        expect.objectContaining({ limit: 250 }),
+      expect(mockApi.listCommittees).toHaveBeenCalledTimes(2);
+      expect(mockApi.listCommittees).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({ limit: 250, offset: 0 }),
         ctx,
       );
+      expect(mockApi.listCommittees).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({ limit: 250, offset: 250 }),
+        ctx,
+      );
+    });
+
+    it('surfaces a filter match sitting beyond the first 250 committees', async () => {
+      const ctx = createMockContext();
+      // Page 1: 250 rows, none containing 'coinage'. Page 2 carries the match the
+      // single-fetch bug hid (issue #41's hsba02, position ~403 of 455).
+      const page1 = Array.from({ length: 250 }, (_, i) => ({
+        name: `Placeholder Committee ${i}`,
+        systemCode: `hsp${String(i).padStart(3, '0')}`,
+        chamber: 'house',
+      }));
+      const page2 = [
+        {
+          name: 'Consumer Affairs and Coinage Subcommittee',
+          systemCode: 'hsba02',
+          chamber: 'house',
+        },
+        { name: 'Housing Subcommittee', systemCode: 'hsba03', chamber: 'house' },
+      ];
+      mockApi.listCommittees
+        .mockResolvedValueOnce({ data: page1, pagination: { count: 252, nextOffset: 250 } })
+        .mockResolvedValueOnce({ data: page2, pagination: { count: 252, nextOffset: null } });
+      const input = committeeLookupTool.input.parse({
+        operation: 'list',
+        chamber: 'house',
+        filter: 'coinage',
+      });
+      const result = await committeeLookupTool.handler(input, ctx);
+      const codes = (result.data as Array<Record<string, unknown>>).map((r) => r.systemCode);
+      expect(codes).toContain('hsba02');
+      expect(mockApi.listCommittees).toHaveBeenCalledTimes(2);
     });
 
     it('exact token match — transportation returns Transportation and Infrastructure + subcommittee', async () => {
