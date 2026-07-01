@@ -1,6 +1,6 @@
 {
   "name": "@cyanheads/congressgov-mcp-server",
-  "version": "0.3.32",
+  "version": "0.4.0",
   "description": "Access U.S. congressional data - bills, votes, members, committees - through MCP. STDIO & Streamable HTTP.",
   "mcpName": "io.github.cyanheads/congressgov-mcp-server",
   "type": "module",
@@ -9,7 +9,19 @@
   "bin": {
     "congressgov-mcp-server": "dist/index.js"
   },
-  "files": ["dist/", "README.md", "LICENSE", "CLAUDE.md", "AGENTS.md", "Dockerfile", "server.json"],
+  "files": [
+    "dist/",
+    "scripts/_mirror-context.ts",
+    "scripts/congress-mirror-init.ts",
+    "scripts/congress-mirror-refresh.ts",
+    "scripts/congress-mirror-verify.ts",
+    "README.md",
+    "LICENSE",
+    "CLAUDE.md",
+    "AGENTS.md",
+    "Dockerfile",
+    "server.json"
+  ],
   "scripts": {
     "build": "bun scripts/build.ts",
     "rebuild": "bun scripts/clean.ts && bun scripts/build.ts",
@@ -31,7 +43,10 @@
     "dev:stdio": "MCP_TRANSPORT_TYPE=stdio bun --watch src/index.ts",
     "dev:http": "MCP_TRANSPORT_TYPE=http bun --watch src/index.ts",
     "start:stdio": "MCP_TRANSPORT_TYPE=stdio node dist/index.js",
-    "start:http": "MCP_TRANSPORT_TYPE=http node dist/index.js"
+    "start:http": "MCP_TRANSPORT_TYPE=http node dist/index.js",
+    "mirror:init": "bun run scripts/congress-mirror-init.ts",
+    "mirror:refresh": "bun run scripts/congress-mirror-refresh.ts",
+    "mirror:verify": "bun run scripts/congress-mirror-verify.ts"
   },
   "keywords": [
     "mcp",
@@ -79,16 +94,27 @@
   "dependencies": {
     "@cyanheads/mcp-ts-core": "^0.10.10",
     "fast-xml-parser": "^5.9.3",
+    "node-cron": "^4.4.1",
     "pino-pretty": "^13.1.3",
     "zod": "^4.4.3"
+  },
+  "peerDependencies": {
+    "better-sqlite3": "^12.0.0"
+  },
+  "peerDependenciesMeta": {
+    "better-sqlite3": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.1",
     "@types/node": "^26.0.1",
+    "better-sqlite3": "^12.11.1",
     "depcheck": "^1.4.7",
     "ignore": "^7.0.5",
     "tsc-alias": "^1.8.17",
     "typescript": "^6.0.3",
     "vitest": "^4.1.9"
-  }
+  },
+  "trustedDependencies": ["better-sqlite3"]
 }

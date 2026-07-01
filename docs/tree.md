@@ -1,6 +1,6 @@
 # congressgov-mcp-server - Directory Structure
 
-Generated on: 2026-06-20 10:55:07
+Generated on: 2026-07-01 02:13:06
 
 ```text
 congressgov-mcp-server/
@@ -23,10 +23,12 @@ congressgov-mcp-server/
 │   ├── 0.1.x/
 │   ├── 0.2.x/
 │   ├── 0.3.x/
+│   ├── 0.4.x/
 │   └── template.md
 ├── docs/
 │   └── congress-gov-mcp-design.md
 ├── scripts/
+│   ├── _mirror-context.ts
 │   ├── build-changelog.ts
 │   ├── build.ts
 │   ├── check-dependency-specifiers.ts
@@ -36,6 +38,9 @@ congressgov-mcp-server/
 │   ├── check-skills-sync.ts
 │   ├── clean-mcpb.ts
 │   ├── clean.ts
+│   ├── congress-mirror-init.ts
+│   ├── congress-mirror-refresh.ts
+│   ├── congress-mirror-verify.ts
 │   ├── devcheck.ts
 │   ├── lint-mcp.ts
 │   ├── lint-packaging.ts
@@ -154,12 +159,19 @@ congressgov-mcp-server/
 │   │       │   ├── enacted-laws.tool.ts
 │   │       │   ├── member-lookup.tool.ts
 │   │       │   ├── roll-votes.tool.ts
+│   │       │   ├── search-bills.tool.ts
 │   │       │   └── senate-nominations.tool.ts
 │   │       ├── format-helpers.ts
 │   │       └── tool-helpers.ts
 │   ├── services/
 │   │   ├── congress-api/
 │   │   │   ├── congress-api-service.ts
+│   │   │   └── types.ts
+│   │   ├── congress-mirror/
+│   │   │   ├── congress-mirror-service.ts
+│   │   │   ├── ingest.ts
+│   │   │   ├── normalize.ts
+│   │   │   ├── schema.ts
 │   │   │   └── types.ts
 │   │   └── senate-lis/
 │   │       ├── parse.ts
@@ -191,6 +203,7 @@ congressgov-mcp-server/
 │   │       │   ├── input-validation.test.ts
 │   │       │   ├── member-lookup.tool.test.ts
 │   │       │   ├── roll-votes.tool.test.ts
+│   │       │   ├── search-bills.tool.test.ts
 │   │       │   └── senate-nominations.tool.test.ts
 │   │       ├── format-helpers-extended.test.ts
 │   │       ├── format-helpers.test.ts
@@ -200,6 +213,8 @@ congressgov-mcp-server/
 │       ├── congress-api/
 │       │   ├── congress-api-service.test.ts
 │       │   └── normalizers.test.ts
+│       ├── congress-mirror/
+│       │   └── congress-mirror-service.test.ts
 │       └── senate-lis/
 │           ├── fixtures/
 │           │   ├── menu.xml

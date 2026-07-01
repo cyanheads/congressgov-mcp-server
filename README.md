@@ -1,13 +1,13 @@
 <div align="center">
   <h1>@cyanheads/congressgov-mcp-server</h1>
   <p><b>Access U.S. congressional data - bills, votes, members, committees - through MCP. STDIO & Streamable HTTP.</b>
-  <div>10 Tools • 5 Resources • 2 Prompts</div>
+  <div>11 Tools • 5 Resources • 2 Prompts</div>
   </p>
 </div>
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-0.3.32-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/congressgov-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.29.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/congressgov-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/congressgov-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^6.0.3-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.2-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-0.4.0-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/congressgov-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.29.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/congressgov-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/congressgov-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^6.0.3-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.2-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -29,7 +29,7 @@
 
 ## Tools
 
-Ten read-only tools for querying U.S. legislative data:
+Eleven read-only tools for querying U.S. legislative data:
 
 | Tool | Description |
 |:---|:---|
@@ -43,6 +43,7 @@ Ten read-only tools for querying U.S. legislative data:
 | `congressgov_crs_reports` | Browse and retrieve nonpartisan CRS policy analysis reports |
 | `congressgov_committee_reports` | Browse and retrieve committee reports accompanying legislation |
 | `congressgov_daily_record` | Browse the daily Congressional Record — floor speeches, debates, and proceedings |
+| `congressgov_search_bills` | Keyword-search bill titles and CRS summaries via a local full-text mirror (opt-in, off by default) |
 
 ### `congressgov_bill_lookup`
 
@@ -111,6 +112,16 @@ Browse the daily Congressional Record — floor speeches, debates, and legislati
 
 - Browse volumes by congress number
 - Retrieve specific issue articles
+
+---
+
+### `congressgov_search_bills`
+
+Keyword-search bill titles and CRS summaries against a local full-text mirror — the discovery path the Congress.gov API itself lacks.
+
+- **Opt-in:** off by default. Requires `CONGRESS_MIRROR_ENABLED=true` and a locally built index (`bun run mirror:init`) — until then the tool is visible but not callable
+- Narrow with `congress`, `billType`, and `originChamber` filters
+- Returns BM25-ranked matches with each bill's derived id, ready for a follow-up `congressgov_bill_lookup` call
 
 ## Resources
 
@@ -271,7 +282,7 @@ docker run -e CONGRESS_API_KEY=your-api-key -p 3010:3010 congressgov-mcp-server
 
 | Directory | Purpose |
 |:---|:---|
-| `src/mcp-server/tools/definitions/` | Tool definitions (`*.tool.ts`). Ten Congress.gov tools. |
+| `src/mcp-server/tools/definitions/` | Tool definitions (`*.tool.ts`). Eleven Congress.gov tools. |
 | `src/mcp-server/resources/definitions/` | Resource definitions. Congress, bill, member, and committee resources. |
 | `src/mcp-server/prompts/definitions/` | Prompt definitions. Bill analysis and legislative research prompts. |
 | `src/services/congress-api/` | Congress.gov API client — auth, pagination, rate limiting. |

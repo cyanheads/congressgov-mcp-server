@@ -1,7 +1,7 @@
 # Agent Protocol
 
 **Server:** congressgov-mcp-server
-**Version:** 0.3.32
+**Version:** 0.4.0
 **Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.10.10`
 **Engines:** Bun ≥1.3.0, Node ≥24.0.0
 **MCP SDK:** `@modelcontextprotocol/sdk` ^1.29.0
@@ -42,6 +42,10 @@ Tailor suggestions to what's actually missing or stale — don't recite the full
 |:--------|:---------|:------------|
 | `CONGRESS_API_KEY` | No | Optional. Defaults to `DEMO_KEY` (30 req/hr). Own key from [api.data.gov](https://api.data.gov/signup/): 5,000 req/hr. |
 | `CONGRESS_API_BASE_URL` | No | Defaults to `https://api.congress.gov/v3` |
+| `CONGRESS_MIRROR_ENABLED` | No | Enable the local bill search mirror and `congressgov_search_bills`. Defaults to `false`. |
+| `CONGRESS_MIRROR_PATH` | No | Filesystem path to the SQLite mirror index. Defaults to `.mirror/bills.sqlite3`. |
+| `CONGRESS_MIRROR_REFRESH_CRON` | No | Cron schedule for the in-process mirror refresh (HTTP transport only). Unset runs `mirror:refresh` manually. |
+| `CONGRESS_MIRROR_CONGRESSES` | No | Comma-separated congress numbers to mirror (e.g. `118,119`). Defaults to the current congress plus the prior one. |
 
 ---
 
@@ -60,7 +64,7 @@ Tailor suggestions to what's actually missing or stale — don't recite the full
 
 ## MCP Surface
 
-### Tools (10)
+### Tools (11)
 
 | Name | Description |
 |:-----|:------------|
@@ -74,6 +78,7 @@ Tailor suggestions to what's actually missing or stale — don't recite the full
 | `congressgov_crs_reports` | Browse and retrieve nonpartisan CRS policy analysis reports |
 | `congressgov_committee_reports` | Browse and retrieve committee reports accompanying legislation |
 | `congressgov_daily_record` | Browse daily Congressional Record — floor speeches, debates, proceedings |
+| `congressgov_search_bills` | Keyword-search bill titles/summaries via the opt-in local FTS mirror — off by default |
 
 ### Resources (5)
 
@@ -105,6 +110,12 @@ src/
     congress-api/
       congress-api-service.ts           # API client — auth, pagination, rate limiting
       types.ts                          # API response types
+    congress-mirror/
+      congress-mirror-service.ts        # Mirror read path — FTS5 search, ready(), sync accessor
+      ingest.ts                         # Bill list + CRS summaries sync generator
+      normalize.ts                      # HTML→plain-text, FTS5 MATCH escaping
+      schema.ts                         # SQLite mirror store spec (bills table, FTS index)
+      types.ts                          # Mirror row, search filters, search page types
     senate-lis/
       senate-vote-service.ts            # Senate LIS XML client — fetch, retry, not-found
       parse.ts                          # pure XML → domain parsers (fast-xml-parser)
@@ -121,6 +132,7 @@ src/
       crs-reports.tool.ts             # congressgov_crs_reports
       committee-reports.tool.ts        # congressgov_committee_reports
       daily-record.tool.ts            # congressgov_daily_record
+      search-bills.tool.ts            # congressgov_search_bills (opt-in — disabledTool() when the mirror is off)
     resources/definitions/
       current-congress.resource.ts     # congress://current
       bill-types.resource.ts           # congress://bill-types
@@ -130,13 +142,18 @@ src/
     prompts/definitions/
       bill-analysis.prompt.ts          # congressgov_bill_analysis
       legislative-research.prompt.ts   # congressgov_legislative_research
+scripts/
+  _mirror-context.ts                    # Shared bootstrap for the mirror lifecycle CLI scripts
+  congress-mirror-init.ts               # mirror:init — full out-of-band mirror build
+  congress-mirror-refresh.ts            # mirror:refresh — incremental mirror refresh
+  congress-mirror-verify.ts             # mirror:verify — readiness + integrity check
 ```
 
 ---
 
 ## Services
 
-Two services. `CongressApiService` backs nine tools and the House branch of `congressgov_roll_votes`; `SenateVoteService` backs only the Senate branch of `congressgov_roll_votes` (the Congress.gov API exposes no Senate vote namespace).
+Three services. `CongressApiService` backs nine tools and the House branch of `congressgov_roll_votes`; `SenateVoteService` backs only the Senate branch of `congressgov_roll_votes` (the Congress.gov API exposes no Senate vote namespace); `CongressMirrorService` backs `congressgov_search_bills` only.
 
 **`CongressApiService`** — wraps the Congress.gov REST API v3:
 - API key via `X-Api-Key` header (never logged; kept out of the URL so it can't leak in upstream error messages)
@@ -150,6 +167,10 @@ Two services. `CongressApiService` backs nine tools and the House branch of `con
 - The whole session menu is one file; each vote's roster ships inline — pagination is client-side
 - The host returns HTTP 200 with an HTML page for unknown congress/session/vote, so "not found" is detected from the body, not the status code
 - Party totals are derived from the roster (the feed publishes none)
+
+**`CongressMirrorService`** — local SQLite FTS5 mirror of bill title + CRS summary text, backing `congressgov_search_bills` only:
+- Opt-in via `CONGRESS_MIRROR_ENABLED` (off by default); built out-of-band via the `mirror:init`/`mirror:refresh` scripts, never on server startup
+- No live-API fallback — ingests through the existing `CongressApiService`, and a mirror that hasn't finished its initial build returns an empty result with a notice, not an error
 
 **Usage in tools:**
 ```ts

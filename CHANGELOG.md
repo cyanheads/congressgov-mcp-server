@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.4.0](changelog/0.4.x/0.4.0.md) — 2026-06-30
+
+New congressgov_search_bills tool — keyword search over a local SQLite + FTS5 mirror of bill titles and CRS summaries, the discovery path the Congress.gov API lacks. Opt-in, off by default (CONGRESS_MIRROR_ENABLED); adds node-cron + optional better-sqlite3, four optional mirror env vars, and mirror:init/refresh/verify scripts.
+
 ## [0.3.32](changelog/0.3.x/0.3.32.md) — 2026-06-30 · 🛡️ Security
 
 congressgov_committee_lookup name filter and resolution now page the full committee set instead of only the first 250; API-key rate-limit docs corrected to 5,000 req/hr; @cyanheads/mcp-ts-core ^0.10.9 → ^0.10.10; bun audit cleared 8 transitive advisories to 0.

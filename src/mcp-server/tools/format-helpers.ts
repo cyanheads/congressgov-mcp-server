@@ -1456,6 +1456,41 @@ function pickBillListRenderer(first: Record<string, unknown>): ItemRenderer | un
 /** CRS bill summaries — "what's happening in Congress". */
 export const formatSummaries = makeFormatter([], renderSummaryItem);
 
+/**
+ * Local bill keyword-search results (congressgov_search_bills) from the FTS
+ * mirror. Rows are BM25-ranked; each carries the derived billId for follow-up
+ * congressgov_bill_lookup calls and a truncated plain-text summary preview.
+ */
+function renderSearchBillItem(item: Record<string, unknown>, i: number): string {
+  const billType = s(item, 'billType')?.toUpperCase() ?? '';
+  const billNumber = s(item, 'billNumber') ?? '';
+  const congress = s(item, 'congress') ?? '';
+  const title = s(item, 'title') ?? 'Untitled';
+  const id = billType && billNumber ? `${billType} ${billNumber}` : '';
+  const heading = id ? `${id}: ${title}` : title;
+  const lines = [`### ${i + 1}. ${heading}`];
+
+  const meta = join([
+    f('Congress', congress),
+    f('Chamber', s(item, 'originChamber')),
+    f('Bill ID', s(item, 'billId')),
+  ]);
+  if (meta) lines.push(meta);
+
+  const actionDate = s(item, 'latestActionDate');
+  const actionText = s(item, 'latestActionText');
+  if (actionDate || actionText)
+    lines.push(`**Latest Action:** ${[actionDate, actionText].filter(Boolean).join(' — ')}`);
+
+  const summary = s(item, 'summaryPreview');
+  if (summary) lines.push('', summary);
+
+  return lines.join('\n');
+}
+
+/** Local bill keyword search over the FTS mirror. */
+export const formatSearchBills = makeFormatter([], renderSearchBillItem);
+
 /** Member browse, detail, and sponsored/cosponsored legislation. */
 export function formatMembers(result: Record<string, unknown>): TextBlock[] {
   if (Array.isArray(result.data)) {

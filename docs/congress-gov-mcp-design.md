@@ -664,8 +664,29 @@ class CongressApiService {
 
 | Env Var | Required | Description |
 |:--------|:---------|:------------|
-| `CONGRESS_API_KEY` | Yes | API key from [api.data.gov](https://api.data.gov/signup/) (free, 5,000 req/hr) |
+| `CONGRESS_API_KEY` | No | Optional. Defaults to `DEMO_KEY` (30 req/hr). Own key from [api.data.gov](https://api.data.gov/signup/): 5,000 req/hr. |
 | `CONGRESS_API_BASE_URL` | No | API base URL. Defaults to `https://api.congress.gov/v3` |
+
+---
+
+## Bill Search Mirror
+
+The Congress.gov API's core limitation — no keyword search (see "Key API constraint" above) — can't be fixed at the API layer, so `congressgov_search_bills` closes the gap with a local mirror instead of a new upstream endpoint.
+
+**Architecture:** `CongressMirrorService` owns a SQLite + FTS5 index (`src/services/congress-mirror/`) built on the framework `MirrorService`. The ingester merges two existing `CongressApiService` endpoints per configured congress — the bill list (title, chamber, latest action) and `/summaries` (CRS summary text, HTML-stripped) — into one row per bill, keyed by the same `{congress}/{billType}/{billNumber}` id the `congress://bill/...` resource uses. `title` and `summary` are FTS-indexed; `congress`, `billType`, and `originChamber` back exact-match filters.
+
+**Lifecycle:** the mirror is never built or refreshed during server startup. `mirror:init` runs a full out-of-band build; `mirror:refresh` incrementally re-scans from the last `updateDate` checkpoint; `mirror:verify` reports readiness and runs a SQLite integrity check. Under HTTP transport, an in-process refresh can run on a cron via `CONGRESS_MIRROR_REFRESH_CRON`.
+
+**`congressgov_search_bills`:** keyword-searches `title` + `summary` (BM25-ranked), optionally narrowed by `congress`, `billType`, and `originChamber`. Returns each match's derived bill id for a follow-up `congressgov_bill_lookup` call plus a truncated summary preview. No live-API fallback — a mirror that hasn't completed its initial build returns an empty result with a notice, not an error.
+
+**Opt-in, off by default:** gated behind `CONGRESS_MIRROR_ENABLED` (`false` by default) so the standard deploy stays config-free. When disabled, the tool registers via the framework's `disabledTool()` — visible on the landing page as present-but-uncallable, with a hint pointing at the env var, and skipped from MCP registration entirely.
+
+| Env Var | Required | Description |
+|:--------|:---------|:------------|
+| `CONGRESS_MIRROR_ENABLED` | No | Enable the mirror + `congressgov_search_bills`. Defaults to `false`. |
+| `CONGRESS_MIRROR_PATH` | No | SQLite mirror index path. Defaults to `.mirror/bills.sqlite3`. |
+| `CONGRESS_MIRROR_REFRESH_CRON` | No | Cron for the in-process refresh (HTTP transport only). Unset runs `mirror:refresh` manually. |
+| `CONGRESS_MIRROR_CONGRESSES` | No | Comma-separated congresses to mirror. Defaults to the current congress plus the prior one. |
 
 ---
 
@@ -775,6 +796,6 @@ All requests require `?api_key={key}` as a query parameter.
 
 - **Senate votes**: Extend `congressgov_roll_votes` with `chamber` when the API adds Senate endpoints
 - **Bound Congressional Record**: Date-based lookup into the permanent edited compilation. Niche archival use case — daily record covers active needs. Add as `congressgov_bound_record` if demand warrants.
-- **Full-text search**: Add `congressgov_search` if Congress.gov ever exposes a search API
+- **Full-text search**: Delivered via `congressgov_search_bills` — keyword search over a local FTS mirror of bill title + summary (opt-in, `CONGRESS_MIRROR_ENABLED`); Congress.gov itself still exposes no search API
 - **Treaties and hearings**: Lower-frequency endpoints, add as separate tools if demand warrants
 - **House/Senate communications**: Niche endpoints — add only for specific use cases
