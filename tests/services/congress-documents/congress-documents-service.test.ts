@@ -13,7 +13,9 @@ import {
   CongressDocumentsService,
   getCongressDocuments,
   initCongressDocuments,
+  MAX_DOCUMENT_BYTES,
 } from '@/services/congress-documents/congress-documents-service.js';
+import { extractDocumentText } from '@/services/congress-documents/extract-text.js';
 
 const URL_BILL = 'https://www.congress.gov/119/bills/hr1/BILLS-119hr1enr.htm';
 
@@ -32,17 +34,28 @@ function htmlResponse(body: string, headers: Record<string, string> = {}): Respo
 }
 
 /** A `Response` streamed from a chunked source — no Content-Length advertised. */
-function streamedResponse(body: string, contentType = 'text/html'): Response {
+function streamedResponse(body: string, contentType = 'text/html', chunkSize = 256): Response {
   const bytes = new TextEncoder().encode(body);
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
-      for (let i = 0; i < bytes.length; i += 256) {
-        controller.enqueue(bytes.slice(i, i + 256));
+      for (let i = 0; i < bytes.length; i += chunkSize) {
+        controller.enqueue(bytes.slice(i, i + chunkSize));
       }
       controller.close();
     },
   });
   return new Response(stream, { status: 200, headers: { 'content-type': contentType } });
+}
+
+/** A `Response` whose body dies after delivering part of the document. */
+function truncatedStreamResponse(prefix: string): Response {
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(prefix));
+      controller.error(new Error('connection reset by peer'));
+    },
+  });
+  return new Response(stream, { status: 200, headers: { 'content-type': 'text/html' } });
 }
 
 function errorResponse(status: number): Response {
@@ -166,6 +179,21 @@ describe('CongressDocumentsService', () => {
       expect(result.text).toBe('Sec. 1.');
     });
 
+    it('maps a body that dies mid-stream to a retryable document_fetch_failed', async () => {
+      mockFetch.mockImplementation(() =>
+        Promise.resolve(truncatedStreamResponse(preDoc('SEC. 1. The beginning of'))),
+      );
+      const error = (await service
+        .fetchDocument(
+          { url: URL_BILL, characterOffset: 0, characterLimit: 100 },
+          createMockContext(),
+        )
+        .catch((e: unknown) => e)) as McpError;
+      expect(error.code).toBe(JsonRpcErrorCode.ServiceUnavailable);
+      expect(error.data?.reason).toBe('document_fetch_failed');
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+    });
+
     it('rejects an empty body as a fetch failure', async () => {
       mockFetch.mockResolvedValue(htmlResponse(''));
       const error = (await service
@@ -181,6 +209,15 @@ describe('CongressDocumentsService', () => {
   describe('size ceiling', () => {
     beforeEach(() => {
       service = new CongressDocumentsService(CEILING);
+    });
+
+    it('accepts a document one byte under the ceiling', async () => {
+      mockFetch.mockResolvedValue(streamedResponse('x'.repeat(CEILING - 1)));
+      const result = await service.fetchDocument(
+        { url: URL_BILL, characterOffset: 0, characterLimit: CEILING },
+        createMockContext(),
+      );
+      expect(result.totalCharacters).toBe(CEILING - 1);
     });
 
     it('accepts a document of exactly the ceiling', async () => {
@@ -335,6 +372,87 @@ describe('CongressDocumentsService', () => {
         .catch((e: unknown) => e)) as McpError;
       expect(error.data?.reason).toBe('offset_past_end');
       expect(error.message).toContain(String(LONG_TEXT.length));
+    });
+  });
+
+  /**
+   * The largest enacted bills clear five megabytes in both published formats —
+   * 116th Congress H.R. 133 is 6,790,482 bytes as Formatted Text and 9,812,888
+   * as XML — and neither could be read at all while the fetch had to fit in a
+   * buffer. Nothing here is held in memory but the requested window.
+   */
+  describe('documents past five megabytes', () => {
+    const sections = Array.from(
+      { length: 30_000 },
+      (_, i) =>
+        `\nSEC. ${i + 1}. SHORT TITLE OF SECTION ${i + 1}.\n\n    In this section, an amount &lt;= $${i},000 &amp; not more.\n    Paragraph body for section ${i + 1}, padded to a realistic GPO line width.\n`,
+    ).join('');
+    const body = `<html><body><pre>\n[Congressional Bills 116th Congress]\n${sections}</pre></body></html>\n`;
+    const reference = extractDocumentText(body);
+
+    beforeEach(() => {
+      /** The shipped ceiling, not the roomy test one — its size is the point. */
+      service = new CongressDocumentsService();
+      mockFetch.mockImplementation(() =>
+        Promise.resolve(streamedResponse(body, 'text/html', 65_536)),
+      );
+    });
+
+    it('is a document the former 5,000,000-byte ceiling refused', () => {
+      expect(new TextEncoder().encode(body).byteLength).toBeGreaterThan(5_000_000);
+      expect(new TextEncoder().encode(body).byteLength).toBeLessThan(MAX_DOCUMENT_BYTES);
+    });
+
+    it('declares a ceiling that clears both published formats of H.R. 133', () => {
+      expect(MAX_DOCUMENT_BYTES).toBeGreaterThan(9_812_888);
+    });
+
+    it('serves a window from the start, the middle, and the end', async () => {
+      const offsets = [0, Math.floor(reference.length / 2), reference.length - 100];
+      for (const offset of offsets) {
+        const result = await service.fetchDocument(
+          { url: URL_BILL, characterOffset: offset, characterLimit: 100_000 },
+          createMockContext(),
+        );
+        expect(result.totalCharacters, `offset ${offset}`).toBe(reference.length);
+        expect(result.offset).toBe(offset);
+        expect(result.text, `offset ${offset}`).toBe(reference.slice(offset, offset + 100_000));
+      }
+    });
+
+    it('walks the whole document via nextOffset and reassembles it exactly', async () => {
+      const chunks: string[] = [];
+      let offset: number | null = 0;
+      let running = 0;
+
+      while (offset !== null) {
+        const page: Awaited<ReturnType<CongressDocumentsService['fetchDocument']>> =
+          await service.fetchDocument(
+            { url: URL_BILL, characterOffset: offset, characterLimit: 250_000 },
+            createMockContext(),
+          );
+        expect(page.offset).toBe(offset);
+        expect(page.offset).toBe(running);
+        expect(page.totalCharacters).toBe(reference.length);
+        chunks.push(page.text);
+        running += page.text.length;
+        offset = page.nextOffset;
+      }
+
+      expect(chunks.join('')).toBe(reference);
+      expect(running).toBe(reference.length);
+      expect(chunks.length).toBeGreaterThan(1);
+    });
+
+    it('rejects an offset past the end rather than serving an empty window', async () => {
+      const error = (await service
+        .fetchDocument(
+          { url: URL_BILL, characterOffset: reference.length, characterLimit: 100 },
+          createMockContext(),
+        )
+        .catch((e: unknown) => e)) as McpError;
+      expect(error.data?.reason).toBe('offset_past_end');
+      expect(error.data?.totalCharacters).toBe(reference.length);
     });
   });
 

@@ -9,9 +9,10 @@
  *
  * Two bounds, deliberately separate:
  * - **The fetch** is bounded by {@link MAX_DOCUMENT_BYTES}, a request timeout, and
- *   a content-type allowlist. An oversized document is refused — before the body
- *   is read when Content-Length says so, mid-stream when it does not — rather
- *   than silently truncated or pulled whole into memory.
+ *   a content-type allowlist. The body is extracted as it streams and only the
+ *   requested window is kept, so what a read *retains* is flat in the size of
+ *   the document and the ceiling bounds how long a response may run rather than
+ *   how much of one fits in a buffer.
  * - **The response** is bounded by an exact character offset/limit window. Offsets
  *   index into the extracted plain text and are never snapped to section or
  *   paragraph breaks, so feeding `nextOffset` back walks a document with every
@@ -29,16 +30,18 @@ import {
   serviceUnavailable,
 } from '@cyanheads/mcp-ts-core/errors';
 import { fetchWithTimeout, withRetry } from '@cyanheads/mcp-ts-core/utils';
-import { extractDocumentText } from './extract-text.js';
+import { createStreamingExtractor, type ExtractedWindow } from './extract-text-stream.js';
 import type { DocumentContent, FetchDocumentParams } from './types.js';
 
 /**
- * Ceiling on a single document. The largest body observed across bills,
- * committee reports, and the Daily Record is the 119th Congress H.R. 1 USLM XML
- * at ~2.7 MB (its Formatted Text is ~1.0 MB), so this clears real documents with
- * room to spare while still refusing a pathological one.
+ * Ceiling on a single document. The largest bodies Congress.gov publishes are
+ * the omnibus appropriations acts — 116th Congress H.R. 133 enrolled runs
+ * 6,790,482 bytes as Formatted Text and 9,812,888 as XML — and both formats of a
+ * document have to clear it, since a caller sent to the other one by a recovery
+ * hint would hit the same refusal. This clears the largest by better than a
+ * factor of two; the request deadline is what a runaway response meets first.
  */
-export const MAX_DOCUMENT_BYTES = 5_000_000;
+export const MAX_DOCUMENT_BYTES = 25_000_000;
 
 /** Bounds the whole exchange, headers and body — a megabyte-scale body needs the room. */
 export const REQUEST_TIMEOUT_MS = 30_000;
@@ -103,7 +106,7 @@ export class CongressDocumentsService {
     const requestContext = this.getRequestContext(ctx, operation);
     const signal = this.getAbortSignal(ctx);
 
-    const body = await withRetry(() => this.doFetch(params.url, requestContext, ctx, signal), {
+    const window = await withRetry(() => this.doFetch(params, requestContext, ctx, signal), {
       operation,
       context: requestContext,
       baseDelayMs: BASE_BACKOFF_MS,
@@ -112,13 +115,16 @@ export class CongressDocumentsService {
       ...(signal ? { signal } : {}),
     });
 
-    const text = extractDocumentText(body);
-    return this.window(text, params, ctx);
+    return this.describeWindow(window, params, ctx);
   }
 
-  /** Slice the exact `[offset, offset + limit)` window and describe what remains. */
-  private window(text: string, params: FetchDocumentParams, ctx: Context): DocumentContent {
-    const totalCharacters = text.length;
+  /** Describe the extracted `[offset, offset + limit)` window and what remains. */
+  private describeWindow(
+    window: ExtractedWindow,
+    params: FetchDocumentParams,
+    ctx: Context,
+  ): DocumentContent {
+    const { text, totalCharacters } = window;
     const offset = params.characterOffset;
 
     /** An empty document is a real (if unusual) answer at offset 0 — not a bad offset. */
@@ -135,11 +141,10 @@ export class CongressDocumentsService {
       );
     }
 
-    const slice = text.slice(offset, offset + params.characterLimit);
-    const end = offset + slice.length;
+    const end = offset + text.length;
     const truncated = end < totalCharacters;
     return {
-      text: slice,
+      text,
       totalCharacters,
       offset,
       truncated,
@@ -168,14 +173,14 @@ export class CongressDocumentsService {
   }
 
   private async doFetch(
-    url: string,
+    params: FetchDocumentParams,
     requestContext: RequestContextLike,
     ctx: Context,
     signal?: AbortSignal,
-  ): Promise<string> {
+  ): Promise<ExtractedWindow> {
     let response: Response;
     try {
-      response = await fetchWithTimeout(url, REQUEST_TIMEOUT_MS, requestContext, {
+      response = await fetchWithTimeout(params.url, REQUEST_TIMEOUT_MS, requestContext, {
         headers: { Accept: 'text/html, application/xml, text/plain, */*' },
         expectedStatuses: [404],
         ...(signal ? { signal } : {}),
@@ -186,7 +191,7 @@ export class CongressDocumentsService {
 
     this.assertContentType(response, ctx);
     this.assertAdvertisedSize(response, ctx);
-    return this.readBounded(response, ctx);
+    return this.readWindow(response, params, ctx);
   }
 
   /**
@@ -241,18 +246,32 @@ export class CongressDocumentsService {
   }
 
   /**
-   * Read the body under a hard byte budget, cancelling the stream the moment it
-   * is exceeded. Chunks are decoded once at the end so a multi-byte character
-   * split across a chunk boundary still decodes correctly.
+   * Extract the requested character window as the body streams, under a hard
+   * byte budget that cancels the stream the moment it is exceeded.
+   *
+   * Nothing but the window is retained: the decoder carries a partial character
+   * across a chunk boundary and the extractor carries its parse state, so the
+   * live set stays near the window's own size however large the document is.
+   * Transient allocation still scales with the body — peak RSS is higher than a
+   * buffered read of the same document — but it is garbage, not live, so it is
+   * concurrent reads rather than one large read that the ceiling has to survive.
    */
-  private async readBounded(response: Response, ctx: Context): Promise<string> {
+  private async readWindow(
+    response: Response,
+    params: FetchDocumentParams,
+    ctx: Context,
+  ): Promise<ExtractedWindow> {
     const reader = response.body?.getReader();
-    const chunks: Uint8Array[] = [];
+    const decoder = new TextDecoder('utf-8');
+    const extractor = createStreamingExtractor({
+      characterLimit: params.characterLimit,
+      characterOffset: params.characterOffset,
+    });
     let bytes = 0;
 
     if (reader) {
       for (;;) {
-        const { done, value } = await reader.read();
+        const { done, value } = await this.readChunk(reader, ctx);
         if (done) break;
         if (!value) continue;
         bytes += value.byteLength;
@@ -260,7 +279,7 @@ export class CongressDocumentsService {
           await reader.cancel().catch(() => undefined);
           throw this.tooLarge(ctx, { bytesRead: bytes });
         }
-        chunks.push(value);
+        extractor.push(decoder.decode(value, { stream: true }));
       }
     }
 
@@ -272,13 +291,27 @@ export class CongressDocumentsService {
       });
     }
 
-    const merged = new Uint8Array(bytes);
-    let at = 0;
-    for (const chunk of chunks) {
-      merged.set(chunk, at);
-      at += chunk.byteLength;
+    extractor.push(decoder.decode());
+    return extractor.finish();
+  }
+
+  /**
+   * A body that dies partway through is the transport failing, not a malformed
+   * document — the same classification a connection that never opened gets.
+   */
+  private async readChunk(
+    reader: ReadableStreamDefaultReader<Uint8Array>,
+    ctx: Context,
+  ): Promise<Awaited<ReturnType<ReadableStreamDefaultReader<Uint8Array>['read']>>> {
+    try {
+      return await reader.read();
+    } catch (error) {
+      throw serviceUnavailable(
+        'The document body from Congress.gov ended before it was complete.',
+        { reason: DOCUMENT_FETCH_FAILED, ...ctx.recoveryFor(DOCUMENT_FETCH_FAILED) },
+        { cause: error },
+      );
     }
-    return new TextDecoder('utf-8').decode(merged);
   }
 
   private tooLarge(ctx: Context, data: Record<string, unknown>): McpError {

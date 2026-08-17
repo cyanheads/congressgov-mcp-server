@@ -18,6 +18,21 @@ const TAG_RE = /<[^>]*>/g;
 const ENTITY_RE = /&(#[xX][0-9a-fA-F]+|#\d+|[a-zA-Z]+);/g;
 
 /**
+ * Resolve the body of one character reference — what sits between `&` and `;`.
+ * Returns `undefined` for a reference this extractor does not recognize, which
+ * the callers render verbatim rather than guessing at.
+ */
+export function decodeCharacterReference(ref: string): string | undefined {
+  if (ref.startsWith('#')) {
+    const hex = ref[1] === 'x' || ref[1] === 'X';
+    const codePoint = Number.parseInt(hex ? ref.slice(2) : ref.slice(1), hex ? 16 : 10);
+    if (!Number.isInteger(codePoint) || codePoint < 0 || codePoint > 0x10ffff) return undefined;
+    return String.fromCodePoint(codePoint);
+  }
+  return NAMED_ENTITIES[ref.toLowerCase()];
+}
+
+/**
  * Decode HTML/XML character references in one pass.
  *
  * A single pass is the point: decoding `&amp;` in its own sweep would turn the
@@ -25,15 +40,7 @@ const ENTITY_RE = /&(#[xX][0-9a-fA-F]+|#\d+|[a-zA-Z]+);/g;
  * An unrecognized reference is left verbatim rather than guessed at.
  */
 function decodeEntities(text: string): string {
-  return text.replace(ENTITY_RE, (match, ref: string) => {
-    if (ref.startsWith('#')) {
-      const hex = ref[1] === 'x' || ref[1] === 'X';
-      const codePoint = Number.parseInt(hex ? ref.slice(2) : ref.slice(1), hex ? 16 : 10);
-      if (!Number.isInteger(codePoint) || codePoint < 0 || codePoint > 0x10ffff) return match;
-      return String.fromCodePoint(codePoint);
-    }
-    return NAMED_ENTITIES[ref.toLowerCase()] ?? match;
-  });
+  return text.replace(ENTITY_RE, (match, ref: string) => decodeCharacterReference(ref) ?? match);
 }
 
 /**

@@ -90,4 +90,114 @@ describe('extractDocumentText', () => {
     const body = '<pre>first\n</pre>\n<pre>second</pre>';
     expect(extractDocumentText(body)).toBe('first\n\nsecond');
   });
+
+  /**
+   * Every character offset in the `content` contract is defined against this
+   * function's output, so its exact behaviour — including on malformed markup —
+   * is the specification a second implementation has to reproduce. These pin the
+   * shapes www.congress.gov actually serves plus the edge cases where the
+   * pipeline's stage order (normalize → strip comments → unwrap pre → strip tags
+   * → decode entities → trim) is observable.
+   */
+  describe('pinned behaviour', () => {
+    it('reads the GPO Formatted Text wrapper Congress.gov serves', () => {
+      const body = '<html><body><pre>\n[Congressional Bills]\nSEC. 1.\n</pre></body></html>\n';
+      expect(extractDocumentText(body)).toBe('[Congressional Bills]\nSEC. 1.');
+    });
+
+    it('reads the Formatted XML wrapper, declaration and doctype included', () => {
+      const body =
+        '<?xml version="1.0"?>\n<!DOCTYPE bill PUBLIC "x" "bill.dtd">\n<bill><text>Sec. 1.</text></bill> \n\n';
+      expect(extractDocumentText(body)).toBe('Sec. 1.');
+    });
+
+    it('drops everything after the last </pre>', () => {
+      expect(extractDocumentText('<pre>a</pre>tail')).toBe('a');
+    });
+
+    it('keeps the tail when the only </pre> is not past the opening tag', () => {
+      expect(extractDocumentText('<pre></pre>tail')).toBe('tail');
+    });
+
+    it('keeps intervening text across several <pre> blocks', () => {
+      expect(extractDocumentText('<pre>a</pre>mid<pre>b</pre>')).toBe('amidb');
+    });
+
+    it('ignores a </pre> that precedes the opening tag', () => {
+      expect(extractDocumentText('</pre><pre>body')).toBe('body');
+    });
+
+    it('unwraps whitespace-padded and mixed-case pre tags', () => {
+      expect(extractDocumentText('< pre >x< / PRE >tail')).toBe('x');
+    });
+
+    it('treats a self-closing <pre/> as the opening tag', () => {
+      expect(extractDocumentText('<pre/>body')).toBe('body');
+    });
+
+    it('finds the leftmost <pre> even inside another tag', () => {
+      expect(extractDocumentText('<a href="<pre>">after')).toBe('">after');
+    });
+
+    it('leaves an unterminated comment in the text', () => {
+      expect(extractDocumentText('<pre>a<!--b</pre>')).toBe('a<!--b');
+      expect(extractDocumentText('head<!--tail with > inside')).toBe('head inside');
+    });
+
+    it('leaves an unterminated tag in the text', () => {
+      expect(extractDocumentText('<pre>a<b</pre>')).toBe('a<b');
+      expect(extractDocumentText('alpha<beta')).toBe('alpha<beta');
+    });
+
+    it('takes only the first --> as the end of a comment', () => {
+      expect(extractDocumentText('<!--a<!--b-->c')).toBe('c');
+    });
+
+    it('never sees a <pre> that a comment removed', () => {
+      expect(extractDocumentText('<!--<pre>--><b>text</b>')).toBe('text');
+    });
+
+    it('joins an entity across a removed tag', () => {
+      expect(extractDocumentText('<pre>&am<i>p;</pre>')).toBe('&');
+    });
+
+    it('joins an entity across a removed comment', () => {
+      expect(extractDocumentText('&am<!--x-->p;')).toBe('&');
+    });
+
+    it('restarts an entity scan at a later ampersand', () => {
+      expect(extractDocumentText('&&amp;')).toBe('&&');
+      expect(extractDocumentText('&am&amp;')).toBe('&am&');
+    });
+
+    it('decodes a numeric reference through its leading zeros', () => {
+      expect(extractDocumentText('&#0000065;')).toBe('A');
+    });
+
+    it('decodes upper- and lower-case hex references', () => {
+      expect(extractDocumentText('&#x41;&#X42;')).toBe('AB');
+    });
+
+    it('emits a surrogate pair as two characters', () => {
+      const text = extractDocumentText('&#128512;x');
+      expect(text).toBe('😀x');
+      expect(text).toHaveLength(3);
+    });
+
+    it('leaves a reference it cannot resolve verbatim', () => {
+      expect(extractDocumentText('&abcdefghij;')).toBe('&abcdefghij;');
+      expect(extractDocumentText('&#99999999;')).toBe('&#99999999;');
+      expect(extractDocumentText('&#;')).toBe('&#;');
+    });
+
+    it('keeps bare angle brackets that form no tag', () => {
+      expect(extractDocumentText('a > b < c')).toBe('a > b < c');
+    });
+
+    it('trims decoded trailing whitespace, non-breaking space included', () => {
+      expect(extractDocumentText('<pre>a   \n\n</pre>')).toBe('a');
+      expect(extractDocumentText('<pre>a&nbsp;</pre>')).toBe('a');
+      expect(extractDocumentText('<pre>   \n  </pre>')).toBe('');
+    });
+  });
 });

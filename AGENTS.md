@@ -1,7 +1,7 @@
 # Agent Protocol
 
 **Server:** congressgov-mcp-server
-**Version:** 0.5.0
+**Version:** 0.5.1
 **Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.11.5`
 **Engines:** Bun ≥1.3.0, Node ≥24.0.0
 **MCP SDK:** `@modelcontextprotocol/sdk` ^1.30.0
@@ -174,11 +174,12 @@ Four services. `CongressApiService` backs nine tools and the House branch of `co
 - Party totals are derived from the roster (the feed publishes none)
 
 **`CongressDocumentsService`** — reads the document bodies behind Congress.gov's format URLs (`www.congress.gov`):
-- A second host, so a sibling service rather than a method on `CongressApiService` — no API key, no JSON, documents past a megabyte
+- A second host, so a sibling service rather than a method on `CongressApiService` — no API key, no JSON, and enrolled omnibus bills that run to ten megabytes
 - URLs are resolved from upstream format metadata and checked against a `www.congress.gov` allowlist; a caller never supplies one
-- The fetch is bounded: a 5 MB ceiling (refused on `Content-Length`, else mid-stream), a 30s deadline, and a content-type allowlist
+- The fetch is bounded: a 25 MB ceiling (refused on `Content-Length`, else mid-stream), a 30s deadline, and a content-type allowlist
+- The body is extracted as it streams and only the requested window is retained, so a read's live set is flat in the size of the document (transient allocation is not — peak RSS runs above a buffered read); the ceiling bounds how long a response may run, not how much of one fits in a buffer
 - The response is bounded by an exact character window — offsets index the extracted plain text and are never snapped to section breaks, so feeding `nextOffset` back walks a document with no overlap and no gap
-- `extract-text.ts` unwraps GPO's `<pre>` print output verbatim (whitespace is the document's structure) and decodes entities in one pass
+- `extract-text.ts` unwraps GPO's `<pre>` print output verbatim (whitespace is the document's structure) and decodes entities in one pass; `extract-text-stream.ts` is its incremental twin, pinned byte-for-byte against it by a differential test
 
 **`CongressMirrorService`** — local SQLite FTS5 mirror of bill title + CRS summary text, backing `congressgov_search_bills` only:
 - Opt-in via `CONGRESS_MIRROR_ENABLED` (off by default); built out-of-band via the `mirror:init`/`mirror:refresh` scripts, never on server startup

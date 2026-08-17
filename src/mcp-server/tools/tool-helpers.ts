@@ -399,7 +399,7 @@ export const documentErrorContracts = [
     retryable: false,
     when: 'The document is larger than the byte ceiling this server retrieves, so no character window can be served from it.',
     recovery:
-      "Request the other 'format' for this document, which is usually far smaller, or read it directly at the sourceUrl the text operation returns.",
+      'Read the document at the sourceUrl the text operation returns. A document this size clears the ceiling in every format it publishes, so switching format reaches the same limit.',
   },
   {
     code: JsonRpcErrorCode.InvalidParams,
