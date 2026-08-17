@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.5.0](changelog/0.5.x/0.5.0.md) — 2026-08-16
+
+Add bounded legislative document text retrieval (`content`) to bill, committee-report, and daily-record tools; fix list-row field loss and make the research prompt mirror-aware.
+
 ## [0.4.3](changelog/0.4.x/0.4.3.md) — 2026-08-16
 
 Fix silent data loss and truncation across detail/list rendering, HTML-to-Markdown spacing, and the enacted-laws list-to-get chain.

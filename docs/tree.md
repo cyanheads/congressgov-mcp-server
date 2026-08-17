@@ -1,6 +1,6 @@
 # congressgov-mcp-server - Directory Structure
 
-Generated on: 2026-08-17 01:27:49
+Generated on: 2026-08-17 03:06:29
 
 ```text
 congressgov-mcp-server/
@@ -26,6 +26,7 @@ congressgov-mcp-server/
 │   ├── 0.2.x/
 │   ├── 0.3.x/
 │   ├── 0.4.x/
+│   ├── 0.5.x/
 │   └── template.md
 ├── docs/
 │   └── congress-gov-mcp-design.md
@@ -169,6 +170,11 @@ congressgov-mcp-server/
 │   │   ├── congress-api/
 │   │   │   ├── congress-api-service.ts
 │   │   │   └── types.ts
+│   │   ├── congress-documents/
+│   │   │   ├── congress-documents-service.ts
+│   │   │   ├── document-formats.ts
+│   │   │   ├── extract-text.ts
+│   │   │   └── types.ts
 │   │   ├── congress-mirror/
 │   │   │   ├── congress-mirror-service.ts
 │   │   │   ├── ingest.ts
@@ -201,6 +207,7 @@ congressgov-mcp-server/
 │   │       │   ├── committee-reports.tool.test.ts
 │   │       │   ├── crs-reports.tool.test.ts
 │   │       │   ├── daily-record.tool.test.ts
+│   │       │   ├── document-content.test.ts
 │   │       │   ├── enacted-laws.tool.test.ts
 │   │       │   ├── exhausted-page-notice.test.ts
 │   │       │   ├── input-validation.test.ts
@@ -211,6 +218,7 @@ congressgov-mcp-server/
 │   │       │   └── senate-nominations.tool.test.ts
 │   │       ├── format-helpers-extended.test.ts
 │   │       ├── format-helpers-fidelity.test.ts
+│   │       ├── format-helpers-list-fidelity.test.ts
 │   │       ├── format-helpers.test.ts
 │   │       ├── senate-votes.format.test.ts
 │   │       └── tool-helpers.test.ts
@@ -218,6 +226,10 @@ congressgov-mcp-server/
 │       ├── congress-api/
 │       │   ├── congress-api-service.test.ts
 │       │   └── normalizers.test.ts
+│       ├── congress-documents/
+│       │   ├── congress-documents-service.test.ts
+│       │   ├── document-formats.test.ts
+│       │   └── extract-text.test.ts
 │       ├── congress-mirror/
 │       │   └── congress-mirror-service.test.ts
 │       └── senate-lis/
