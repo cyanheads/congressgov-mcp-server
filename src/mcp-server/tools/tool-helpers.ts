@@ -114,6 +114,62 @@ export function toIdentifierNumber(value: number | string): number {
   return typeof value === 'number' ? value : Number(value);
 }
 
+/**
+ * A law number, written either bare (`90`, leading zeros allowed) or as the
+ * `{congress}-{lawNumber}` citation Congress.gov publishes (`118-90`).
+ */
+const LAW_NUMBER_PATTERN = /^(?:\d+-)?0*[1-9]\d*$/;
+
+/**
+ * Schema for the law number a `/law/{congress}/{lawType}/{lawNumber}` lookup
+ * takes. The bare number never appears in list output: the only law identifier
+ * a `list` response carries is the compound citation on `laws[].number`
+ * (`"118-90"`, rendered as `**Law:** Public Law 118-90`), while the row's own
+ * `number` is the origin bill. Accepting the citation removes the undocumented
+ * split-on-the-hyphen step from the list → get chain.
+ *
+ * Same plain-union-plus-handler-normalization shape as `numericIdentifier` —
+ * `.transform()` is not JSON-Schema-serializable. Pass the parsed value through
+ * `toLawNumber`, which cross-checks a citation's prefix against `congress`.
+ * Resolves cyanheads/congressgov-mcp-server#54.
+ */
+export function lawNumberIdentifier(description: string) {
+  return z
+    .union([
+      z.number().int().positive().describe('Positive integer form (e.g. 90).'),
+      z
+        .string()
+        .regex(
+          LAW_NUMBER_PATTERN,
+          'Must be a law number (90) or a full law citation (118-90), digits only and greater than zero.',
+        )
+        .describe('String form — the law number ("90") or the full citation ("118-90").'),
+    ])
+    .describe(description);
+}
+
+/**
+ * Normalize a `lawNumberIdentifier` value to the bare law number the service
+ * layer takes, rejecting a citation that names a different congress than the
+ * one supplied — the two would otherwise disagree silently and resolve to a law
+ * the caller never asked for.
+ */
+export function toLawNumber(value: number | string, congress: number): number {
+  if (typeof value === 'number') return value;
+  const hyphen = value.indexOf('-');
+  if (hyphen === -1) return Number(value);
+
+  const citedCongress = Number(value.slice(0, hyphen));
+  const lawNumber = Number(value.slice(hyphen + 1));
+  if (citedCongress !== congress) {
+    throw validationError(
+      `Law citation '${value}' is from congress ${citedCongress}, but congress=${congress} was supplied. Pass congress=${citedCongress}, or drop the prefix and pass lawNumber=${lawNumber}.`,
+      { field: 'lawNumber', lawNumber: value, congress },
+    );
+  }
+  return lawNumber;
+}
+
 export function normalizeOptionalString(value: string | undefined): string | undefined {
   const normalized = value?.trim();
   return normalized || undefined;

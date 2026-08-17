@@ -1,7 +1,7 @@
 /**
  * @fileoverview Tests for shared tool-helpers — normalizeOptionalString, validateIsoDateTime,
- * numericIdentifier/toIdentifierNumber, validateDateTimeRange, buildEffectiveQuery,
- * notifyIfNoMatches.
+ * numericIdentifier/toIdentifierNumber, lawNumberIdentifier/toLawNumber,
+ * validateDateTimeRange, buildEffectiveQuery, notifyIfNoMatches.
  * @module tests/mcp-server/tools/tool-helpers.test
  */
 
@@ -10,10 +10,12 @@ import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing
 import { describe, expect, it } from 'vitest';
 import {
   buildEffectiveQuery,
+  lawNumberIdentifier,
   normalizeOptionalString,
   notifyIfNoMatches,
   numericIdentifier,
   toIdentifierNumber,
+  toLawNumber,
   validateDateTimeRange,
   validateIsoDateTime,
 } from '@/mcp-server/tools/tool-helpers.js';
@@ -149,6 +151,69 @@ describe('numericIdentifier / toIdentifierNumber', () => {
     expect(toIdentifierNumber(9479)).toBe(9479);
     expect(toIdentifierNumber('9479')).toBe(9479);
     expect(toIdentifierNumber('0009479')).toBe(9479);
+  });
+});
+
+describe('lawNumberIdentifier / toLawNumber', () => {
+  const schema = lawNumberIdentifier('Test law number.');
+
+  it('accepts a positive integer', () => {
+    expect(schema.parse(90)).toBe(90);
+  });
+
+  it('accepts a digit string, including zero-padded', () => {
+    expect(schema.parse('90')).toBe('90');
+    expect(schema.parse('0090')).toBe('0090');
+  });
+
+  it('accepts the compound citation form list rows carry', () => {
+    expect(schema.parse('118-90')).toBe('118-90');
+  });
+
+  it.each([
+    ['prefix with no law number', '118-'],
+    ['law number with a bare hyphen prefix', '-90'],
+    ['zero law number in a citation', '118-0'],
+    ['a three-part citation', '118-90-1'],
+    ['an en-dash citation', '118–90'],
+    ['non-numeric', 'abc'],
+    ['digits with a trailing letter', '90x'],
+    ['decimal', '9.5'],
+    ['negative', '-5'],
+    ['zero', '0'],
+    ['empty', ''],
+    ['whitespace-only', '   '],
+    ['padded digits', ' 90 '],
+    ['scientific notation', '1e3'],
+    ['hexadecimal', '0x10'],
+  ])('rejects %s', (_label, value) => {
+    expect(() => schema.parse(value)).toThrow();
+  });
+
+  it.each([0, -5, 1.5])('rejects the non-positive-integer number %o', (value) => {
+    expect(() => schema.parse(value)).toThrow();
+  });
+
+  it('emits a JSON-Schema-serializable union (no transform)', () => {
+    const json = z.toJSONSchema(schema) as { anyOf?: Array<Record<string, unknown>> };
+    expect(json.anyOf).toHaveLength(2);
+    expect(json.anyOf?.map((variant) => variant.type)).toEqual(['integer', 'string']);
+  });
+
+  it('normalizes every accepted form to the bare law number', () => {
+    expect(toLawNumber(90, 118)).toBe(90);
+    expect(toLawNumber('90', 118)).toBe(90);
+    expect(toLawNumber('0090', 118)).toBe(90);
+    expect(toLawNumber('118-90', 118)).toBe(90);
+  });
+
+  it('rejects a citation whose congress contradicts the congress input', () => {
+    expect(() => toLawNumber('119-90', 118)).toThrow(/119/);
+    expect(() => toLawNumber('119-90', 118)).toThrow(/congress=118/);
+  });
+
+  it('names both recovery paths when the congress contradicts the citation', () => {
+    expect(() => toLawNumber('119-90', 118)).toThrow(/lawNumber=90/);
   });
 });
 
