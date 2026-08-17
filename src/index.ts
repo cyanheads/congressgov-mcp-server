@@ -32,6 +32,7 @@ import { rollVotesTool } from '@/mcp-server/tools/definitions/roll-votes.tool.js
 import { searchBillsTool } from '@/mcp-server/tools/definitions/search-bills.tool.js';
 import { senateNominationsTool } from '@/mcp-server/tools/definitions/senate-nominations.tool.js';
 import { initCongressApi } from '@/services/congress-api/congress-api-service.js';
+import { initCongressDocuments } from '@/services/congress-documents/congress-documents-service.js';
 import {
   getCongressMirror,
   initCongressMirror,
@@ -91,6 +92,7 @@ await createApp({
   setup(core) {
     initCongressApi();
     initSenateVoteService();
+    initCongressDocuments();
 
     /**
      * The bill FTS mirror is opt-in (off by default). When enabled, wire the

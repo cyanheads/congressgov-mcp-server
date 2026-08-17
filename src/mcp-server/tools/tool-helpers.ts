@@ -10,6 +10,7 @@ import {
   JsonRpcErrorCode,
   validationError,
 } from '@cyanheads/mcp-ts-core/errors';
+import { DOCUMENT_FORMATS } from '@/services/congress-documents/document-formats.js';
 
 /**
  * Shared output-schema building blocks. Upstream Congress.gov responses are
@@ -310,6 +311,105 @@ export function buildEffectiveQuery(scope: string, filters?: Record<string, unkn
   }
   return parts.length === 0 ? scope : `${scope} (${parts.join(', ')})`;
 }
+
+/** Characters one `content` call returns by default. */
+export const DEFAULT_CONTENT_CHARACTERS = 25_000;
+
+/** Ceiling on one `content` window. A full bill takes several windows regardless. */
+export const MAX_CONTENT_CHARACTERS = 100_000;
+
+/**
+ * Input fields shared by every `content` operation: which format to read, and
+ * the character window to return.
+ *
+ * The window is deliberately **not** the tools' existing `offset`/`limit` pair.
+ * Those are the Congress.gov pagination params, capped at `limit ≤ 250` because
+ * that is the API's own page ceiling — a cap that would make a character window
+ * useless, and one that cannot be widened per-operation on a flat input object
+ * without breaking every list operation's validation. The idiom is preserved
+ * (an offset, a limit, and a `nextOffset` to feed back); only the names differ,
+ * so the two ranges can carry the bounds each actually needs.
+ */
+export const documentWindowInput = {
+  format: z
+    .enum(DOCUMENT_FORMATS)
+    .default('text')
+    .describe(
+      "Document format for 'content'. 'text' is GPO's Formatted Text — plain, pre-formatted print output, published for every document checked. 'xml' prefers United States Legislative Markup and falls back to Formatted XML; it exists on some bill text versions and on no committee report or Congressional Record article. PDF is not retrieved — read one at the format URLs 'text'/'articles' return.",
+    ),
+  characterOffset: z
+    .number()
+    .int()
+    .min(0)
+    .default(0)
+    .describe(
+      "First character to return for 'content', 0-based. Offsets are exact and are never snapped to a section or paragraph break, so feeding the response's nextOffset back walks the whole document with every character returned exactly once.",
+    ),
+  characterLimit: z
+    .number()
+    .int()
+    .min(1)
+    .max(MAX_CONTENT_CHARACTERS)
+    .default(DEFAULT_CONTENT_CHARACTERS)
+    .describe(
+      `Maximum characters to return for 'content' (1-${MAX_CONTENT_CHARACTERS}). Legislative documents run past a million characters, so a full bill takes several windows.`,
+    ),
+};
+
+/**
+ * Failure modes of the `content` operation on `congressgov_bill_lookup`,
+ * `congressgov_committee_reports`, and `congressgov_daily_record`. Layered on top
+ * of `congressErrorContracts` — the document fetch is a second upstream
+ * (`www.congress.gov`) with its own ways to fail, and only these three tools
+ * reach it.
+ *
+ * `CongressDocumentsService` raises each with a matching `data.reason` and
+ * resolves the `recovery` hint declared here via `ctx.recoveryFor`, so the hint
+ * lives in exactly one place.
+ * Resolves cyanheads/congressgov-mcp-server#53.
+ */
+export const documentErrorContracts = [
+  {
+    code: JsonRpcErrorCode.NotFound,
+    reason: 'document_unavailable',
+    retryable: false,
+    when: "The 'content' selection resolves to no retrievable document — the text version or article index is past the end of the list, the record publishes no formats at all, or Congress.gov does not hold the file its own metadata names.",
+    recovery:
+      "Run the tool's 'text' or 'articles' operation first to see which documents Congress.gov publishes for this record, then retry with a selection it lists.",
+  },
+  {
+    code: JsonRpcErrorCode.NotFound,
+    reason: 'format_unavailable',
+    retryable: false,
+    when: "The document exists but publishes nothing in the requested 'format' — some text versions and committee reports ship PDF only, and no Congressional Record article publishes XML.",
+    recovery:
+      "Retry with format 'text', which every document checked publishes; if that fails too the document is PDF-only, so read it at the format URL the text operation returns.",
+  },
+  {
+    code: JsonRpcErrorCode.ServiceUnavailable,
+    reason: 'document_fetch_failed',
+    retryable: true,
+    when: 'www.congress.gov did not return a readable document — a non-2xx status, a network failure, an empty body, or a content type that is not text or XML.',
+    recovery:
+      'Retry after a short delay; if the failure persists, request a different format or read the document at the sourceUrl the text operation returns.',
+  },
+  {
+    code: JsonRpcErrorCode.InvalidParams,
+    reason: 'document_too_large',
+    retryable: false,
+    when: 'The document is larger than the byte ceiling this server retrieves, so no character window can be served from it.',
+    recovery:
+      "Request the other 'format' for this document, which is usually far smaller, or read it directly at the sourceUrl the text operation returns.",
+  },
+  {
+    code: JsonRpcErrorCode.InvalidParams,
+    reason: 'offset_past_end',
+    retryable: false,
+    when: 'characterOffset is at or beyond the last character of the document, so the window would be empty.',
+    recovery:
+      'Restart the walk at characterOffset 0 and follow nextOffset, which goes null once the document has been read to the end.',
+  },
+] as const satisfies readonly ErrorContract[];
 
 /**
  * Shared `errors[]` contract for every Congress.gov tool. All ten tools reach

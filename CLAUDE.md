@@ -1,7 +1,7 @@
 # Agent Protocol
 
 **Server:** congressgov-mcp-server
-**Version:** 0.4.3
+**Version:** 0.5.0
 **Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.11.5`
 **Engines:** Bun ≥1.3.0, Node ≥24.0.0
 **MCP SDK:** `@modelcontextprotocol/sdk` ^1.30.0
@@ -68,7 +68,7 @@ Tailor suggestions to what's actually missing or stale — don't recite the full
 
 | Name | Description |
 |:-----|:------------|
-| `congressgov_bill_lookup` | Browse, filter, and retrieve bill data (actions, sponsors, summaries, text, related bills) |
+| `congressgov_bill_lookup` | Browse, filter, and retrieve bill data (actions, sponsors, summaries, text, related bills) + bounded document text via `content` |
 | `congressgov_enacted_laws` | Browse enacted public and private laws by congress |
 | `congressgov_member_lookup` | Discover members by state/district/congress, retrieve legislative portfolios |
 | `congressgov_committee_lookup` | Browse committees and retrieve legislation, reports, nominations |
@@ -76,8 +76,8 @@ Tailor suggestions to what's actually missing or stale — don't recite the full
 | `congressgov_senate_nominations` | Browse presidential nominations, track Senate confirmation pipeline |
 | `congressgov_bill_summaries` | Browse recent CRS bill summaries — the "what's happening" feed |
 | `congressgov_crs_reports` | Browse and retrieve nonpartisan CRS policy analysis reports |
-| `congressgov_committee_reports` | Browse and retrieve committee reports accompanying legislation |
-| `congressgov_daily_record` | Browse daily Congressional Record — floor speeches, debates, proceedings |
+| `congressgov_committee_reports` | Browse and retrieve committee reports accompanying legislation + bounded report text via `content` |
+| `congressgov_daily_record` | Browse daily Congressional Record — floor speeches, debates, proceedings + bounded article text via `content` |
 | `congressgov_search_bills` | Keyword-search bill titles/summaries via the opt-in local FTS mirror — off by default |
 
 ### Resources (5)
@@ -110,6 +110,11 @@ src/
     congress-api/
       congress-api-service.ts           # API client — auth, pagination, rate limiting
       types.ts                          # API response types
+    congress-documents/
+      congress-documents-service.ts     # www.congress.gov document fetch — host allowlist, byte ceiling, character window
+      document-formats.ts               # Format label → URL resolution over upstream format lists
+      extract-text.ts                   # GPO `<pre>` / XML body → deterministic plain text
+      types.ts                          # Document format + content window types
     congress-mirror/
       congress-mirror-service.ts        # Mirror read path — FTS5 search, ready(), sync accessor
       ingest.ts                         # Bill list + CRS summaries sync generator
@@ -153,7 +158,7 @@ scripts/
 
 ## Services
 
-Three services. `CongressApiService` backs nine tools and the House branch of `congressgov_roll_votes`; `SenateVoteService` backs only the Senate branch of `congressgov_roll_votes` (the Congress.gov API exposes no Senate vote namespace); `CongressMirrorService` backs `congressgov_search_bills` only.
+Four services. `CongressApiService` backs nine tools and the House branch of `congressgov_roll_votes`; `SenateVoteService` backs only the Senate branch of `congressgov_roll_votes` (the Congress.gov API exposes no Senate vote namespace); `CongressMirrorService` backs `congressgov_search_bills` only; `CongressDocumentsService` backs the `content` operation on `congressgov_bill_lookup`, `congressgov_committee_reports`, and `congressgov_daily_record`.
 
 **`CongressApiService`** — wraps the Congress.gov REST API v3:
 - API key via `X-Api-Key` header (never logged; kept out of the URL so it can't leak in upstream error messages)
@@ -167,6 +172,13 @@ Three services. `CongressApiService` backs nine tools and the House branch of `c
 - The whole session menu is one file; each vote's roster ships inline — pagination is client-side
 - The host returns HTTP 200 with an HTML page for unknown congress/session/vote, so "not found" is detected from the body, not the status code
 - Party totals are derived from the roster (the feed publishes none)
+
+**`CongressDocumentsService`** — reads the document bodies behind Congress.gov's format URLs (`www.congress.gov`):
+- A second host, so a sibling service rather than a method on `CongressApiService` — no API key, no JSON, documents past a megabyte
+- URLs are resolved from upstream format metadata and checked against a `www.congress.gov` allowlist; a caller never supplies one
+- The fetch is bounded: a 5 MB ceiling (refused on `Content-Length`, else mid-stream), a 30s deadline, and a content-type allowlist
+- The response is bounded by an exact character window — offsets index the extracted plain text and are never snapped to section breaks, so feeding `nextOffset` back walks a document with no overlap and no gap
+- `extract-text.ts` unwraps GPO's `<pre>` print output verbatim (whitespace is the document's structure) and decodes entities in one pass
 
 **`CongressMirrorService`** — local SQLite FTS5 mirror of bill title + CRS summary text, backing `congressgov_search_bills` only:
 - Opt-in via `CONGRESS_MIRROR_ENABLED` (off by default); built out-of-band via the `mirror:init`/`mirror:refresh` scripts, never on server startup
@@ -197,6 +209,8 @@ All tools share these patterns. The service layer handles them uniformly:
 | Entity not found (404) | `notFound('{entity} not found', { ...identifiers })` |
 | Invalid params | `validationError('...', { field })` |
 | Network error | `serviceUnavailable('Unable to reach the Congress.gov API.')` |
+
+The `content` operation adds `documentErrorContracts` (tool-helpers) on top: `document_unavailable`, `format_unavailable`, `document_fetch_failed`, `document_too_large`, and `offset_past_end`. `CongressDocumentsService` raises each with a matching `data.reason` and resolves the hint via `ctx.recoveryFor` — note that `ctx.fail` does **not** auto-populate `recovery`, so handler-side `ctx.fail` calls must spread `ctx.recoveryFor(reason)` into their data or the hint never reaches the wire.
 
 ---
 

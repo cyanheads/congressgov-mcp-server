@@ -95,6 +95,7 @@ operation: z.enum([
   'text',       // Available text versions (introduced, reported, enrolled, etc.)
   'titles',     // Official, short, and popular titles
   'related',    // Companion bills, identical bills, related legislation
+  'content',    // The selected text version's actual document text, one window at a time
 ])
 ```
 
@@ -106,6 +107,10 @@ operation: z.enum([
 | `congress` | all | Congress number (e.g., 118, 119). Required. |
 | `billType` | list, get, sub-resources | Bill type code: `hr`, `s`, `hjres`, `sjres`, `hconres`, `sconres`, `hres`, `sres`. Required for `get` and sub-resources. |
 | `billNumber` | get, sub-resources | Bill number (e.g., 3076). Required for `get` and sub-resource operations. |
+| `textVersionIndex` | content | Which text version to read, 0-based against the order `text` returns. Default 0 (most recent). |
+| `format` | content | `text` (GPO Formatted Text) or `xml` (USLM, falling back to Formatted XML). Default `text`. |
+| `characterOffset` | content | First character of the window, 0-based. Default 0. |
+| `characterLimit` | content | Maximum characters in the window (1-100,000). Default 25,000. |
 | `fromDateTime` | list | Start of date range filter (ISO 8601). Filters by latest action date. |
 | `toDateTime` | list | End of date range filter (ISO 8601). |
 | `limit` | list, sub-resources | Results per page (1-250, default 20). |
@@ -483,8 +488,9 @@ Committee reports that accompany legislation reported out of committee. Separate
 ```ts
 operation: z.enum([
   'list', // Browse committee reports by congress and type
-  'get',  // Report detail
-  'text', // Report text versions
+  'get',     // Report detail
+  'text',    // Report text versions
+  'content', // The report's actual document text, one window at a time
 ])
 ```
 
@@ -495,9 +501,12 @@ operation: z.enum([
 | `operation` | all | Which data to retrieve. |
 | `congress` | all | Congress number. Required. |
 | `reportType` | list (optional), get, text | `hrpt` (House), `srpt` (Senate), `erpt` (Executive). |
-| `reportNumber` | get, text | Committee report number. Required for detail operations. |
+| `reportNumber` | get, text, content | Committee report number. Required for detail operations. |
 | `limit` | list | Results per page (1-250). |
 | `offset` | list | Pagination offset. |
+| `format` | content | `text` (GPO Formatted Text) or `xml`. Committee reports publish no XML, so `xml` fails with `format_unavailable`. Default `text`. |
+| `characterOffset` | content | First character of the window, 0-based. Default 0. |
+| `characterLimit` | content | Maximum characters in the window (1-100,000). Default 25,000. |
 
 **Description:**
 ```
@@ -534,6 +543,7 @@ operation: z.enum([
   'list',     // Browse daily Congressional Record issues
   'issues',   // Issues within a specific volume
   'articles', // Articles within a specific issue
+  'content',  // The selected article's actual document text, one window at a time
 ])
 ```
 
@@ -542,10 +552,14 @@ operation: z.enum([
 | Param | Used by | Description |
 |:------|:--------|:------------|
 | `operation` | all | Which data to retrieve. |
-| `volumeNumber` | issues, articles | Volume number. Required for drill-down operations. |
-| `issueNumber` | articles | Issue number within a volume. Required for `articles`. |
+| `volumeNumber` | issues, articles, content | Volume number. Required for drill-down operations. |
+| `issueNumber` | articles, content | Issue number within a volume. Required for `articles` and `content`. |
 | `limit` | list, articles | Results per page (1-250). |
 | `offset` | list, articles | Pagination offset. |
+| `articleIndex` | content | Which article to read, 0-based against the issue's whole article sequence. Default 0. |
+| `format` | content | `text` (GPO Formatted Text) or `xml`. The Congressional Record publishes no XML. Default `text`. |
+| `characterOffset` | content | First character of the window, 0-based. Default 0. |
+| `characterLimit` | content | Maximum characters in the window (1-100,000). Default 25,000. |
 
 **Description:**
 ```
@@ -744,6 +758,26 @@ The Congress.gov API exposes House votes but not Senate votes. When Senate votes
 ### No SDK dependency
 
 [`congress-gov-sdk`](https://www.npmjs.com/package/congress-gov-sdk) exists but uses Axios, is 0.1.x, and adds unnecessary overhead. The API is straightforward REST — a thin `fetch` client gives full control.
+
+### Document text is a second upstream, not a second API method
+
+`bill_lookup 'text'`, `committee_reports 'text'`, and `daily_record 'articles'` return format URLs, and every one of them resolves to `www.congress.gov` — a different host from the `api.congress.gov` that `CongressApiService` is scoped to (`baseUrl`, JSON parsing, `X-Api-Key` header). The `content` operation that reads those documents is backed by a separate `CongressDocumentsService` (`src/services/congress-documents/`), following `SenateVoteService`, the existing precedent for a second host with no API key and non-JSON content. It adds no dependency: `fetch`, a hand-written `<pre>`/entity extractor, and the framework's `fetchWithTimeout`/`withRetry`.
+
+### `content` bounds the fetch and the response separately
+
+A full enrolled bill's Formatted Text runs past a megabyte and its USLM XML past 2.6 MB. Bounding only the response would still pull the whole document into memory on every call, so the fetch carries its own ceiling (5 MB, refused on `Content-Length` when one is advertised and mid-stream when it is not), a 30-second deadline covering headers and body, and a content-type allowlist. The response is bounded separately, by an exact character window.
+
+### `content` offsets are exact, never snapped to section breaks
+
+Bill text is SECTION-numbered, and aligning each window to the nearest section boundary reads as the friendlier design. It is not: a caller walking a document by feeding `nextOffset` back would then see characters twice or lose them at every seam, with no way to tell which. Offsets index the extracted plain text directly, so a walk returns every character exactly once. Section structure, if it is ever exposed, belongs in response metadata rather than in where a window starts.
+
+### `content` uses `characterOffset`/`characterLimit`, not `offset`/`limit`
+
+The window follows the repo's existing `offset` + `limit` + `nextOffset` idiom but cannot reuse those two fields: they are the Congress.gov pagination params, capped at `limit ≤ 250` because that is the API's own page ceiling. On a flat input object that cap cannot be widened for one operation without loosening validation for every list operation, and a 250-character window is useless. Separate names let each range carry the bounds it actually needs.
+
+### PDF is not retrieved
+
+Every document publishes PDF, and a few publish nothing else. Extracting text from PDF means a parser dependency for a format that is redundant wherever Formatted Text exists. `content` declares `format_unavailable` for those documents and returns the `sourceUrl` so the caller can read the PDF directly.
 
 ---
 
