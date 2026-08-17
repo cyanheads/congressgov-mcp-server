@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.5.1](changelog/0.5.x/0.5.1.md) — 2026-08-17
+
+Raise the `content` document ceiling to 25 MB via a streaming extractor, reaching the largest enacted bills; map mid-stream fetch failures correctly and fix the too-large recovery hint.
+
 ## [0.5.0](changelog/0.5.x/0.5.0.md) — 2026-08-16
 
 Add bounded legislative document text retrieval (`content`) to bill, committee-report, and daily-record tools; fix list-row field loss and make the research prompt mirror-aware.

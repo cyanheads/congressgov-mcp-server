@@ -1,6 +1,6 @@
 # congressgov-mcp-server - Directory Structure
 
-Generated on: 2026-08-17 03:06:29
+Generated on: 2026-08-17 03:46:31
 
 ```text
 congressgov-mcp-server/
@@ -173,6 +173,7 @@ congressgov-mcp-server/
 │   │   ├── congress-documents/
 │   │   │   ├── congress-documents-service.ts
 │   │   │   ├── document-formats.ts
+│   │   │   ├── extract-text-stream.ts
 │   │   │   ├── extract-text.ts
 │   │   │   └── types.ts
 │   │   ├── congress-mirror/
@@ -229,6 +230,7 @@ congressgov-mcp-server/
 │       ├── congress-documents/
 │       │   ├── congress-documents-service.test.ts
 │       │   ├── document-formats.test.ts
+│       │   ├── extract-text-stream.test.ts
 │       │   └── extract-text.test.ts
 │       ├── congress-mirror/
 │       │   └── congress-mirror-service.test.ts
