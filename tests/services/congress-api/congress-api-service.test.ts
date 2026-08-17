@@ -58,8 +58,8 @@ describe('CongressApiService', () => {
     it('sends api key via X-Api-Key header and format=json in query', async () => {
       mockFetch.mockResolvedValue(okJson({ congress: {} }));
       await service.getCurrentCongress(createMockContext());
-      const url = new URL(mockFetch.mock.calls[0][0]);
-      const init = mockFetch.mock.calls[0][1] as RequestInit;
+      const url = new URL(mockFetch.mock.calls[0]![0]);
+      const init = mockFetch.mock.calls[0]![1] as RequestInit;
       const headers = init.headers as Record<string, string>;
       expect(headers['X-Api-Key']).toBe('test-api-key');
       expect(url.searchParams.get('api_key')).toBeNull();
@@ -69,21 +69,21 @@ describe('CongressApiService', () => {
     it('builds correct path for listBills', async () => {
       mockFetch.mockResolvedValue(okJson({ bills: [] }));
       await service.listBills({ congress: 118 }, createMockContext());
-      const url = new URL(mockFetch.mock.calls[0][0]);
+      const url = new URL(mockFetch.mock.calls[0]![0]);
       expect(url.pathname).toBe('/v3/bill/118');
     });
 
     it('builds correct path for listBills with billType', async () => {
       mockFetch.mockResolvedValue(okJson({ bills: [] }));
       await service.listBills({ congress: 118, billType: 'hr' }, createMockContext());
-      const url = new URL(mockFetch.mock.calls[0][0]);
+      const url = new URL(mockFetch.mock.calls[0]![0]);
       expect(url.pathname).toBe('/v3/bill/118/hr');
     });
 
     it('includes pagination params in query string', async () => {
       mockFetch.mockResolvedValue(okJson({ bills: [] }));
       await service.listBills({ congress: 118, limit: 50, offset: 100 }, createMockContext());
-      const url = new URL(mockFetch.mock.calls[0][0]);
+      const url = new URL(mockFetch.mock.calls[0]![0]);
       expect(url.searchParams.get('limit')).toBe('50');
       expect(url.searchParams.get('offset')).toBe('100');
     });
@@ -119,7 +119,7 @@ describe('CongressApiService', () => {
         .catch((e: unknown) => e)) as McpError;
       expect(error.code).toBe(JsonRpcErrorCode.InvalidParams);
       expect(error.data?.reason).toBe('invalid_request');
-      expect((error.data?.recovery as { hint: string }).hint).toMatch(/ISO 8601/);
+      expect((error.data?.recovery as { hint: string } | undefined)?.hint).toMatch(/ISO 8601/);
       expect(error.message).not.toContain('api.congress.gov');
       expect(error.message).not.toContain('Fetch failed');
     });
@@ -141,7 +141,7 @@ describe('CongressApiService', () => {
         .catch((e: unknown) => e)) as McpError;
       expect(error.code).toBe(JsonRpcErrorCode.NotFound);
       expect(error.data?.reason).toBe('not_found');
-      expect((error.data?.recovery as { hint: string }).hint).toBeTruthy();
+      expect((error.data?.recovery as { hint: string } | undefined)?.hint).toBeTruthy();
       expect(error.message).not.toContain('api.congress.gov');
     });
 
@@ -296,21 +296,21 @@ describe('CongressApiService', () => {
     it('builds correct path for listMembers with state and district', async () => {
       mockFetch.mockResolvedValue(okJson({ members: [] }));
       await service.listMembers({ stateCode: 'CA', district: 12 }, createMockContext());
-      const url = new URL(mockFetch.mock.calls[0][0]);
+      const url = new URL(mockFetch.mock.calls[0]![0]);
       expect(url.pathname).toBe('/v3/member/CA/12');
     });
 
     it('builds correct path for listMembers by congress', async () => {
       mockFetch.mockResolvedValue(okJson({ members: [] }));
       await service.listMembers({ congress: 118 }, createMockContext());
-      const url = new URL(mockFetch.mock.calls[0][0]);
+      const url = new URL(mockFetch.mock.calls[0]![0]);
       expect(url.pathname).toBe('/v3/member/congress/118');
     });
 
     it('builds combined path for listMembers with congress and state', async () => {
       mockFetch.mockResolvedValue(okJson({ members: [] }));
       await service.listMembers({ congress: 118, stateCode: 'CA' }, createMockContext());
-      const url = new URL(mockFetch.mock.calls[0][0]);
+      const url = new URL(mockFetch.mock.calls[0]![0]);
       expect(url.pathname).toBe('/v3/member/congress/118/CA');
     });
 
@@ -320,7 +320,7 @@ describe('CongressApiService', () => {
         { congress: 118, stateCode: 'CA', district: 12 },
         createMockContext(),
       );
-      const url = new URL(mockFetch.mock.calls[0][0]);
+      const url = new URL(mockFetch.mock.calls[0]![0]);
       expect(url.pathname).toBe('/v3/member/congress/118/CA/12');
     });
   });

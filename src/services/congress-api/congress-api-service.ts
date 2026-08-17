@@ -222,25 +222,39 @@ const UPSTREAM_ERROR_RECOVERY = {
 } as const;
 
 /**
+ * Read the upstream HTTP status off an McpError's `data`. `fetchWithTimeout`
+ * and `httpErrorFromResponse` both emit the Fetch `Response`-aligned `status`
+ * and `body` fields; `classifyUpstreamError` re-emits them under the same names
+ * so downstream classification reads one vocabulary.
+ */
+function readUpstreamStatus(error: McpError): number | undefined {
+  return typeof error.data?.status === 'number' ? error.data.status : undefined;
+}
+
+/** Read the captured upstream response body off an McpError's `data`. */
+function readUpstreamBody(error: McpError): string | undefined {
+  return typeof error.data?.body === 'string' ? error.data.body : undefined;
+}
+
+/**
  * Map an McpError raised by fetchWithTimeout — whose message embeds the full
  * upstream URL and which carries no machine-readable reason — into a clean
  * domain error: a stable `data.reason`, an actionable `data.recovery.hint`, and
  * a message that never echoes the request URL. The framework's status-mapped
  * code is preserved for the upstream-error bucket (retry semantics and the 500
- * DoesNotExist path key off InternalError vs ServiceUnavailable), and
- * `statusCode`/`responseBody` are carried through so tryNotFound() can still
+ * DoesNotExist path key off InternalError vs ServiceUnavailable), and the
+ * upstream `status`/`body` are carried through so tryNotFound() can still
  * classify the 404 and 500 cases at call sites.
  * Resolves cyanheads/congressgov-mcp-server#34.
  */
 function classifyUpstreamError(error: McpError, path: string): McpError {
-  const statusCode = typeof error.data?.statusCode === 'number' ? error.data.statusCode : undefined;
-  const responseBody =
-    typeof error.data?.responseBody === 'string' ? error.data.responseBody : undefined;
+  const status = readUpstreamStatus(error);
+  const body = readUpstreamBody(error);
   const meta: Record<string, unknown> = { path };
-  if (statusCode !== undefined) meta.statusCode = statusCode;
-  if (responseBody !== undefined) meta.responseBody = responseBody;
+  if (status !== undefined) meta.status = status;
+  if (body !== undefined) meta.body = body;
   const opts = { cause: error };
-  const suffix = statusCode !== undefined ? ` (HTTP ${statusCode})` : '';
+  const suffix = status !== undefined ? ` (HTTP ${status})` : '';
 
   switch (error.code) {
     case JsonRpcErrorCode.RateLimited:
@@ -655,13 +669,11 @@ export class CongressApiService {
       return await fn();
     } catch (error) {
       if (error instanceof McpError) {
-        const statusCode =
-          typeof error.data?.statusCode === 'number' ? error.data.statusCode : undefined;
-        const responseBody =
-          typeof error.data?.responseBody === 'string' ? error.data.responseBody : '';
+        const status = readUpstreamStatus(error);
+        const body = readUpstreamBody(error) ?? '';
         if (
           error.code === JsonRpcErrorCode.NotFound ||
-          (statusCode === 500 && this.isMissingEntityErrorBody(responseBody))
+          (status === 500 && this.isMissingEntityErrorBody(body))
         ) {
           throw notFound(message, { ...data, ...NOT_FOUND_RECOVERY }, { cause: error });
         }
@@ -813,6 +825,11 @@ export class CongressApiService {
     try {
       return await fetchWithTimeout(url, REQUEST_TIMEOUT_MS, requestContext, {
         headers: { Accept: 'application/json', 'X-Api-Key': this.apiKey },
+        /** Congress.gov answers 404 for any identifier it does not hold, which is an
+         *  expected outcome on every route here — classifyUpstreamError and
+         *  tryNotFound turn it into an actionable domain notFound. Listing it drops
+         *  the framework's log severity to debug; the thrown McpError is unchanged. */
+        expectedStatuses: [404],
         ...(signal ? { signal } : {}),
       });
     } catch (error) {

@@ -7,38 +7,39 @@ import { describe, expect, it } from 'vitest';
 import { legislativeResearchPrompt } from '@/mcp-server/prompts/definitions/legislative-research.prompt.js';
 
 describe('legislativeResearchPrompt', () => {
-  it('generates a single user message', () => {
-    const args = legislativeResearchPrompt.args.parse({ topic: 'AI regulation' });
-    const messages = legislativeResearchPrompt.generate(args);
+  it('generates a single user message', async () => {
+    const args = legislativeResearchPrompt.args!.parse({ topic: 'AI regulation' });
+    const messages = await legislativeResearchPrompt.generate(args);
     expect(messages).toHaveLength(1);
-    expect(messages[0].role).toBe('user');
-    expect(messages[0].content.type).toBe('text');
+    expect(messages[0]!.role).toBe('user');
+    expect(messages[0]!.content.type).toBe('text');
   });
 
-  it('includes the topic in the prompt text', () => {
-    const args = legislativeResearchPrompt.args.parse({ topic: 'immigration reform' });
-    const messages = legislativeResearchPrompt.generate(args);
-    expect(messages[0].content.text).toContain('immigration reform');
+  it('includes the topic in the prompt text', async () => {
+    const args = legislativeResearchPrompt.args!.parse({ topic: 'immigration reform' });
+    const messages = await legislativeResearchPrompt.generate(args);
+    expect((messages[0]!.content as { text: string }).text).toContain('immigration reform');
   });
 
-  it('includes congress number when provided', () => {
-    const args = legislativeResearchPrompt.args.parse({
+  it('includes congress number when provided', async () => {
+    const args = legislativeResearchPrompt.args!.parse({
       topic: 'climate policy',
       congress: '118',
     });
-    const messages = legislativeResearchPrompt.generate(args);
-    expect(messages[0].content.text).toContain('118th Congress');
+    const messages = await legislativeResearchPrompt.generate(args);
+    expect((messages[0]!.content as { text: string }).text).toContain('118th Congress');
   });
 
-  it('defaults to current congress when congress is omitted', () => {
-    const args = legislativeResearchPrompt.args.parse({ topic: 'healthcare' });
-    const messages = legislativeResearchPrompt.generate(args);
-    expect(messages[0].content.text).toContain('congress://current');
+  it('defaults to current congress when congress is omitted', async () => {
+    const args = legislativeResearchPrompt.args!.parse({ topic: 'healthcare' });
+    const messages = await legislativeResearchPrompt.generate(args);
+    expect((messages[0]!.content as { text: string }).text).toContain('congress://current');
   });
 
-  it('references discovery tools', () => {
-    const args = legislativeResearchPrompt.args.parse({ topic: 'AI' });
-    const text = legislativeResearchPrompt.generate(args)[0].content.text;
+  it('references discovery tools', async () => {
+    const args = legislativeResearchPrompt.args!.parse({ topic: 'AI' });
+    const messages = await legislativeResearchPrompt.generate(args);
+    const text = (messages[0]!.content as { text: string }).text;
     expect(text).toContain('congressgov_crs_reports');
     expect(text).toContain('congressgov_bill_summaries');
     expect(text).toContain('congressgov_committee_lookup');

@@ -45,7 +45,7 @@ describe('parseVoteMenu', () => {
       yeas: 85,
       nays: 11,
     });
-    expect(votes[0].measure).toBeUndefined();
+    expect(votes[0]!.measure).toBeUndefined();
   });
 
   it('extracts the nested <measure> from an amendment question (mixed content)', () => {
@@ -60,7 +60,7 @@ describe('parseVoteMenu', () => {
   });
 
   it('carries the full title', () => {
-    expect(votes[0].title).toContain('further continuing appropriations');
+    expect(votes[0]!.title).toContain('further continuing appropriations');
   });
 
   it('coerces a single <vote> into a one-element array', () => {

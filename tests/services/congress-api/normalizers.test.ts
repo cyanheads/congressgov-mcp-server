@@ -153,12 +153,12 @@ describe('CongressApiService — normalizeCommitteeReportSubresource (space-date
   it('does not apply date normalization to non-reports sub-resources', async () => {
     mockFetch.mockResolvedValue(
       okJson({
-        committees: [{ name: 'Subcommittee A', updateDate: '2024-03-15 14:22:00+00:00' }],
+        'committee-bills': [{ number: 1234, updateDate: '2024-03-15 14:22:00+00:00' }],
         pagination: { count: 1 },
       }),
     );
     const result = await service.getCommitteeSubResource(
-      { chamber: 'house', committeeCode: 'hsju00', subResource: 'committees' },
+      { chamber: 'house', committeeCode: 'hsju00', subResource: 'bills' },
       createMockContext(),
     );
     // Not normalized — non-reports sub-resources skip date normalization
@@ -320,7 +320,7 @@ describe('CongressApiService — getCongress', () => {
     );
     const result = await service.getCongress(118, createMockContext());
     expect(result).toMatchObject({ congress: 118, name: '118th Congress' });
-    const url = new URL(mockFetch.mock.calls[0][0]);
+    const url = new URL(mockFetch.mock.calls[0]![0]);
     expect(url.pathname).toBe('/v3/congress/118');
   });
 });
@@ -409,14 +409,14 @@ describe('CongressApiService — security: API key never appears in output', () 
   it('never includes the api_key query param in the request URL', async () => {
     mockFetch.mockResolvedValue(okJson({ congress: { congress: 119 } }));
     await service.getCurrentCongress(createMockContext());
-    const url = new URL(mockFetch.mock.calls[0][0]);
+    const url = new URL(mockFetch.mock.calls[0]![0]);
     expect(url.searchParams.get('api_key')).toBeNull();
   });
 
   it('sends X-Api-Key header instead of query param', async () => {
     mockFetch.mockResolvedValue(okJson({ bills: [], pagination: {} }));
     await service.listBills({ congress: 118 }, createMockContext());
-    const init = mockFetch.mock.calls[0][1] as RequestInit;
+    const init = mockFetch.mock.calls[0]![1] as RequestInit;
     const headers = init.headers as Record<string, string>;
     expect(headers['X-Api-Key']).toBe('test-api-key');
   });
@@ -450,14 +450,14 @@ describe('CongressApiService — listLaws path construction', () => {
   it('builds /law/{congress} without lawType', async () => {
     mockFetch.mockResolvedValue(okJson({ bills: [], pagination: {} }));
     await service.listLaws({ congress: 118 }, createMockContext());
-    const url = new URL(mockFetch.mock.calls[0][0]);
+    const url = new URL(mockFetch.mock.calls[0]![0]);
     expect(url.pathname).toBe('/v3/law/118');
   });
 
   it('builds /law/{congress}/{lawType} with lawType', async () => {
     mockFetch.mockResolvedValue(okJson({ bills: [], pagination: {} }));
     await service.listLaws({ congress: 118, lawType: 'pub' }, createMockContext());
-    const url = new URL(mockFetch.mock.calls[0][0]);
+    const url = new URL(mockFetch.mock.calls[0]![0]);
     expect(url.pathname).toBe('/v3/law/118/pub');
   });
 });
@@ -479,28 +479,28 @@ describe('CongressApiService — listCommittees path construction', () => {
   it('builds /committee without filters', async () => {
     mockFetch.mockResolvedValue(okJson({ committees: [], pagination: {} }));
     await service.listCommittees({}, createMockContext());
-    const url = new URL(mockFetch.mock.calls[0][0]);
+    const url = new URL(mockFetch.mock.calls[0]![0]);
     expect(url.pathname).toBe('/v3/committee');
   });
 
   it('builds /committee/{congress} with congress only', async () => {
     mockFetch.mockResolvedValue(okJson({ committees: [], pagination: {} }));
     await service.listCommittees({ congress: 118 }, createMockContext());
-    const url = new URL(mockFetch.mock.calls[0][0]);
+    const url = new URL(mockFetch.mock.calls[0]![0]);
     expect(url.pathname).toBe('/v3/committee/118');
   });
 
   it('builds /committee/{chamber} with chamber only', async () => {
     mockFetch.mockResolvedValue(okJson({ committees: [], pagination: {} }));
     await service.listCommittees({ chamber: 'senate' }, createMockContext());
-    const url = new URL(mockFetch.mock.calls[0][0]);
+    const url = new URL(mockFetch.mock.calls[0]![0]);
     expect(url.pathname).toBe('/v3/committee/senate');
   });
 
   it('builds /committee/{congress}/{chamber} with both', async () => {
     mockFetch.mockResolvedValue(okJson({ committees: [], pagination: {} }));
     await service.listCommittees({ congress: 118, chamber: 'house' }, createMockContext());
-    const url = new URL(mockFetch.mock.calls[0][0]);
+    const url = new URL(mockFetch.mock.calls[0]![0]);
     expect(url.pathname).toBe('/v3/committee/118/house');
   });
 });
@@ -522,21 +522,21 @@ describe('CongressApiService — listSummaries path construction', () => {
   it('builds /summaries without congress', async () => {
     mockFetch.mockResolvedValue(okJson({ summaries: [], pagination: {} }));
     await service.listSummaries({}, createMockContext());
-    const url = new URL(mockFetch.mock.calls[0][0]);
+    const url = new URL(mockFetch.mock.calls[0]![0]);
     expect(url.pathname).toBe('/v3/summaries');
   });
 
   it('builds /summaries/{congress} with congress only', async () => {
     mockFetch.mockResolvedValue(okJson({ summaries: [], pagination: {} }));
     await service.listSummaries({ congress: 118 }, createMockContext());
-    const url = new URL(mockFetch.mock.calls[0][0]);
+    const url = new URL(mockFetch.mock.calls[0]![0]);
     expect(url.pathname).toBe('/v3/summaries/118');
   });
 
   it('builds /summaries/{congress}/{billType} with both', async () => {
     mockFetch.mockResolvedValue(okJson({ summaries: [], pagination: {} }));
     await service.listSummaries({ congress: 118, billType: 'hr' }, createMockContext());
-    const url = new URL(mockFetch.mock.calls[0][0]);
+    const url = new URL(mockFetch.mock.calls[0]![0]);
     expect(url.pathname).toBe('/v3/summaries/118/hr');
   });
 });

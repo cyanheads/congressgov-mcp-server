@@ -34,7 +34,7 @@ describe('currentCongressResource', () => {
       sessions: [{ number: 1, chamber: 'Senate', type: 'R', startDate: '2025-01-03' }],
     };
     mockApi.getCurrentCongress.mockResolvedValue(congressData);
-    const result = await currentCongressResource.handler({}, ctx);
+    const result = (await currentCongressResource.handler({}, ctx)) as { congress: number };
     expect(result).toEqual(congressData);
     expect(result.congress).toBe(119);
     expect(mockApi.getCurrentCongress).toHaveBeenCalledWith(ctx);

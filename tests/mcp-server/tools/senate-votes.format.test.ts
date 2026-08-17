@@ -8,7 +8,7 @@
 import { describe, expect, it } from 'vitest';
 import { formatVotes } from '@/mcp-server/tools/format-helpers.js';
 
-const render = (result: Record<string, unknown>) => formatVotes(result)[0].text;
+const render = (result: Record<string, unknown>) => formatVotes(result)[0]!.text;
 
 describe('formatVotes — Senate list', () => {
   const text = render({
