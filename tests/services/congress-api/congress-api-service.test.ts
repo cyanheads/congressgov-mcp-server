@@ -14,6 +14,7 @@ vi.mock('@/config/server-config.js', () => ({
   }),
 }));
 
+import { formatBills } from '@/mcp-server/tools/format-helpers.js';
 import {
   CongressApiService,
   getCongressApi,
@@ -259,6 +260,197 @@ describe('CongressApiService', () => {
       );
       const result = await service.listBills({ congress: 118 }, createMockContext());
       expect(result.data).toEqual([{ number: 2 }]);
+    });
+
+    it('unwraps the nested array of an object-shaped list container (committee-bills)', async () => {
+      mockFetch.mockResolvedValue(
+        okJson({
+          'committee-bills': {
+            bills: [{ number: '1234' }, { number: '5678' }],
+            count: 2,
+            url: 'https://api.congress.gov/v3/committee/house/hspw00/bills',
+          },
+          pagination: { count: 2 },
+        }),
+      );
+      const result = await service.getCommitteeSubResource(
+        { chamber: 'house', committeeCode: 'hspw00', subResource: 'bills' },
+        createMockContext(),
+      );
+      /** The container's `count`/`url` siblings are metadata, not rows — only the array becomes data. */
+      expect(result.data).toEqual([{ number: '1234' }, { number: '5678' }]);
+    });
+  });
+
+  // ── #47: the subjects container pairs an array with a sibling policyArea ──
+
+  describe('bill subjects extraction', () => {
+    const subjectsParams = {
+      congress: 119,
+      billType: 'hr',
+      billNumber: 5334,
+      subResource: 'subjects',
+    } as const;
+
+    const POLICY_AREA = { name: 'International Affairs', updateDate: '2026-08-11T13:47:33Z' };
+    const TAX = { name: 'Income tax deductions', updateDate: '2026-04-28T13:58:38Z' };
+    const PRESCHOOL = { name: 'Preschool education', updateDate: '2026-04-28T13:58:53Z' };
+    const TEACHING = { name: 'Teaching, teachers, curricula', updateDate: '2026-04-28T13:58:46Z' };
+
+    it('returns the policy area ahead of the legislative subjects, each tagged', async () => {
+      mockFetch.mockResolvedValue(
+        okJson({
+          pagination: { count: 4, next: 'https://api.congress.gov/v3/...offset=2' },
+          subjects: { legislativeSubjects: [TAX], policyArea: POLICY_AREA },
+        }),
+      );
+      const result = await service.getBillSubResource(
+        { ...subjectsParams, limit: 2, offset: 0 },
+        createMockContext(),
+      );
+      expect(result.data).toEqual([
+        { subjectType: 'policyArea', ...POLICY_AREA },
+        { subjectType: 'legislativeSubject', ...TAX },
+      ]);
+      expect(result.pagination).toEqual({ count: 4, nextOffset: 2 });
+    });
+
+    it('renders the policy area into content[] alongside the legislative subjects', async () => {
+      mockFetch.mockResolvedValue(
+        okJson({
+          pagination: { count: 4, next: 'https://api.congress.gov/v3/...offset=2' },
+          subjects: { legislativeSubjects: [TAX], policyArea: POLICY_AREA },
+        }),
+      );
+      const result = await service.getBillSubResource(
+        { ...subjectsParams, limit: 2, offset: 0 },
+        createMockContext(),
+      );
+      const content = formatBills(result)
+        .map((block) => block.text)
+        .join('\n');
+      expect(content).toContain('International Affairs');
+      expect(content).toContain('policyArea');
+      expect(content).toContain('Income tax deductions');
+      expect(content).toContain('legislativeSubject');
+    });
+
+    it('walks every page for exactly the advertised total', async () => {
+      const ctx = createMockContext();
+      mockFetch.mockResolvedValueOnce(
+        okJson({
+          pagination: { count: 4, next: 'https://api.congress.gov/v3/...offset=2' },
+          subjects: { legislativeSubjects: [TAX], policyArea: POLICY_AREA },
+        }),
+      );
+      const first = await service.getBillSubResource(
+        { ...subjectsParams, limit: 2, offset: 0 },
+        ctx,
+      );
+
+      /** Upstream omits policyArea past its slot — it is counted once, on page one. */
+      mockFetch.mockResolvedValueOnce(
+        okJson({
+          pagination: { count: 4, prev: 'https://api.congress.gov/v3/...offset=0' },
+          subjects: { legislativeSubjects: [PRESCHOOL, TEACHING] },
+        }),
+      );
+      const second = await service.getBillSubResource(
+        { ...subjectsParams, limit: 2, offset: 2 },
+        ctx,
+      );
+
+      expect(second.data).toEqual([
+        { subjectType: 'legislativeSubject', ...PRESCHOOL },
+        { subjectType: 'legislativeSubject', ...TEACHING },
+      ]);
+      expect(second.pagination.nextOffset).toBeNull();
+      expect(first.data.length + second.data.length).toBe(first.pagination.count);
+    });
+
+    it('returns the policy area alone when it is the whole page', async () => {
+      mockFetch.mockResolvedValue(
+        okJson({
+          pagination: { count: 4, next: 'https://api.congress.gov/v3/...offset=1' },
+          subjects: { legislativeSubjects: [], policyArea: POLICY_AREA },
+        }),
+      );
+      const result = await service.getBillSubResource(
+        { ...subjectsParams, limit: 1, offset: 0 },
+        createMockContext(),
+      );
+      expect(result.data).toEqual([{ subjectType: 'policyArea', ...POLICY_AREA }]);
+    });
+
+    it('honors the requested page size when the container overflows it', async () => {
+      mockFetch.mockResolvedValue(
+        okJson({
+          pagination: { count: 4, next: 'https://api.congress.gov/v3/...offset=2' },
+          subjects: { legislativeSubjects: [TAX, PRESCHOOL], policyArea: POLICY_AREA },
+        }),
+      );
+      const result = await service.getBillSubResource(
+        { ...subjectsParams, limit: 2, offset: 0 },
+        createMockContext(),
+      );
+      expect(result.data).toEqual([
+        { subjectType: 'policyArea', ...POLICY_AREA },
+        { subjectType: 'legislativeSubject', ...TAX },
+      ]);
+    });
+
+    it('returns no rows for a bill with no subjects at all', async () => {
+      mockFetch.mockResolvedValue(okJson({ pagination: { count: 0 }, subjects: {} }));
+      const result = await service.getBillSubResource(
+        { ...subjectsParams, limit: 20, offset: 0 },
+        createMockContext(),
+      );
+      expect(result.data).toEqual([]);
+      expect(result.pagination).toEqual({ count: 0, nextOffset: null });
+    });
+
+    it('returns no rows for an offset past the end while keeping the upstream total', async () => {
+      mockFetch.mockResolvedValue(
+        okJson({ pagination: { count: 4 }, subjects: { legislativeSubjects: [] } }),
+      );
+      const result = await service.getBillSubResource(
+        { ...subjectsParams, limit: 20, offset: 500 },
+        createMockContext(),
+      );
+      expect(result.data).toEqual([]);
+      expect(result.pagination.count).toBe(4);
+      const content = formatBills(result)
+        .map((block) => block.text)
+        .join('\n');
+      expect(content).toContain('past the end of 4 total items');
+    });
+
+    it('drops non-record entries from legislativeSubjects', async () => {
+      mockFetch.mockResolvedValue(
+        okJson({
+          pagination: { count: 2 },
+          subjects: { legislativeSubjects: ['raw-token', TAX] },
+        }),
+      );
+      const result = await service.getBillSubResource(
+        { ...subjectsParams, limit: 20, offset: 0 },
+        createMockContext(),
+      );
+      expect(result.data).toEqual([{ subjectType: 'legislativeSubject', ...TAX }]);
+    });
+
+    it('ignores a non-record policyArea', async () => {
+      mockFetch.mockResolvedValue(
+        okJson({
+          pagination: { count: 1 },
+          subjects: { legislativeSubjects: [TAX], policyArea: 'International Affairs' },
+        }),
+      );
+      const result = await service.getBillSubResource(
+        { ...subjectsParams, limit: 20, offset: 0 },
+        createMockContext(),
+      );
+      expect(result.data).toEqual([{ subjectType: 'legislativeSubject', ...TAX }]);
     });
   });
 

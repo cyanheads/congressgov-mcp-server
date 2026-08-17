@@ -187,6 +187,75 @@ describe('billLookupTool', () => {
     });
   });
 
+  // ── #47: the subjects page carries the policy area alongside the subjects ──
+
+  describe('subjects operation', () => {
+    const subjectsPage = {
+      data: [
+        {
+          subjectType: 'policyArea',
+          name: 'International Affairs',
+          updateDate: '2026-08-11T13:47:33Z',
+        },
+        {
+          subjectType: 'legislativeSubject',
+          name: 'Income tax deductions',
+          updateDate: '2026-04-28T13:58:38Z',
+        },
+      ],
+      pagination: { count: 4, nextOffset: 2 },
+    };
+
+    it('carries the policy area on both output surfaces', async () => {
+      const ctx = createMockContext({ errors: billLookupTool.errors });
+      mockApi.getBillSubResource.mockResolvedValue(subjectsPage);
+      const input = billLookupTool.input.parse({
+        operation: 'subjects',
+        congress: 119,
+        billType: 'hr',
+        billNumber: 5334,
+        limit: 2,
+      });
+      const result = await billLookupTool.handler(input, ctx);
+
+      expect(result.data?.[0]).toMatchObject({
+        subjectType: 'policyArea',
+        name: 'International Affairs',
+      });
+
+      const content = billLookupTool.format!(result)
+        .map((block) => ('text' in block ? block.text : ''))
+        .join('\n');
+      expect(content).toContain('International Affairs');
+      expect(content).toContain('policyArea');
+      expect(content).toContain('Income tax deductions');
+      expect(content).toContain('next offset: 2');
+
+      const enrichment = getEnrichment(ctx);
+      expect(enrichment.totalCount).toBe(4);
+      expect(enrichment.effectiveQuery).toContain('subjects for HR 5334');
+      expect(enrichment.notice).toBeUndefined();
+    });
+
+    it('notices a bill with no subjects at all', async () => {
+      const ctx = createMockContext({ errors: billLookupTool.errors });
+      mockApi.getBillSubResource.mockResolvedValue({
+        data: [],
+        pagination: { count: 0, nextOffset: null },
+      });
+      const input = billLookupTool.input.parse({
+        operation: 'subjects',
+        congress: 119,
+        billType: 'hr',
+        billNumber: 5334,
+      });
+      const result = await billLookupTool.handler(input, ctx);
+
+      expect(result.data).toHaveLength(0);
+      expect(getEnrichment(ctx).notice).toMatch(/No subjects found for HR 5334/);
+    });
+  });
+
   it('throws when get is missing billType or billNumber', async () => {
     const ctx = createMockContext({ errors: billLookupTool.errors });
     const input = billLookupTool.input.parse({ operation: 'get', congress: 118 });

@@ -168,6 +168,33 @@ function flattenArticleSections(sections: ApiRecord[]): ApiRecord[] {
   return flat;
 }
 
+/**
+ * Flatten the `/bill/{congress}/{billType}/{billNumber}/subjects` container.
+ *
+ * Congress.gov pairs the paginated `legislativeSubjects[]` with a sibling
+ * `policyArea` object that holds the first slot of the same paginated sequence
+ * and is counted by `pagination.count`: at `limit=1&offset=0` the response
+ * carries the policy area alone, at `offset=1` the first legislative subject.
+ * Taking only the array dropped the policy area entirely and left the advertised
+ * total above the number of rows a caller could retrieve by walking every page.
+ *
+ * `subjectType` keeps the two kinds distinguishable now that they share one
+ * sequence; the values mirror the upstream key names.
+ * Resolves cyanheads/congressgov-mcp-server#47.
+ */
+function extractSubjectItems(container: ApiRecord): ApiRecord[] {
+  const items: ApiRecord[] = [];
+  if (isApiRecord(container.policyArea)) {
+    items.push({ subjectType: 'policyArea', ...container.policyArea });
+  }
+  if (Array.isArray(container.legislativeSubjects)) {
+    for (const subject of container.legislativeSubjects) {
+      if (isApiRecord(subject)) items.push({ subjectType: 'legislativeSubject', ...subject });
+    }
+  }
+  return items;
+}
+
 function isNativeAbortSignal(value: unknown): value is AbortSignal {
   if (
     typeof AbortSignal !== 'function' ||
@@ -793,13 +820,18 @@ export class CongressApiService {
     return query;
   }
 
+  /**
+   * Rows out of a list container. Most endpoints hand back a bare array; a few
+   * nest one inside an object (`committee-bills` wraps `bills[]` alongside
+   * `count`/`url` metadata), and the subjects container splits its rows across
+   * an array and a sibling object — see `extractSubjectItems`.
+   */
   private extractListItems(raw: unknown): ApiRecord[] {
-    const arr = Array.isArray(raw)
-      ? raw
-      : isApiRecord(raw)
-        ? ((Object.values(raw).find(Array.isArray) as unknown[] | undefined) ?? [])
-        : [];
-    return arr.filter(isApiRecord);
+    if (Array.isArray(raw)) return raw.filter(isApiRecord);
+    if (!isApiRecord(raw)) return [];
+    if ('legislativeSubjects' in raw || 'policyArea' in raw) return extractSubjectItems(raw);
+    const nested = (Object.values(raw).find(Array.isArray) as unknown[] | undefined) ?? [];
+    return nested.filter(isApiRecord);
   }
 
   private getRequestContext(ctx: Context | undefined, operation: string): RequestContextLike {
