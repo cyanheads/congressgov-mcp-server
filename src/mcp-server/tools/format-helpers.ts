@@ -6,6 +6,18 @@
  * NOT reliably forwarded. These formatters render complete, structured
  * markdown so the LLM can reason about all returned data.
  *
+ * **Completeness invariant.** A record reaching a detail renderer is rendered
+ * whole: every upstream field appears, and no value is cut mid-string. A
+ * hand-built header may curate presentation, but it ends in `renderDetailRest`,
+ * and a curated collection row ends in `withUnnamedFields` — so a field neither
+ * one names still reaches the reader. The single deliberate exception is a
+ * `{count, url}` sub-resource reference, rendered as "N available": the URL is
+ * the upstream REST endpoint, and the tool's own operation is the callable path
+ * to those rows. Caps belong to pagination, which has a continuation path
+ * (`pagination.nextOffset`, surfaced in every list header) — a nested collection
+ * inside one record has none, so slicing it would drop data no follow-up call
+ * could recover.
+ *
  * See: https://github.com/cyanheads/mcp-ts-core/issues/19
  *
  * @module mcp-server/tools/format-helpers
@@ -50,19 +62,43 @@ function stripHtml(html: string, { inline = false } = {}): string {
 }
 
 /**
+ * Wrap an emphasis span's content in Markdown markers with the span's own
+ * boundary whitespace kept *outside* them.
+ *
+ * Congress.gov summaries routinely place a space inside the tag
+ * (`<em>de minimis </em>treatment`, `an<em> de minimis</em> threshold`).
+ * Substituting the marker in place produces `*de minimis *treatment` — markers
+ * that no Markdown parser binds as emphasis, and altered visible spacing either
+ * way. A span with no non-whitespace content gets no markers at all.
+ */
+function wrapEmphasis(inner: string, marker: string): string {
+  const core = inner.trim();
+  if (!core) return inner;
+  const lead = inner.slice(0, inner.length - inner.trimStart().length);
+  const trail = inner.slice(inner.trimEnd().length);
+  return `${lead}${marker}${core}${marker}${trail}`;
+}
+
+/**
  * Convert upstream HTML (Congress.gov bill summaries are returned with `<p>`,
  * `<strong>`, `<em>`, anchor tags) into readable Markdown that preserves
  * paragraph and emphasis structure.
+ *
+ * Emphasis is matched as a whole span rather than tag-by-tag so boundary
+ * whitespace can be normalized (see `wrapEmphasis`) and an unclosed tag falls
+ * through to the generic strip instead of leaving a stray marker.
  */
 function htmlToMarkdown(html: string): string {
   return html
     .replace(/<\s*br\s*\/?\s*>/gi, '\n')
     .replace(/<\s*\/p\s*>/gi, '\n\n')
     .replace(/<\s*p[^>]*>/gi, '')
-    .replace(/<\s*(strong|b)\s*>/gi, '**')
-    .replace(/<\s*\/\s*(strong|b)\s*>/gi, '**')
-    .replace(/<\s*(em|i)\s*>/gi, '*')
-    .replace(/<\s*\/\s*(em|i)\s*>/gi, '*')
+    .replace(/<\s*(?:strong|b)\s*>([\s\S]*?)<\s*\/\s*(?:strong|b)\s*>/gi, (_m, inner: string) =>
+      wrapEmphasis(inner, '**'),
+    )
+    .replace(/<\s*(?:em|i)\s*>([\s\S]*?)<\s*\/\s*(?:em|i)\s*>/gi, (_m, inner: string) =>
+      wrapEmphasis(inner, '*'),
+    )
     .replace(/<\s*a[^>]*href=["']([^"']*)["'][^>]*>([\s\S]*?)<\s*\/\s*a\s*>/gi, '[$2]($1)')
     .replace(/<[^>]*>/g, '')
     .replace(/&nbsp;/g, ' ')
@@ -180,14 +216,13 @@ function renderDetail(obj: unknown): string {
     } else if (Array.isArray(val)) {
       if (val.length === 0) continue;
       lines.push(`\n**${key}** (${val.length}):`);
-      for (const item of val.slice(0, 20)) {
+      for (const item of val) {
         if (typeof item === 'object' && item) {
           lines.push(`- ${renderInline(item as Record<string, unknown>)}`);
         } else {
           lines.push(`- ${String(item)}`);
         }
       }
-      if (val.length > 20) lines.push(`- _...${val.length - 20} more_`);
     } else if (typeof val === 'object') {
       const nested = val as Record<string, unknown>;
       const nKeys = Object.keys(nested);
@@ -273,11 +308,10 @@ function renderGenericItem(item: Record<string, unknown>, index: number): string
         lines.push(`**${key}:** ${val.join(', ')}`);
       } else {
         lines.push(`**${key}:** ${val.length} items`);
-        for (const sub of val.slice(0, 5)) {
+        for (const sub of val) {
           if (typeof sub === 'object' && sub !== null)
             lines.push(`  - ${renderInline(sub as Record<string, unknown>)}`);
         }
-        if (val.length > 5) lines.push(`  - _...${val.length - 5} more_`);
       }
     }
   }
@@ -299,24 +333,77 @@ const HEADING_FIELDS = new Set([
   'question',
 ]);
 
-/** Compact inline render of a small object. */
+/**
+ * Compact one-line render of a small object. Compact but never lossy: values are
+ * carried in full and nested objects/arrays recurse, so no field or character is
+ * dropped at any depth.
+ */
 function renderInline(obj: Record<string, unknown>): string {
+  return inlineFields(obj) || JSON.stringify(obj);
+}
+
+/** `key: value` pairs for one object level, recursing into nested values. */
+function inlineFields(obj: Record<string, unknown>): string {
   const parts: string[] = [];
   for (const [key, val] of Object.entries(obj)) {
     if (val == null || val === '') continue;
     if (typeof val === 'string') {
-      const cleaned = stripHtml(val, { inline: true });
-      const preview = cleaned.length > 120 ? `${cleaned.slice(0, 117)}...` : cleaned;
-      parts.push(`${key}: ${preview}`);
-    } else if (typeof val === 'number' || typeof val === 'boolean') parts.push(`${key}: ${val}`);
+      parts.push(`${key}: ${stripHtml(val, { inline: true })}`);
+    } else if (typeof val === 'number' || typeof val === 'boolean') {
+      parts.push(`${key}: ${val}`);
+    } else if (Array.isArray(val)) {
+      if (val.length === 0) continue;
+      const items = val.map((item) =>
+        typeof item === 'object' && item
+          ? `{${inlineFields(item as Record<string, unknown>)}}`
+          : String(item),
+      );
+      parts.push(`${key}: [${items.join('; ')}]`);
+    } else if (typeof val === 'object') {
+      const nested = inlineFields(val as Record<string, unknown>);
+      if (nested) parts.push(`${key}: {${nested}}`);
+    }
   }
-  if (parts.length > 0) return parts.join(', ');
+  return parts.join(', ');
+}
 
-  const json = JSON.stringify(obj);
-  return json.length > 200 ? `${json.slice(0, 197)}...` : json;
+/**
+ * A curated one-line render of a collection row, with any of the row's own
+ * fields the curation never named appended.
+ *
+ * The `renderDetailRest` fall-through only reaches a record's top level: a
+ * collection the header renders itself is skipped there, so a field its curated
+ * line omits would otherwise leave `content[]` while staying in
+ * `structuredContent` — the same loss for a term's `district` or a nominee's
+ * `url` that a dropped top-level field used to be.
+ */
+function withUnnamedFields(
+  row: Record<string, unknown>,
+  curated: string,
+  named: Set<string>,
+): string {
+  const rest: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(row)) if (!named.has(k)) rest[k] = v;
+  const unnamed = inlineFields(rest);
+  return unnamed ? `${curated} — ${unnamed}` : curated;
 }
 
 // ── Domain-Specific Item Renderers ──────────────────────────────────
+
+/**
+ * Public/private law citations from a bill or law record's `laws[]`, e.g.
+ * "Public Law 118-90". Upstream `/law` rows mirror `/bill`, so the citation is
+ * the only field distinguishing an enacted law from the bill it came from — it
+ * has to reach both the list rows and the detail view.
+ */
+function lawCitations(item: Record<string, unknown>): string | undefined {
+  const laws = item.laws;
+  if (!Array.isArray(laws) || laws.length === 0) return;
+  const cites = (laws as Record<string, unknown>[])
+    .map((law) => join([s(law, 'type'), s(law, 'number')], ' '))
+    .filter(Boolean);
+  return cites.length > 0 ? cites.join(', ') : undefined;
+}
 
 function renderBillItem(item: Record<string, unknown>, i: number): string {
   const type = s(item, 'type')?.toUpperCase() ?? '';
@@ -333,6 +420,9 @@ function renderBillItem(item: Record<string, unknown>, i: number): string {
     f('Policy Area', s(item, 'policyArea', 'name')),
   ]);
   if (meta) lines.push(meta);
+
+  const citation = lawCitations(item);
+  if (citation) lines.push(`**Law:** ${citation}`);
 
   if (Array.isArray(item.sponsors) && item.sponsors.length > 0) {
     const sponsors = (item.sponsors as Record<string, unknown>[]).map((sp) => {
@@ -797,7 +887,7 @@ function renderNominationDetail(item: Record<string, unknown>): string {
   const nominees = item.nominees;
   if (Array.isArray(nominees) && nominees.length > 0) {
     lines.push(`\n**Nominees (${nominees.length}):**`);
-    for (const n of nominees.slice(0, 20) as Record<string, unknown>[]) {
+    for (const n of nominees as Record<string, unknown>[]) {
       const ord = s(n, 'ordinal');
       const count = s(n, 'nomineeCount');
       const org = s(n, 'organization');
@@ -808,9 +898,8 @@ function renderNominationDetail(item: Record<string, unknown>): string {
         org,
         title,
       ].filter(Boolean);
-      lines.push(`- ${parts.join(' — ')}`);
+      lines.push(`- ${withUnnamedFields(n, parts.join(' — '), NOMINEE_ROW_KEYS)}`);
     }
-    if (nominees.length > 20) lines.push(`- _...${nominees.length - 20} more_`);
   } else if (s(item, 'partNumber') === '00') {
     /** Parent nominations (partNumber=00) have no nominees array. Sub-resources
      * also return 0 results — they live on the partitioned children (PN851-1, PN851-2, …). */
@@ -821,8 +910,31 @@ function renderNominationDetail(item: Record<string, unknown>): string {
 
   const url = s(item, 'url');
   if (url) lines.push(`\n**URL:** ${url}`);
+
+  const rest = renderDetailRest(item, HEADER_NOMINATION_KEYS);
+  if (rest) lines.push('', rest);
   return lines.join('\n');
 }
+
+const NOMINEE_ROW_KEYS = new Set(['ordinal', 'nomineeCount', 'organization', 'positionTitle']);
+
+const HEADER_NOMINATION_KEYS = new Set([
+  'citation',
+  'number',
+  'partNumber',
+  'nominationType',
+  'description',
+  'congress',
+  'receivedDate',
+  'authorityDate',
+  'updateDate',
+  'latestAction',
+  'actions',
+  'committees',
+  'hearings',
+  'nominees',
+  'url',
+]);
 
 /** Roll call vote detail — question, result, date, party totals. */
 function renderRollVoteDetail(item: Record<string, unknown>): string {
@@ -869,8 +981,25 @@ function renderRollVoteDetail(item: Record<string, unknown>): string {
   }
 
   if (sourceUrl) lines.push(`\n**Source Data URL:** ${sourceUrl}`);
+
+  const rest = renderDetailRest(item, HEADER_ROLL_VOTE_KEYS);
+  if (rest) lines.push('', rest);
   return lines.join('\n');
 }
+
+const HEADER_ROLL_VOTE_KEYS = new Set([
+  'rollCallNumber',
+  'congress',
+  'sessionNumber',
+  'result',
+  'voteQuestion',
+  'voteType',
+  'startDate',
+  'updateDate',
+  'identifier',
+  'sourceDataURL',
+  'votePartyTotal',
+]);
 
 /** One member's position: "Warren Davidson (R-OH) → Nay". */
 function renderMemberVoteRow(r: Record<string, unknown>): string {
@@ -1066,8 +1195,11 @@ function renderSenateVoteDetail(item: Record<string, unknown>): string {
   if (amd) {
     const amdNum = s(amd, 'number');
     const to = s(amd, 'toDocumentNumber');
+    const toTitle = s(amd, 'toDocumentShortTitle');
     amendmentPurpose = s(amd, 'purpose');
-    const head = [amdNum, to ? `to ${to}` : undefined].filter(Boolean).join(' ');
+    const head = [amdNum, to ? `to ${to}` : undefined, toTitle ? `— ${toTitle}` : undefined]
+      .filter(Boolean)
+      .join(' ');
     if (head) lines.push(`\n**Amendment:** ${head}`);
     if (amendmentPurpose) lines.push(`**Purpose:** ${amendmentPurpose}`);
   }
@@ -1077,8 +1209,34 @@ function renderSenateVoteDetail(item: Record<string, unknown>): string {
   const docText = s(item, 'voteDocumentText');
   if (docText && docText !== amendmentPurpose && docText !== docTitle) lines.push(`\n${docText}`);
 
+  const rest = renderDetailRest(item, HEADER_SENATE_VOTE_KEYS);
+  if (rest) lines.push('', rest);
   return lines.join('\n');
 }
+
+/**
+ * `chamber` is implicit in the "Senate Vote" heading; `voteResult` / `question`
+ * are the short forms of `voteResultText` / `voteQuestionText`, one of which the
+ * header always renders.
+ */
+const HEADER_SENATE_VOTE_KEYS = new Set([
+  'chamber',
+  'voteNumber',
+  'voteResult',
+  'voteResultText',
+  'question',
+  'voteQuestionText',
+  'voteTitle',
+  'congress',
+  'session',
+  'voteDate',
+  'majorityRequirement',
+  'count',
+  'partyTotals',
+  'document',
+  'amendment',
+  'voteDocumentText',
+]);
 
 /** Senate member voting positions for one roll call — mirrors the House members view. */
 function renderSenateVoteMembers(result: Record<string, unknown>): string {
@@ -1170,17 +1328,8 @@ function renderBillDetail(item: Record<string, unknown>): string {
   if (actionDate || actionText)
     lines.push(`**Latest Action:** ${[actionDate, actionText].filter(Boolean).join(' — ')}`);
 
-  const laws = item.laws;
-  if (Array.isArray(laws) && laws.length > 0) {
-    const cites = (laws as Record<string, unknown>[])
-      .map((law) => {
-        const num = s(law, 'number');
-        const lawType = s(law, 'type');
-        return num && lawType ? `${lawType} ${num}` : (num ?? lawType);
-      })
-      .filter(Boolean);
-    if (cites.length) lines.push(`**Law:** ${cites.join(', ')}`);
-  }
+  const citation = lawCitations(item);
+  if (citation) lines.push(`**Law:** ${citation}`);
 
   const rest = renderDetailRest(item, HEADER_BILL_KEYS);
   if (rest) lines.push('', rest);
@@ -1282,8 +1431,7 @@ function renderMemberDetail(item: Record<string, unknown>): string {
 
   if (termsArr && termsArr.length > 0) {
     lines.push(`\n**Terms (${termsArr.length}):**`);
-    const recent = termsArr.slice(-5);
-    for (const term of recent) {
+    for (const term of termsArr) {
       const chamber = s(term, 'chamber');
       const start = s(term, 'startYear');
       const end = s(term, 'endYear');
@@ -1291,9 +1439,8 @@ function renderMemberDetail(item: Record<string, unknown>): string {
       const stateName = s(term, 'stateName');
       const range = start && end ? `${start}–${end}` : start;
       const parts = [chamber, range, party, stateName].filter(Boolean);
-      lines.push(`- ${parts.join(', ')}`);
+      lines.push(`- ${withUnnamedFields(term, parts.join(', '), TERM_ROW_KEYS)}`);
     }
-    if (termsArr.length > 5) lines.push(`- _...${termsArr.length - 5} earlier_`);
   }
 
   const partyHistory = item.partyHistory;
@@ -1305,21 +1452,21 @@ function renderMemberDetail(item: Record<string, unknown>): string {
       const end = s(p, 'endYear');
       const range = start && end ? `${start}–${end}` : start;
       const parts = [partyName, range && `(${range})`].filter(Boolean);
-      lines.push(`- ${parts.join(' ')}`);
+      lines.push(`- ${withUnnamedFields(p, parts.join(' '), PARTY_HISTORY_ROW_KEYS)}`);
     }
   }
 
   const leadership = item.leadership;
   if (Array.isArray(leadership) && leadership.length > 0) {
     lines.push(`\n**Leadership Roles (${leadership.length}):**`);
-    for (const l of leadership.slice(0, 10) as Record<string, unknown>[]) {
+    for (const l of leadership as Record<string, unknown>[]) {
       const type = s(l, 'type');
       const congress = s(l, 'congress');
-      lines.push(
-        `- ${[type, congress ? `Congress ${congress}` : undefined].filter(Boolean).join(' — ')}`,
-      );
+      const curated = [type, congress ? `Congress ${congress}` : undefined]
+        .filter(Boolean)
+        .join(' — ');
+      lines.push(`- ${withUnnamedFields(l, curated, LEADERSHIP_ROW_KEYS)}`);
     }
-    if (leadership.length > 10) lines.push(`- _...${leadership.length - 10} more_`);
   }
 
   const subResources: string[] = [];
@@ -1334,8 +1481,35 @@ function renderMemberDetail(item: Record<string, unknown>): string {
 
   const url = s(item, 'url');
   if (url) lines.push(`\n**URL:** ${url}`);
+
+  const rest = renderDetailRest(item, HEADER_MEMBER_KEYS);
+  if (rest) lines.push('', rest);
   return lines.join('\n');
 }
+
+const TERM_ROW_KEYS = new Set(['chamber', 'startYear', 'endYear', 'partyName', 'stateName']);
+const PARTY_HISTORY_ROW_KEYS = new Set(['partyName', 'startYear', 'endYear']);
+const LEADERSHIP_ROW_KEYS = new Set(['type', 'congress']);
+
+const HEADER_MEMBER_KEYS = new Set([
+  'bioguideId',
+  'directOrderName',
+  'invertedOrderName',
+  'honorificName',
+  'partyName',
+  'currentParty',
+  'state',
+  'district',
+  'currentMember',
+  'birthYear',
+  'updateDate',
+  'terms',
+  'partyHistory',
+  'leadership',
+  'sponsoredLegislation',
+  'cosponsoredLegislation',
+  'url',
+]);
 
 /** Committee list item — name + key fields. Fuzzy-matched rows carry `approximate: true`. */
 function renderCommitteeListItem(item: Record<string, unknown>, i: number): string {
