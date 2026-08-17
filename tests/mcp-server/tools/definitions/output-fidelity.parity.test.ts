@@ -5,7 +5,7 @@
  * structuredContent, Claude Desktop reads content[]), so a value present in one
  * and absent from the other is invisible to half the fleet.
  *
- * Resolves cyanheads/congressgov-mcp-server#45, #50, #51.
+ * Resolves cyanheads/congressgov-mcp-server#45, #50, #51, #55.
  *
  * @module tests/mcp-server/tools/definitions/output-fidelity.parity.test
  */
@@ -20,6 +20,9 @@ vi.mock('@/services/congress-api/congress-api-service.js', () => ({
 
 import { billLookupTool } from '@/mcp-server/tools/definitions/bill-lookup.tool.js';
 import { billSummariesTool } from '@/mcp-server/tools/definitions/bill-summaries.tool.js';
+import { committeeLookupTool } from '@/mcp-server/tools/definitions/committee-lookup.tool.js';
+import { crsReportsTool } from '@/mcp-server/tools/definitions/crs-reports.tool.js';
+import { dailyRecordTool } from '@/mcp-server/tools/definitions/daily-record.tool.js';
 import { enactedLawsTool } from '@/mcp-server/tools/definitions/enacted-laws.tool.js';
 import { memberLookupTool } from '@/mcp-server/tools/definitions/member-lookup.tool.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
@@ -30,6 +33,9 @@ const mockApi = {
   getMember: vi.fn(),
   listSummaries: vi.fn(),
   getBillSubResource: vi.fn(),
+  listCommittees: vi.fn(),
+  listCrsReports: vi.fn(),
+  listDailyRecord: vi.fn(),
 };
 
 beforeEach(() => {
@@ -234,5 +240,109 @@ describe('#51 — emphasis normalization reaches content[] while structuredConte
     expect(content).toContain('*de minimis* treatment');
     expect(content).toContain('**major** changes');
     expect(content).not.toContain('*de minimis *');
+  });
+});
+
+describe('#55 — list rows reach structuredContent and content[] intact', () => {
+  it('carries a subcommittee parent on both surfaces', async () => {
+    const ctx = createMockContext({ errors: committeeLookupTool.errors });
+    mockApi.listCommittees.mockResolvedValue({
+      data: [
+        {
+          name: 'Task Force on the Declassification of Federal Secrets Subcommittee',
+          systemCode: 'hzgo34',
+          chamber: 'House',
+          committeeTypeCode: 'Task Force',
+          updateDate: '2026-01-22T19:34:38Z',
+          url: 'https://api.congress.gov/v3/committee/house/hzgo34?format=json',
+          parent: {
+            name: 'Oversight and Government Reform Committee',
+            systemCode: 'hsgo00',
+            url: 'https://api.congress.gov/v3/committee/house/hsgo00?format=json',
+          },
+        },
+      ],
+      pagination: { count: 1, nextOffset: null },
+    });
+
+    const input = committeeLookupTool.input.parse({
+      operation: 'list',
+      chamber: 'house',
+      limit: 3,
+    });
+    const result = await committeeLookupTool.handler(input, ctx);
+
+    expect(result.data?.[0]).toMatchObject({ parent: { systemCode: 'hsgo00' } });
+    expect(joinText(committeeLookupTool.format!(result))).toContain('hsgo00');
+    expect(getEnrichment(ctx).totalCount).toBe(1);
+  });
+
+  it('carries a CRS report publish date on both surfaces', async () => {
+    const ctx = createMockContext({ errors: crsReportsTool.errors });
+    mockApi.listCrsReports.mockResolvedValue({
+      data: [
+        {
+          id: 'R46991',
+          title: 'Economic Development Administration: An Overview of Programs',
+          updateDate: '2026-04-10',
+          publishDate: '2026-04-09',
+          status: 'Active',
+        },
+      ],
+      pagination: { count: 1, nextOffset: null },
+    });
+
+    const input = crsReportsTool.input.parse({ operation: 'list', limit: 2 });
+    const result = await crsReportsTool.handler(input, ctx);
+
+    expect(result.data?.[0]).toMatchObject({ publishDate: '2026-04-09' });
+    const content = joinText(crsReportsTool.format!(result));
+    expect(content).toContain('**Updated:** 2026-04-10');
+    expect(content).toContain('2026-04-09');
+  });
+
+  it('carries the full daily record issue timestamp on both surfaces', async () => {
+    const ctx = createMockContext({ errors: dailyRecordTool.errors });
+    mockApi.listDailyRecord.mockResolvedValue({
+      data: [
+        {
+          congress: 119,
+          issueDate: '2026-04-17T04:00:00Z',
+          issueNumber: '68',
+          sessionNumber: 2,
+          volumeNumber: 172,
+        },
+      ],
+      pagination: { count: 1, nextOffset: null },
+    });
+
+    const input = dailyRecordTool.input.parse({ operation: 'list', limit: 2 });
+    const result = await dailyRecordTool.handler(input, ctx);
+
+    expect(result.data?.[0]).toMatchObject({ issueDate: '2026-04-17T04:00:00Z' });
+    const content = joinText(dailyRecordTool.format!(result));
+    expect(content).toContain('Volume 172, Issue 68 — 2026-04-17');
+    expect(content).toContain('2026-04-17T04:00:00Z');
+  });
+
+  it('reports an empty committee list on both surfaces', async () => {
+    const ctx = createMockContext({ errors: committeeLookupTool.errors });
+    mockApi.listCommittees.mockResolvedValue({
+      data: [],
+      pagination: { count: 0, nextOffset: null },
+    });
+
+    const input = committeeLookupTool.input.parse({ operation: 'list', chamber: 'house' });
+    const result = await committeeLookupTool.handler(input, ctx);
+
+    expect(result.data).toHaveLength(0);
+    expect(joinText(committeeLookupTool.format!(result))).toContain('No matching results');
+    expect(getEnrichment(ctx).notice).toContain('No committees found');
+  });
+
+  it('rejects a committee sub-resource call with no committeeCode', async () => {
+    const ctx = createMockContext({ errors: committeeLookupTool.errors });
+    const input = committeeLookupTool.input.parse({ operation: 'reports' });
+    await expect(committeeLookupTool.handler(input, ctx)).rejects.toThrow(/requires committeeCode/);
   });
 });
