@@ -1,21 +1,23 @@
 # congressgov-mcp-server - Directory Structure
 
-Generated on: 2026-07-01 02:13:06
+Generated on: 2026-08-16 23:43:53
 
 ```text
 congressgov-mcp-server/
-├── .agents/
-├── .claude/
 ├── .claude-plugin/
 │   └── plugin.json
 ├── .codex-plugin/
 │   ├── mcp.json
 │   └── plugin.json
 ├── .github/
-│   └── ISSUE_TEMPLATE/
-│       ├── bug_report.yml
-│       ├── config.yml
-│       └── feature_request.yml
+│   ├── ISSUE_TEMPLATE/
+│   │   ├── bug_report.yml
+│   │   ├── config.yml
+│   │   └── feature_request.yml
+│   ├── CODE_OF_CONDUCT.md
+│   ├── CONTRIBUTING.md
+│   ├── FUNDING.yml
+│   └── SECURITY.md
 ├── .vscode/
 │   ├── extensions.json
 │   └── settings.json
@@ -200,6 +202,7 @@ congressgov-mcp-server/
 │   │       │   ├── crs-reports.tool.test.ts
 │   │       │   ├── daily-record.tool.test.ts
 │   │       │   ├── enacted-laws.tool.test.ts
+│   │       │   ├── exhausted-page-notice.test.ts
 │   │       │   ├── input-validation.test.ts
 │   │       │   ├── member-lookup.tool.test.ts
 │   │       │   ├── roll-votes.tool.test.ts
@@ -224,6 +227,7 @@ congressgov-mcp-server/
 │           └── senate-vote-service.test.ts
 ├── .dockerignore
 ├── .env.example
+├── .gitattributes
 ├── .gitignore
 ├── .mcpbignore
 ├── AGENTS.md

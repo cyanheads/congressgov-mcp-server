@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.4.2](changelog/0.4.x/0.4.2.md) — 2026-08-16
+
+Fixes chainable list-row identifiers, committee_lookup filtered pagination and single-word name resolution, reversed date-range validation, and exhausted-page notices bleeding into no-match guidance; adopts mcp-ts-core ^0.11.5 and TypeScript 7.
+
 ## [0.4.1](changelog/0.4.x/0.4.1.md) — 2026-06-30
 
 Packaging fix — ships the 0.4.0 mirror feature's GHCR image, which 0.4.0 couldn't build. The build-stage bun install skips better-sqlite3's node-gyp postinstall (the image uses bun:sqlite), and better-sqlite3 becomes a regular dependency so npm/Node consumers of the opt-in mirror install it. No runtime change.
