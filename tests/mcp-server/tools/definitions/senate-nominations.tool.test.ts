@@ -28,7 +28,7 @@ describe('senateNominationsTool', () => {
   });
 
   it('lists nominations by congress', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: senateNominationsTool.errors });
     mockApi.listNominations.mockResolvedValue({
       data: [{ nominationNumber: '1064' }],
       pagination: { count: 1, nextOffset: null },
@@ -39,7 +39,7 @@ describe('senateNominationsTool', () => {
   });
 
   it('gets a specific nomination', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: senateNominationsTool.errors });
     mockApi.getNomination.mockResolvedValue({ nomination: { description: 'Judge' } });
     const input = senateNominationsTool.input.parse({
       operation: 'get',
@@ -51,13 +51,13 @@ describe('senateNominationsTool', () => {
   });
 
   it('throws when detail operation is missing nominationNumber', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: senateNominationsTool.errors });
     const input = senateNominationsTool.input.parse({ operation: 'get', congress: 118 });
     await expect(senateNominationsTool.handler(input, ctx)).rejects.toThrow(/nominationNumber/);
   });
 
   it('gets nominees with ordinal', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: senateNominationsTool.errors });
     mockApi.getNominee.mockResolvedValue({
       data: [{ name: 'Doe' }],
       pagination: { count: 1, nextOffset: null },
@@ -73,7 +73,7 @@ describe('senateNominationsTool', () => {
   });
 
   it('throws when nominees is missing ordinal', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: senateNominationsTool.errors });
     const input = senateNominationsTool.input.parse({
       operation: 'nominees',
       congress: 118,
@@ -83,7 +83,7 @@ describe('senateNominationsTool', () => {
   });
 
   it('fetches nomination sub-resources (actions, committees, hearings)', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: senateNominationsTool.errors });
     mockApi.getNominationSubResource.mockResolvedValue({
       data: [],
       pagination: { count: 0, nextOffset: null },

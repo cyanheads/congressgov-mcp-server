@@ -144,7 +144,7 @@ describe('rollVotesTool — Zod schema validation', () => {
 
 describe('billLookupTool — handler validation', () => {
   it('rejects malformed fromDateTime and surfaces actionable error', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: billLookupTool.errors });
     const input = billLookupTool.input.parse({
       operation: 'list',
       congress: 118,
@@ -154,7 +154,7 @@ describe('billLookupTool — handler validation', () => {
   });
 
   it('rejects malformed toDateTime', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: billLookupTool.errors });
     const input = billLookupTool.input.parse({
       operation: 'list',
       congress: 118,
@@ -164,7 +164,7 @@ describe('billLookupTool — handler validation', () => {
   });
 
   it('rejects injection-like dateTime strings', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: billLookupTool.errors });
     const input = billLookupTool.input.parse({
       operation: 'list',
       congress: 118,
@@ -172,31 +172,170 @@ describe('billLookupTool — handler validation', () => {
     });
     await expect(billLookupTool.handler(input, ctx)).rejects.toThrow(/ISO 8601/);
   });
+
+  // ── #48: reversed date ranges ─────────────────────────────────────────────
+
+  it('rejects a reversed date range before the upstream call', async () => {
+    const ctx = createMockContext({ errors: billLookupTool.errors });
+    const input = billLookupTool.input.parse({
+      operation: 'list',
+      congress: 119,
+      billType: 'hr',
+      fromDateTime: '2026-08-11T00:00:00Z',
+      toDateTime: '2026-08-01T00:00:00Z',
+    });
+    await expect(billLookupTool.handler(input, ctx)).rejects.toThrow(/earlier than or equal to/);
+    expect(mockApi.listBills).not.toHaveBeenCalled();
+  });
+
+  it('accepts a zero-width date range (from === to)', async () => {
+    mockApi.listBills.mockResolvedValue({ data: [], pagination: { count: 0, nextOffset: null } });
+    const ctx = createMockContext({ errors: billLookupTool.errors });
+    const input = billLookupTool.input.parse({
+      operation: 'list',
+      congress: 119,
+      fromDateTime: '2026-08-01T00:00:00Z',
+      toDateTime: '2026-08-01T00:00:00Z',
+    });
+    await expect(billLookupTool.handler(input, ctx)).resolves.toBeDefined();
+  });
+
+  it('accepts either bound on its own', async () => {
+    mockApi.listBills.mockResolvedValue({ data: [], pagination: { count: 0, nextOffset: null } });
+    const ctx = createMockContext({ errors: billLookupTool.errors });
+    await expect(
+      billLookupTool.handler(
+        billLookupTool.input.parse({
+          operation: 'list',
+          congress: 119,
+          fromDateTime: '2026-08-11T00:00:00Z',
+        }),
+        ctx,
+      ),
+    ).resolves.toBeDefined();
+    await expect(
+      billLookupTool.handler(
+        billLookupTool.input.parse({
+          operation: 'list',
+          congress: 119,
+          toDateTime: '2026-08-01T00:00:00Z',
+        }),
+        ctx,
+      ),
+    ).resolves.toBeDefined();
+  });
+
+  it('treats blank form-client bounds as absent rather than reversed', async () => {
+    mockApi.listBills.mockResolvedValue({ data: [], pagination: { count: 0, nextOffset: null } });
+    const ctx = createMockContext({ errors: billLookupTool.errors });
+    const input = billLookupTool.input.parse({
+      operation: 'list',
+      congress: 119,
+      fromDateTime: '',
+      toDateTime: '   ',
+    });
+    await expect(billLookupTool.handler(input, ctx)).resolves.toBeDefined();
+    expect(mockApi.listBills).toHaveBeenCalledWith(
+      expect.objectContaining({ fromDateTime: undefined, toDateTime: undefined }),
+      ctx,
+    );
+  });
 });
 
 describe('billSummariesTool — handler validation', () => {
   it('rejects malformed fromDateTime', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: billSummariesTool.errors });
     const input = billSummariesTool.input.parse({ fromDateTime: '2024/01/01' });
     await expect(billSummariesTool.handler(input, ctx)).rejects.toThrow(/ISO 8601/);
   });
 
   it('rejects malformed toDateTime', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: billSummariesTool.errors });
     const input = billSummariesTool.input.parse({ toDateTime: 'not-a-date' });
     await expect(billSummariesTool.handler(input, ctx)).rejects.toThrow(/ISO 8601/);
+  });
+
+  // ── #48: reversed date ranges ─────────────────────────────────────────────
+
+  it('rejects a reversed date range before the upstream call', async () => {
+    const ctx = createMockContext({ errors: billSummariesTool.errors });
+    const input = billSummariesTool.input.parse({
+      fromDateTime: '2026-08-11T00:00:00Z',
+      toDateTime: '2026-08-01T00:00:00Z',
+    });
+    await expect(billSummariesTool.handler(input, ctx)).rejects.toThrow(/earlier than or equal to/);
+    expect(mockApi.listSummaries).not.toHaveBeenCalled();
+  });
+
+  it('accepts a zero-width date range (from === to)', async () => {
+    mockApi.listSummaries.mockResolvedValue({
+      data: [],
+      pagination: { count: 0, nextOffset: null },
+    });
+    const ctx = createMockContext({ errors: billSummariesTool.errors });
+    const input = billSummariesTool.input.parse({
+      fromDateTime: '2026-08-01T00:00:00Z',
+      toDateTime: '2026-08-01T00:00:00Z',
+    });
+    await expect(billSummariesTool.handler(input, ctx)).resolves.toBeDefined();
+  });
+
+  it('leaves toDateTime open when only fromDateTime is supplied', async () => {
+    mockApi.listSummaries.mockResolvedValue({
+      data: [],
+      pagination: { count: 0, nextOffset: null },
+    });
+    const ctx = createMockContext({ errors: billSummariesTool.errors });
+    const input = billSummariesTool.input.parse({ fromDateTime: '2026-08-11T00:00:00Z' });
+    await billSummariesTool.handler(input, ctx);
+    expect(mockApi.listSummaries).toHaveBeenCalledWith(
+      expect.objectContaining({ fromDateTime: '2026-08-11T00:00:00Z', toDateTime: undefined }),
+      ctx,
+    );
+  });
+
+  it('does not synthesize a default fromDateTime when only toDateTime is supplied', async () => {
+    mockApi.listSummaries.mockResolvedValue({
+      data: [],
+      pagination: { count: 0, nextOffset: null },
+    });
+    const ctx = createMockContext({ errors: billSummariesTool.errors });
+    const input = billSummariesTool.input.parse({ toDateTime: '2020-01-01T00:00:00Z' });
+    await billSummariesTool.handler(input, ctx);
+    // A synthesized "7 days ago" default would sit after this toDateTime and read
+    // as a reversed range — the default must stay suppressed here.
+    expect(mockApi.listSummaries).toHaveBeenCalledWith(
+      expect.objectContaining({ fromDateTime: undefined, toDateTime: '2020-01-01T00:00:00Z' }),
+      ctx,
+    );
+  });
+
+  it('synthesizes a default fromDateTime with no toDateTime when neither bound is supplied', async () => {
+    mockApi.listSummaries.mockResolvedValue({
+      data: [],
+      pagination: { count: 0, nextOffset: null },
+    });
+    const ctx = createMockContext({ errors: billSummariesTool.errors });
+    await billSummariesTool.handler(billSummariesTool.input.parse({}), ctx);
+    expect(mockApi.listSummaries).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fromDateTime: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/),
+        toDateTime: undefined,
+      }),
+      ctx,
+    );
   });
 });
 
 describe('committeeLookupTool — handler validation', () => {
   it('throws when sub-resource is missing committeeCode', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: committeeLookupTool.errors });
     const input = committeeLookupTool.input.parse({ operation: 'bills' });
     await expect(committeeLookupTool.handler(input, ctx)).rejects.toThrow(/requires/);
   });
 
   it('throws when committeeCode has unknown chamber prefix and chamber is not explicit', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: committeeLookupTool.errors });
     // A committeeCode with prefix that cannot be inferred triggers a validation error
     const input = committeeLookupTool.input.parse({
       operation: 'bills',
@@ -219,7 +358,7 @@ describe('crsReportsTool — handler validation', () => {
       data: [],
       pagination: { count: 0, nextOffset: null },
     });
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: crsReportsTool.errors });
     const input = crsReportsTool.input.parse({ operation: 'list' });
     await crsReportsTool.handler(input, ctx);
     expect(mockApi.listCrsReports).toHaveBeenCalledWith(
@@ -231,7 +370,7 @@ describe('crsReportsTool — handler validation', () => {
 
 describe('dailyRecordTool — handler validation', () => {
   it('throws when articles is missing volumeNumber', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: dailyRecordTool.errors });
     const input = dailyRecordTool.input.parse({ operation: 'articles', issueNumber: 5 });
     await expect(dailyRecordTool.handler(input, ctx)).rejects.toThrow(/volumeNumber/);
   });
@@ -239,7 +378,7 @@ describe('dailyRecordTool — handler validation', () => {
 
 describe('enactedLawsTool — handler validation', () => {
   it('throws when get is missing lawNumber', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: enactedLawsTool.errors });
     const input = enactedLawsTool.input.parse({
       operation: 'get',
       congress: 118,
@@ -295,7 +434,7 @@ describe('enactedLawsTool — enrichment', () => {
       data: [{ number: 1 }],
       pagination: { count: 1, nextOffset: null },
     });
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: enactedLawsTool.errors });
     const input = enactedLawsTool.input.parse({ operation: 'list', congress: 118 });
     await enactedLawsTool.handler(input, ctx);
     const enrichment = getEnrichment(ctx);
@@ -310,7 +449,7 @@ describe('committeeLookupTool — enrichment', () => {
       data: [{ name: 'Judiciary' }],
       pagination: { count: 1, nextOffset: null },
     });
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: committeeLookupTool.errors });
     const input = committeeLookupTool.input.parse({ operation: 'list' });
     await committeeLookupTool.handler(input, ctx);
     const enrichment = getEnrichment(ctx);
@@ -319,7 +458,7 @@ describe('committeeLookupTool — enrichment', () => {
 
   it('sets effectiveQuery on get', async () => {
     mockApi.getCommittee.mockResolvedValue({ committee: { name: 'Judiciary' } });
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: committeeLookupTool.errors });
     const input = committeeLookupTool.input.parse({
       operation: 'get',
       chamber: 'house',
@@ -338,7 +477,7 @@ describe('senateNominationsTool — enrichment', () => {
       data: [{ nominationNumber: '100' }],
       pagination: { count: 1, nextOffset: null },
     });
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: senateNominationsTool.errors });
     const input = senateNominationsTool.input.parse({ operation: 'list', congress: 119 });
     await senateNominationsTool.handler(input, ctx);
     const enrichment = getEnrichment(ctx);
@@ -352,7 +491,7 @@ describe('rollVotesTool — enrichment', () => {
       data: [{ rollCallNumber: 1 }],
       pagination: { count: 1, nextOffset: null },
     });
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: rollVotesTool.errors });
     const input = rollVotesTool.input.parse({ operation: 'list', congress: 119, session: 1 });
     await rollVotesTool.handler(input, ctx);
     const enrichment = getEnrichment(ctx);
@@ -366,7 +505,7 @@ describe('crsReportsTool — enrichment', () => {
       data: [{ reportNumber: 'R40097' }],
       pagination: { count: 1, nextOffset: null },
     });
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: crsReportsTool.errors });
     const input = crsReportsTool.input.parse({ operation: 'list' });
     await crsReportsTool.handler(input, ctx);
     const enrichment = getEnrichment(ctx);
@@ -378,7 +517,7 @@ describe('crsReportsTool — enrichment', () => {
       data: [],
       pagination: { count: 0, nextOffset: null },
     });
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: crsReportsTool.errors });
     const input = crsReportsTool.input.parse({ operation: 'list' });
     await crsReportsTool.handler(input, ctx);
     const enrichment = getEnrichment(ctx);
@@ -392,7 +531,7 @@ describe('committeeReportsTool — enrichment', () => {
       data: [{ reportNumber: 1 }],
       pagination: { count: 1, nextOffset: null },
     });
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: committeeReportsTool.errors });
     const input = committeeReportsTool.input.parse({ operation: 'list', congress: 118 });
     await committeeReportsTool.handler(input, ctx);
     const enrichment = getEnrichment(ctx);
@@ -401,7 +540,7 @@ describe('committeeReportsTool — enrichment', () => {
 
   it('sets effectiveQuery on get', async () => {
     mockApi.getCommitteeReport.mockResolvedValue({ report: { title: 'Report' } });
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: committeeReportsTool.errors });
     const input = committeeReportsTool.input.parse({
       operation: 'get',
       congress: 118,

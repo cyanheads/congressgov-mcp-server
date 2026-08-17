@@ -13,6 +13,10 @@ import {
   listEnrichment,
   listOrDetail,
   normalizeOptionalString,
+  notifyIfNoMatches,
+  numericIdentifier,
+  toIdentifierNumber,
+  validateDateTimeRange,
   validateIsoDateTime,
 } from '@/mcp-server/tools/tool-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
@@ -48,12 +52,9 @@ export const billLookupTool = tool('congressgov_bill_lookup', {
     billType: BillTypeEnum.optional().describe(
       'Bill type code. Required for get and sub-resource operations.',
     ),
-    billNumber: z
-      .number()
-      .int()
-      .positive()
-      .optional()
-      .describe('Bill number. Required for get and sub-resource operations.'),
+    billNumber: numericIdentifier(
+      'Bill number. Required for get and sub-resource operations. Accepts the digit-string form list rows carry (e.g. "9479") as well as a number.',
+    ).optional(),
     fromDateTime: z
       .string()
       .optional()
@@ -87,6 +88,7 @@ export const billLookupTool = tool('congressgov_bill_lookup', {
       'fromDateTime',
     );
     const toDateTime = validateIsoDateTime(normalizeOptionalString(input.toDateTime), 'toDateTime');
+    validateDateTimeRange(fromDateTime, toDateTime);
 
     if (input.operation === 'list') {
       const result = await api.listBills(
@@ -111,10 +113,11 @@ export const billLookupTool = tool('congressgov_bill_lookup', {
         }),
       );
       ctx.enrich.total(result.pagination.count);
-      if (result.data.length === 0)
-        ctx.enrich.notice(
-          'No bills matched the filters. Try broadening the date range or removing billType.',
-        );
+      notifyIfNoMatches(
+        ctx,
+        result,
+        'No bills matched the filters. Try broadening the date range or removing billType.',
+      );
       return result;
     }
 
@@ -125,22 +128,25 @@ export const billLookupTool = tool('congressgov_bill_lookup', {
       );
     }
 
+    /** List rows carry `number` as a string; the service takes a number. */
+    const billNumber = toIdentifierNumber(input.billNumber);
+
     if (input.operation === 'get') {
       const result = await api.getBill(
         {
           congress: input.congress,
           billType: input.billType,
-          billNumber: input.billNumber,
+          billNumber,
         },
         ctx,
       );
       ctx.log.info('Bill retrieved', {
         congress: input.congress,
         billType: input.billType,
-        billNumber: input.billNumber,
+        billNumber,
       });
       ctx.enrich.echo(
-        `${input.billType.toUpperCase()} ${input.billNumber} in the ${input.congress}th Congress`,
+        `${input.billType.toUpperCase()} ${billNumber} in the ${input.congress}th Congress`,
       );
       ctx.enrich.total(1);
       return result;
@@ -151,7 +157,7 @@ export const billLookupTool = tool('congressgov_bill_lookup', {
       {
         congress: input.congress,
         billType: input.billType,
-        billNumber: input.billNumber,
+        billNumber,
         subResource: subResource as BillSubResource,
         limit: input.limit,
         offset: input.offset,
@@ -161,17 +167,18 @@ export const billLookupTool = tool('congressgov_bill_lookup', {
     ctx.log.info('Bill sub-resource retrieved', {
       congress: input.congress,
       billType: input.billType,
-      billNumber: input.billNumber,
+      billNumber,
       subResource,
     });
     ctx.enrich.echo(
-      `${input.operation} for ${input.billType.toUpperCase()} ${input.billNumber} in the ${input.congress}th Congress`,
+      `${input.operation} for ${input.billType.toUpperCase()} ${billNumber} in the ${input.congress}th Congress`,
     );
     ctx.enrich.total(result.pagination.count);
-    if (result.data.length === 0)
-      ctx.enrich.notice(
-        `No ${input.operation} found for ${input.billType.toUpperCase()} ${input.billNumber}.`,
-      );
+    notifyIfNoMatches(
+      ctx,
+      result,
+      `No ${input.operation} found for ${input.billType.toUpperCase()} ${billNumber}.`,
+    );
     return result;
   },
 });

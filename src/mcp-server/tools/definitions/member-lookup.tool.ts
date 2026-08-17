@@ -12,6 +12,7 @@ import {
   congressErrorContracts,
   listEnrichment,
   listOrDetail,
+  notifyIfNoMatches,
 } from '@/mcp-server/tools/tool-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 
@@ -88,10 +89,11 @@ export const memberLookupTool = tool('congressgov_member_lookup', {
         }),
       );
       ctx.enrich.total(result.pagination.count);
-      if (result.data.length === 0)
-        ctx.enrich.notice(
-          'No members matched the filters. Try removing stateCode or district, or check the congress number.',
-        );
+      notifyIfNoMatches(
+        ctx,
+        result,
+        'No members matched the filters. Try removing stateCode or district, or check the congress number.',
+      );
       return result;
     }
 
@@ -127,8 +129,11 @@ export const memberLookupTool = tool('congressgov_member_lookup', {
     });
     ctx.enrich.echo(`${input.operation} legislation for ${input.bioguideId}`);
     ctx.enrich.total(result.pagination.count);
-    if (result.data.length === 0)
-      ctx.enrich.notice(`No ${input.operation} legislation found for member ${input.bioguideId}.`);
+    notifyIfNoMatches(
+      ctx,
+      result,
+      `No ${input.operation} legislation found for member ${input.bioguideId}.`,
+    );
     return result;
   },
 });

@@ -27,7 +27,7 @@ describe('memberLookupTool', () => {
   });
 
   it('lists members', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: memberLookupTool.errors });
     mockApi.listMembers.mockResolvedValue({
       data: [{ name: 'Smith' }],
       pagination: { count: 1, nextOffset: null },
@@ -38,7 +38,7 @@ describe('memberLookupTool', () => {
   });
 
   it('lists members filtered by state', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: memberLookupTool.errors });
     mockApi.listMembers.mockResolvedValue({
       data: [],
       pagination: { count: 0, nextOffset: null },
@@ -55,13 +55,13 @@ describe('memberLookupTool', () => {
   });
 
   it('throws when district is provided without stateCode', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: memberLookupTool.errors });
     const input = memberLookupTool.input.parse({ operation: 'list', district: 5 });
     await expect(memberLookupTool.handler(input, ctx)).rejects.toThrow(/stateCode/);
   });
 
   it('lists members by congress combined with state and district', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: memberLookupTool.errors });
     mockApi.listMembers.mockResolvedValue({
       data: [],
       pagination: { count: 0, nextOffset: null },
@@ -80,7 +80,7 @@ describe('memberLookupTool', () => {
   });
 
   it('gets a member by bioguideId', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: memberLookupTool.errors });
     mockApi.getMember.mockResolvedValue({ member: { name: 'Pelosi' } });
     const input = memberLookupTool.input.parse({
       operation: 'get',
@@ -95,13 +95,13 @@ describe('memberLookupTool', () => {
   });
 
   it('throws when get/sponsored/cosponsored is missing bioguideId', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: memberLookupTool.errors });
     const input = memberLookupTool.input.parse({ operation: 'get' });
     await expect(memberLookupTool.handler(input, ctx)).rejects.toThrow(/bioguideId/);
   });
 
   it('fetches sponsored legislation', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: memberLookupTool.errors });
     mockApi.getMemberLegislation.mockResolvedValue({
       data: [],
       pagination: { count: 0, nextOffset: null },
@@ -118,7 +118,7 @@ describe('memberLookupTool', () => {
   });
 
   it('fetches cosponsored legislation', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: memberLookupTool.errors });
     mockApi.getMemberLegislation.mockResolvedValue({
       data: [],
       pagination: { count: 0, nextOffset: null },

@@ -4,8 +4,9 @@
  * embedded SQLite + FTS5 index (title + summary), not the live API, so it has no
  * live fallback: a mirror that has not finished its initial build returns an empty
  * result with an enrichment notice rather than a thrown error. Gated behind
- * CONGRESS_MIRROR_ENABLED via disabledTool() — visible-but-uncallable when the
- * mirror is off (the default).
+ * CONGRESS_MIRROR_ENABLED via disabledTool() — when the mirror is off (the
+ * default) the tool stays on the manifest and the landing page for operators but
+ * is skipped during MCP registration, so clients never see it in tools/list.
  * @module mcp-server/tools/definitions/search-bills
  */
 
@@ -16,6 +17,7 @@ import {
   buildEffectiveQuery,
   listEnrichment,
   listOutput,
+  notifyIfNoMatches,
 } from '@/mcp-server/tools/tool-helpers.js';
 import { BILL_TYPE_CODES } from '@/services/congress-api/types.js';
 import { getCongressMirror } from '@/services/congress-mirror/congress-mirror-service.js';
@@ -94,20 +96,21 @@ const searchBillsDef = tool('congressgov_search_bills', {
 
     ctx.log.info('Bill search complete', { query: input.query, matches: page.total });
     ctx.enrich.total(page.total);
-    if (page.items.length === 0) {
-      ctx.enrich.notice(
-        `No bills matched "${input.query}". Try broader or fewer keywords, or remove the congress/billType/originChamber filters.`,
-      );
-    }
 
     const nextOffset =
       page.offset + page.items.length < page.total ? page.offset + page.items.length : null;
     /** The shared list envelope carries `data` as passthrough records; the typed
      * search results widen cleanly to that shape. */
-    return {
+    const result = {
       data: page.items as unknown as Record<string, unknown>[],
       pagination: { count: page.total, nextOffset },
     };
+    notifyIfNoMatches(
+      ctx,
+      result,
+      `No bills matched "${input.query}". Try broader or fewer keywords, or remove the congress/billType/originChamber filters.`,
+    );
+    return result;
   },
 });
 

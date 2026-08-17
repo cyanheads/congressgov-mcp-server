@@ -27,7 +27,7 @@ describe('committeeReportsTool', () => {
   });
 
   it('lists committee reports by congress', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: committeeReportsTool.errors });
     mockApi.listCommitteeReports.mockResolvedValue({
       data: [{ reportNumber: 1 }],
       pagination: { count: 1, nextOffset: null },
@@ -38,7 +38,7 @@ describe('committeeReportsTool', () => {
   });
 
   it('lists reports filtered by type', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: committeeReportsTool.errors });
     mockApi.listCommitteeReports.mockResolvedValue({
       data: [],
       pagination: { count: 0, nextOffset: null },
@@ -56,7 +56,7 @@ describe('committeeReportsTool', () => {
   });
 
   it('gets a specific committee report', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: committeeReportsTool.errors });
     mockApi.getCommitteeReport.mockResolvedValue({ report: { title: 'Report' } });
     const input = committeeReportsTool.input.parse({
       operation: 'get',
@@ -73,7 +73,7 @@ describe('committeeReportsTool', () => {
   });
 
   it('gets committee report text', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: committeeReportsTool.errors });
     mockApi.getCommitteeReportText.mockResolvedValue({ text: 'Full text...' });
     const input = committeeReportsTool.input.parse({
       operation: 'text',
@@ -90,7 +90,7 @@ describe('committeeReportsTool', () => {
   });
 
   it('throws when get/text is missing reportType or reportNumber', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: committeeReportsTool.errors });
     const input = committeeReportsTool.input.parse({ operation: 'get', congress: 118 });
     await expect(committeeReportsTool.handler(input, ctx)).rejects.toThrow(/requires/);
   });

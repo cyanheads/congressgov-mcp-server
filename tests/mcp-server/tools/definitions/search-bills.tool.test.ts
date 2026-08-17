@@ -111,6 +111,42 @@ describe('congressgov_search_bills', () => {
     expect(String(enrichment.effectiveQuery)).toContain('semiconductor');
   });
 
+  it('leaves notice unset when the offset runs past the matched set (#49)', async () => {
+    await getCongressMirror().mirrorInstance.runSync({
+      mode: 'init',
+      signal: AbortSignal.timeout(60_000),
+    });
+
+    const ctx = createMockContext();
+    const input = searchBillsTool.input.parse({ query: 'semiconductor', offset: 5 });
+    const result = await searchBillsTool.handler(input, ctx);
+
+    expect(result.data).toHaveLength(0);
+    expect(result.pagination.count).toBe(1);
+
+    const enrichment = getEnrichment(ctx);
+    expect(enrichment.totalCount).toBe(1);
+    // Matches exist — this page is past the end, not a failed keyword search.
+    expect(enrichment.notice).toBeUndefined();
+
+    const text = (searchBillsTool.format!(result)[0] as { text: string }).text;
+    expect(text).toMatch(/past the end of 1 total item/);
+  });
+
+  it('keeps the keyword no-match notice when nothing matched at all', async () => {
+    await getCongressMirror().mirrorInstance.runSync({
+      mode: 'init',
+      signal: AbortSignal.timeout(60_000),
+    });
+
+    const ctx = createMockContext();
+    const input = searchBillsTool.input.parse({ query: 'zzznomatchzzz' });
+    const result = await searchBillsTool.handler(input, ctx);
+
+    expect(result.pagination.count).toBe(0);
+    expect(getEnrichment(ctx).notice).toMatch(/No bills matched "zzznomatchzzz"/);
+  });
+
   it('renders the hit into content[] via format()', async () => {
     await getCongressMirror().mirrorInstance.runSync({
       mode: 'init',

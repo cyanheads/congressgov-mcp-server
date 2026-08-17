@@ -25,7 +25,7 @@ describe('billSummariesTool', () => {
   });
 
   it('lists recent summaries with default 7-day window', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: billSummariesTool.errors });
     mockApi.listSummaries.mockResolvedValue({
       data: [{ text: 'Summary' }],
       pagination: { count: 1, nextOffset: null },
@@ -42,7 +42,7 @@ describe('billSummariesTool', () => {
   });
 
   it('passes explicit date range', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: billSummariesTool.errors });
     mockApi.listSummaries.mockResolvedValue({
       data: [],
       pagination: { count: 0, nextOffset: null },
@@ -62,7 +62,7 @@ describe('billSummariesTool', () => {
   });
 
   it('filters by congress and bill type', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: billSummariesTool.errors });
     mockApi.listSummaries.mockResolvedValue({
       data: [],
       pagination: { count: 0, nextOffset: null },
@@ -79,13 +79,13 @@ describe('billSummariesTool', () => {
   });
 
   it('throws when billType is provided without congress', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: billSummariesTool.errors });
     const input = billSummariesTool.input.parse({ billType: 'hr' });
     await expect(billSummariesTool.handler(input, ctx)).rejects.toThrow(/congress/);
   });
 
   it('treats empty-string dates from form-based clients as omitted', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: billSummariesTool.errors });
     mockApi.listSummaries.mockResolvedValue({
       data: [],
       pagination: { count: 0, nextOffset: null },
@@ -95,7 +95,7 @@ describe('billSummariesTool', () => {
       toDateTime: '',
     });
     await billSummariesTool.handler(input, ctx);
-    const [paramsArg, passedCtx] = mockApi.listSummaries.mock.calls[0];
+    const [paramsArg, passedCtx] = mockApi.listSummaries.mock.calls[0]!;
     expect(paramsArg.fromDateTime).toMatch(/^\d{4}-\d{2}-\d{2}T/);
     expect(paramsArg.toDateTime).toBeUndefined();
     expect(passedCtx).toBe(ctx);

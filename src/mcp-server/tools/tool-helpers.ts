@@ -3,6 +3,7 @@
  * @module mcp-server/tools/tool-helpers
  */
 
+import type { Context } from '@cyanheads/mcp-ts-core';
 import { z } from '@cyanheads/mcp-ts-core';
 import {
   type ErrorContract,
@@ -72,6 +73,47 @@ export function listOrDetail(entityKey: string, description?: string) {
     .describe(`Detail-mode key '${entityKey}' carries: ${detailDesc}`);
 }
 
+/**
+ * A positive integer written as digits only, with leading zeros allowed — the
+ * `"0009479"` form is accepted, `"0"` is not.
+ */
+const NUMERIC_IDENTIFIER_PATTERN = /^0*[1-9]\d*$/;
+
+/**
+ * Schema for a positive-integer path identifier that Congress.gov list rows may
+ * carry as either a JSON number or a numeric string (a bill's `number` and a
+ * daily record's `issueNumber` both arrive as strings). Accepting only a number
+ * breaks the list → drill-down chain at the MCP input boundary.
+ *
+ * A plain union rather than a coercion: `z.coerce.number()` advertises "anything
+ * coercible" and would swallow `"1e3"`, booleans, and whitespace-padded values,
+ * and `.transform()` is not JSON-Schema-serializable. Non-numeric, decimal,
+ * signed, blank, scientific-notation, and zero values still fail at parse time —
+ * each of these would otherwise be interpolated verbatim into the upstream URL
+ * path. Normalize the parsed value with `toIdentifierNumber` before handing it
+ * to the service layer, which takes `number`.
+ * Resolves cyanheads/congressgov-mcp-server#43.
+ */
+export function numericIdentifier(description: string) {
+  return z
+    .union([
+      z.number().int().positive().describe('Positive integer form.'),
+      z
+        .string()
+        .regex(
+          NUMERIC_IDENTIFIER_PATTERN,
+          'Must be digits only and greater than zero (leading zeros allowed).',
+        )
+        .describe('Digit-string form, as list rows carry it.'),
+    ])
+    .describe(description);
+}
+
+/** Normalize a `numericIdentifier` value to the `number` the service layer takes. */
+export function toIdentifierNumber(value: number | string): number {
+  return typeof value === 'number' ? value : Number(value);
+}
+
 export function normalizeOptionalString(value: string | undefined): string | undefined {
   const normalized = value?.trim();
   return normalized || undefined;
@@ -121,6 +163,30 @@ export function validateIsoDateTime(value: string | undefined, field: string): s
 }
 
 /**
+ * Reject a reversed `fromDateTime`/`toDateTime` pair. Congress.gov answers a
+ * reversed range with an empty 200, which is indistinguishable from a genuinely
+ * empty query — catch the contradiction here instead.
+ *
+ * A zero-width range (`from === to`) is legal, and either bound may be supplied
+ * alone. Both values must already have passed `validateIsoDateTime`, which pins
+ * them to the fixed-width `YYYY-MM-DDTHH:MM:SSZ` shape — so lexicographic
+ * comparison is exact ordering and no `Date` parsing is needed.
+ * Resolves cyanheads/congressgov-mcp-server#48.
+ */
+export function validateDateTimeRange(
+  fromDateTime: string | undefined,
+  toDateTime: string | undefined,
+): void {
+  if (fromDateTime === undefined || toDateTime === undefined) return;
+  if (fromDateTime > toDateTime) {
+    throw validationError(
+      `'fromDateTime' must be earlier than or equal to 'toDateTime'. Got fromDateTime=${fromDateTime}, toDateTime=${toDateTime}. Swap the two bounds or widen the range.`,
+      { field: 'fromDateTime', fromDateTime, toDateTime },
+    );
+  }
+}
+
+/**
  * Enrichment block shared by all browse/list operations. Declares the three
  * standard agent-facing fields: the effective query echo, the total result
  * count, and an optional notice for empty results or edge cases.
@@ -133,7 +199,7 @@ export function validateIsoDateTime(value: string | undefined, field: string): s
  * ```ts
  * ctx.enrich.echo(buildEffectiveQuery('bills', { congress: 118 }));
  * ctx.enrich.total(result.pagination.count);
- * if (result.data.length === 0) ctx.enrich.notice('No matching results. Try adjusting the filters.');
+ * notifyIfNoMatches(ctx, result, 'No matching results. Try adjusting the filters.');
  * ```
  */
 export const listEnrichment = {
@@ -144,6 +210,36 @@ export const listEnrichment = {
     .optional()
     .describe('Guidance when results are empty, a page is past the end, or a caveat applies.'),
 };
+
+/**
+ * A paginated result envelope, narrowed to what the empty-result gate reads.
+ * `count` is the upstream total across all pages, not the length of `data`.
+ */
+type PaginatedResult = {
+  data: readonly unknown[];
+  pagination: { count: number };
+};
+
+/**
+ * Emit an empty-result notice only when nothing matched upstream.
+ *
+ * An empty `data` array has two distinct causes: the query matched nothing, or
+ * the caller paged past the end of a non-empty result set. Only the first is a
+ * no-match. The second already renders as an accurate "page is empty — offset is
+ * past the end of N total items" line in `format()` (`renderList` and the vote
+ * roster renderers in `format-helpers.ts`), and pairing that with no-match
+ * guidance gives the caller two contradictory explanations while
+ * `structuredContent.notice` carries only the wrong one. Gating on
+ * `pagination.count` separates the two states.
+ *
+ * The message stays per-call-site — browse operations carry filter-broadening
+ * advice, sub-resources carry their own context-specific text — so only the
+ * decision to fire is shared, never the wording.
+ * Resolves cyanheads/congressgov-mcp-server#49.
+ */
+export function notifyIfNoMatches(ctx: Context, result: PaginatedResult, message: string): void {
+  if (result.data.length === 0 && result.pagination.count === 0) ctx.enrich.notice(message);
+}
 
 /**
  * Build an effective-query string for enrichment echo. Returns the scope plus

@@ -1,12 +1,20 @@
 /**
- * @fileoverview Tests for shared tool-helpers — validateIsoDateTime, normalizeOptionalString, buildEffectiveQuery.
+ * @fileoverview Tests for shared tool-helpers — normalizeOptionalString, validateIsoDateTime,
+ * numericIdentifier/toIdentifierNumber, validateDateTimeRange, buildEffectiveQuery,
+ * notifyIfNoMatches.
  * @module tests/mcp-server/tools/tool-helpers.test
  */
 
+import { z } from '@cyanheads/mcp-ts-core';
+import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
 import { describe, expect, it } from 'vitest';
 import {
   buildEffectiveQuery,
   normalizeOptionalString,
+  notifyIfNoMatches,
+  numericIdentifier,
+  toIdentifierNumber,
+  validateDateTimeRange,
   validateIsoDateTime,
 } from '@/mcp-server/tools/tool-helpers.js';
 
@@ -108,6 +116,82 @@ describe('validateIsoDateTime', () => {
   });
 });
 
+describe('numericIdentifier / toIdentifierNumber', () => {
+  const schema = numericIdentifier('Test identifier.');
+
+  it('accepts a positive integer', () => {
+    expect(schema.parse(9479)).toBe(9479);
+  });
+
+  it('accepts a digit string, including zero-padded', () => {
+    expect(schema.parse('9479')).toBe('9479');
+    expect(schema.parse('0009479')).toBe('0009479');
+  });
+
+  it.each(['abc', '12a', '9479x', '94.5', '-5', '+5', '0', '000', '', '   ', ' 9479 ', '1e3'])(
+    'rejects %o',
+    (value) => {
+      expect(() => schema.parse(value)).toThrow();
+    },
+  );
+
+  it.each([0, -5, 1.5])('rejects the non-positive-integer number %o', (value) => {
+    expect(() => schema.parse(value)).toThrow();
+  });
+
+  it('emits a JSON-Schema-serializable union (no transform)', () => {
+    const json = z.toJSONSchema(schema) as { anyOf?: Array<Record<string, unknown>> };
+    expect(json.anyOf).toHaveLength(2);
+    expect(json.anyOf?.map((variant) => variant.type)).toEqual(['integer', 'string']);
+  });
+
+  it('normalizes both forms to a number', () => {
+    expect(toIdentifierNumber(9479)).toBe(9479);
+    expect(toIdentifierNumber('9479')).toBe(9479);
+    expect(toIdentifierNumber('0009479')).toBe(9479);
+  });
+});
+
+describe('validateDateTimeRange', () => {
+  const EARLY = '2026-08-01T00:00:00Z';
+  const LATE = '2026-08-11T00:00:00Z';
+
+  it('accepts an ordered range', () => {
+    expect(() => validateDateTimeRange(EARLY, LATE)).not.toThrow();
+  });
+
+  it('accepts a zero-width range (from === to)', () => {
+    expect(() => validateDateTimeRange(EARLY, EARLY)).not.toThrow();
+  });
+
+  it('accepts fromDateTime alone', () => {
+    expect(() => validateDateTimeRange(EARLY, undefined)).not.toThrow();
+  });
+
+  it('accepts toDateTime alone', () => {
+    expect(() => validateDateTimeRange(undefined, LATE)).not.toThrow();
+  });
+
+  it('accepts both bounds absent', () => {
+    expect(() => validateDateTimeRange(undefined, undefined)).not.toThrow();
+  });
+
+  it('rejects a reversed range', () => {
+    expect(() => validateDateTimeRange(LATE, EARLY)).toThrow(/earlier than or equal to/);
+  });
+
+  it('rejects a range reversed by only one second', () => {
+    expect(() => validateDateTimeRange('2026-08-01T00:00:01Z', '2026-08-01T00:00:00Z')).toThrow(
+      /earlier than or equal to/,
+    );
+  });
+
+  it('names both bounds in the error message', () => {
+    expect(() => validateDateTimeRange(LATE, EARLY)).toThrow(new RegExp(LATE));
+    expect(() => validateDateTimeRange(LATE, EARLY)).toThrow(new RegExp(EARLY));
+  });
+});
+
 describe('buildEffectiveQuery', () => {
   it('returns scope alone when no filters are provided', () => {
     expect(buildEffectiveQuery('bills')).toBe('bills');
@@ -150,5 +234,41 @@ describe('buildEffectiveQuery', () => {
   it('handles numeric zero as a valid filter value', () => {
     const result = buildEffectiveQuery('members', { district: 0 });
     expect(result).toBe('members (district=0)');
+  });
+});
+
+describe('notifyIfNoMatches', () => {
+  const MESSAGE = 'No bills matched the filters.';
+
+  const notify = (data: unknown[], count: number) => {
+    const ctx = createMockContext();
+    notifyIfNoMatches(ctx, { data, pagination: { count } }, MESSAGE);
+    return getEnrichment(ctx).notice;
+  };
+
+  it('emits the notice when the result set is genuinely empty', () => {
+    expect(notify([], 0)).toBe(MESSAGE);
+  });
+
+  it('stays silent on an empty page of a non-empty result set', () => {
+    expect(notify([], 10_081)).toBeUndefined();
+  });
+
+  it('stays silent when the total is one — a single-row set paged past', () => {
+    expect(notify([], 1)).toBeUndefined();
+  });
+
+  it('stays silent when the page carries rows', () => {
+    expect(notify([{ number: 1 }], 1)).toBeUndefined();
+  });
+
+  it('stays silent when the page carries rows and more pages remain', () => {
+    expect(notify([{ number: 1 }, { number: 2 }], 500)).toBeUndefined();
+  });
+
+  it('passes the caller-supplied message through verbatim', () => {
+    const ctx = createMockContext();
+    notifyIfNoMatches(ctx, { data: [], pagination: { count: 0 } }, 'No actions found for HR 9479.');
+    expect(getEnrichment(ctx).notice).toBe('No actions found for HR 9479.');
   });
 });

@@ -26,7 +26,7 @@ describe('crsReportsTool', () => {
   });
 
   it('lists CRS reports', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: crsReportsTool.errors });
     mockApi.listCrsReports.mockResolvedValue({
       data: [{ reportNumber: 'R40097' }],
       pagination: { count: 1, nextOffset: null },
@@ -41,7 +41,7 @@ describe('crsReportsTool', () => {
   });
 
   it('gets a specific CRS report', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: crsReportsTool.errors });
     mockApi.getCrsReport.mockResolvedValue({ report: { title: 'Climate Policy' } });
     const input = crsReportsTool.input.parse({
       operation: 'get',
@@ -53,7 +53,7 @@ describe('crsReportsTool', () => {
   });
 
   it('throws when get is missing reportNumber', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: crsReportsTool.errors });
     const input = crsReportsTool.input.parse({ operation: 'get' });
     await expect(crsReportsTool.handler(input, ctx)).rejects.toThrow(/reportNumber/);
   });

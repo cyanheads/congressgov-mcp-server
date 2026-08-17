@@ -15,6 +15,7 @@ import {
   congressErrorContracts,
   listEnrichment,
   listOrDetail,
+  notifyIfNoMatches,
 } from '@/mcp-server/tools/tool-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 import { getSenateVoteService } from '@/services/senate-lis/senate-vote-service.js';
@@ -84,8 +85,7 @@ export const rollVotesTool = tool('congressgov_roll_votes', {
         );
         ctx.enrich.echo(effectiveQuery);
         ctx.enrich.total(recent.pagination.count);
-        if (recent.data.length === 0)
-          ctx.enrich.notice('No votes found. Verify the congress and session numbers.');
+        notifyIfNoMatches(ctx, recent, 'No votes found. Verify the congress and session numbers.');
         return recent;
       }
       const result = await api.listVotes(
@@ -100,8 +100,7 @@ export const rollVotesTool = tool('congressgov_roll_votes', {
       ctx.log.info('Votes listed', { congress: input.congress, session: input.session });
       ctx.enrich.echo(effectiveQuery);
       ctx.enrich.total(result.pagination.count);
-      if (result.data.length === 0)
-        ctx.enrich.notice('No votes found. Verify the congress and session numbers.');
+      notifyIfNoMatches(ctx, result, 'No votes found. Verify the congress and session numbers.');
       return result;
     }
 
@@ -128,8 +127,11 @@ export const rollVotesTool = tool('congressgov_roll_votes', {
         `member votes for roll ${input.voteNumber} in the ${input.congress}th Congress, session ${input.session}`,
       );
       ctx.enrich.total(membersResult.pagination.count);
-      if (membersResult.data.length === 0)
-        ctx.enrich.notice(`No member vote records found for roll ${input.voteNumber}.`);
+      notifyIfNoMatches(
+        ctx,
+        membersResult,
+        `No member vote records found for roll ${input.voteNumber}.`,
+      );
       return membersResult;
     }
 
@@ -181,11 +183,11 @@ async function handleSenateVotes(input: SenateVoteInput, ctx: Context) {
       }),
     );
     ctx.enrich.total(result.pagination.count);
-    if (result.data.length === 0) {
-      ctx.enrich.notice(
-        'No Senate votes found. Verify the congress and session — the Senate publishes roll call votes from the 101st Congress (1989) onward.',
-      );
-    }
+    notifyIfNoMatches(
+      ctx,
+      result,
+      'No Senate votes found. Verify the congress and session — the Senate publishes roll call votes from the 101st Congress (1989) onward.',
+    );
     return result;
   }
 
@@ -212,9 +214,11 @@ async function handleSenateVotes(input: SenateVoteInput, ctx: Context) {
       `member votes for Senate roll ${input.voteNumber} in the ${input.congress}th Congress, session ${input.session}`,
     );
     ctx.enrich.total(result.pagination.count);
-    if (result.data.length === 0) {
-      ctx.enrich.notice(`No member vote records found for Senate roll ${input.voteNumber}.`);
-    }
+    notifyIfNoMatches(
+      ctx,
+      result,
+      `No member vote records found for Senate roll ${input.voteNumber}.`,
+    );
     return result;
   }
 

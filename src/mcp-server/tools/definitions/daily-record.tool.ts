@@ -11,6 +11,9 @@ import {
   congressErrorContracts,
   listEnrichment,
   listOutput,
+  notifyIfNoMatches,
+  numericIdentifier,
+  toIdentifierNumber,
 } from '@/mcp-server/tools/tool-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 
@@ -20,18 +23,12 @@ export const dailyRecordTool = tool('congressgov_daily_record', {
   errors: congressErrorContracts,
   input: z.object({
     operation: z.enum(['list', 'issues', 'articles']).describe('Which data to retrieve.'),
-    volumeNumber: z
-      .number()
-      .int()
-      .positive()
-      .optional()
-      .describe("Volume number. Required for 'issues' and 'articles'."),
-    issueNumber: z
-      .number()
-      .int()
-      .positive()
-      .optional()
-      .describe("Issue number within a volume. Required for 'articles'."),
+    volumeNumber: numericIdentifier(
+      "Volume number. Required for 'issues' and 'articles'. Accepts a number or the digit-string form list rows carry.",
+    ).optional(),
+    issueNumber: numericIdentifier(
+      'Issue number within a volume. Required for \'articles\'. List rows carry this as a string (e.g. "109") — both forms are accepted.',
+    ).optional(),
     limit: z.number().int().min(1).max(250).default(20).describe('Results per page (1-250).'),
     offset: z.number().int().min(0).default(0).describe('Pagination offset.'),
   }),
@@ -47,7 +44,7 @@ export const dailyRecordTool = tool('congressgov_daily_record', {
       ctx.log.info('Daily record listed');
       ctx.enrich.echo('Congressional Record volumes');
       ctx.enrich.total(result.pagination.count);
-      if (result.data.length === 0) ctx.enrich.notice('No Congressional Record volumes found.');
+      notifyIfNoMatches(ctx, result, 'No Congressional Record volumes found.');
       return result;
     }
 
@@ -58,20 +55,22 @@ export const dailyRecordTool = tool('congressgov_daily_record', {
       );
     }
 
+    /** List rows carry `volumeNumber`/`issueNumber` as strings; the service takes numbers. */
+    const volumeNumber = toIdentifierNumber(input.volumeNumber);
+
     if (input.operation === 'issues') {
       const result = await api.getDailyIssues(
         {
-          volumeNumber: input.volumeNumber,
+          volumeNumber,
           limit: input.limit,
           offset: input.offset,
         },
         ctx,
       );
-      ctx.log.info('Daily record issues retrieved', { volumeNumber: input.volumeNumber });
-      ctx.enrich.echo(`issues for volume ${input.volumeNumber}`);
+      ctx.log.info('Daily record issues retrieved', { volumeNumber });
+      ctx.enrich.echo(`issues for volume ${volumeNumber}`);
       ctx.enrich.total(result.pagination.count);
-      if (result.data.length === 0)
-        ctx.enrich.notice(`No issues found for volume ${input.volumeNumber}.`);
+      notifyIfNoMatches(ctx, result, `No issues found for volume ${volumeNumber}.`);
       return result;
     }
 
@@ -82,25 +81,24 @@ export const dailyRecordTool = tool('congressgov_daily_record', {
       );
     }
 
+    const issueNumber = toIdentifierNumber(input.issueNumber);
     const result = await api.getDailyArticles(
       {
-        volumeNumber: input.volumeNumber,
-        issueNumber: input.issueNumber,
+        volumeNumber,
+        issueNumber,
         limit: input.limit,
         offset: input.offset,
       },
       ctx,
     );
-    ctx.log.info('Daily record articles retrieved', {
-      volumeNumber: input.volumeNumber,
-      issueNumber: input.issueNumber,
-    });
-    ctx.enrich.echo(`articles for volume ${input.volumeNumber}, issue ${input.issueNumber}`);
+    ctx.log.info('Daily record articles retrieved', { volumeNumber, issueNumber });
+    ctx.enrich.echo(`articles for volume ${volumeNumber}, issue ${issueNumber}`);
     ctx.enrich.total(result.pagination.count);
-    if (result.data.length === 0)
-      ctx.enrich.notice(
-        `No articles found for volume ${input.volumeNumber}, issue ${input.issueNumber}.`,
-      );
+    notifyIfNoMatches(
+      ctx,
+      result,
+      `No articles found for volume ${volumeNumber}, issue ${issueNumber}.`,
+    );
     return result;
   },
 });

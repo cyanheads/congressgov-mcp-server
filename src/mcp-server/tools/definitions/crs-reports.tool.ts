@@ -11,6 +11,7 @@ import {
   congressErrorContracts,
   listEnrichment,
   listOrDetail,
+  notifyIfNoMatches,
 } from '@/mcp-server/tools/tool-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 
@@ -42,8 +43,11 @@ export const crsReportsTool = tool('congressgov_crs_reports', {
       ctx.log.info('CRS reports listed', { count: result.data.length });
       ctx.enrich.echo('CRS reports');
       ctx.enrich.total(result.pagination.count);
-      if (result.data.length === 0)
-        ctx.enrich.notice('No CRS reports found. The endpoint may be temporarily unavailable.');
+      notifyIfNoMatches(
+        ctx,
+        result,
+        'No CRS reports found. The endpoint may be temporarily unavailable.',
+      );
       return result;
     }
 

@@ -12,6 +12,7 @@ import {
   congressErrorContracts,
   listEnrichment,
   listOrDetail,
+  notifyIfNoMatches,
 } from '@/mcp-server/tools/tool-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 
@@ -66,8 +67,11 @@ export const senateNominationsTool = tool('congressgov_senate_nominations', {
       });
       ctx.enrich.echo(buildEffectiveQuery('nominations', { congress: input.congress }));
       ctx.enrich.total(result.pagination.count);
-      if (result.data.length === 0)
-        ctx.enrich.notice('No nominations found for this congress. Verify the congress number.');
+      notifyIfNoMatches(
+        ctx,
+        result,
+        'No nominations found for this congress. Verify the congress number.',
+      );
       return result;
     }
 
@@ -146,14 +150,20 @@ export const senateNominationsTool = tool('congressgov_senate_nominations', {
  * parent number (e.g. '851') silently return 0 results when the nomination is
  * a multi-part parent — those sub-resources live on the partitioned children.
  * Emits an enrichment notice so agents know to try the partitioned form.
+ *
+ * Only when the sub-resource is genuinely empty: an empty page of a non-empty
+ * sub-resource means the offset ran past the end, and the partitioned form would
+ * not help there.
  */
 function applyParentFormNotice(
   ctx: Context,
-  result: { data: unknown[] },
+  result: { data: unknown[]; pagination: { count: number } },
   nominationNumber: string,
 ): void {
-  if (result.data.length > 0 || nominationNumber.includes('-')) return;
-  ctx.enrich.notice(
+  if (nominationNumber.includes('-')) return;
+  notifyIfNoMatches(
+    ctx,
+    result,
     `If \`${nominationNumber}\` is a multi-part parent, its actions/committees/hearings/nominees live on the partitioned children. Try \`${nominationNumber}-1\` (and -2, -3, …) instead.`,
   );
 }

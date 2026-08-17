@@ -13,6 +13,8 @@ import {
   listEnrichment,
   listOutput,
   normalizeOptionalString,
+  notifyIfNoMatches,
+  validateDateTimeRange,
   validateIsoDateTime,
 } from '@/mcp-server/tools/tool-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
@@ -61,6 +63,11 @@ export const billSummariesTool = tool('congressgov_bill_summaries', {
       'toDateTime',
     );
 
+    // Checked on the caller's own bounds, before the default below is applied —
+    // the default only fires when neither bound was supplied, so it can never
+    // introduce a reversal of its own.
+    validateDateTimeRange(fromDateTimeInput, toDateTimeInput);
+
     if (input.billType && !input.congress) {
       throw validationError(
         "The 'billType' filter requires 'congress'. Provide both or omit billType to browse across all types.",
@@ -96,10 +103,11 @@ export const billSummariesTool = tool('congressgov_bill_summaries', {
       }),
     );
     ctx.enrich.total(result.pagination.count);
-    if (result.data.length === 0)
-      ctx.enrich.notice(
-        'No summaries found. Try broadening the date range or removing billType/congress filters.',
-      );
+    notifyIfNoMatches(
+      ctx,
+      result,
+      'No summaries found. Try broadening the date range or removing billType/congress filters.',
+    );
     return result;
   },
 });

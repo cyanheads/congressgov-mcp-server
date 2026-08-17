@@ -26,7 +26,7 @@ describe('enactedLawsTool', () => {
   });
 
   it('lists laws by congress', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: enactedLawsTool.errors });
     mockApi.listLaws.mockResolvedValue({
       data: [{ lawNumber: 1 }],
       pagination: { count: 1, nextOffset: null },
@@ -38,7 +38,7 @@ describe('enactedLawsTool', () => {
   });
 
   it('lists laws filtered by type', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: enactedLawsTool.errors });
     mockApi.listLaws.mockResolvedValue({
       data: [],
       pagination: { count: 0, nextOffset: null },
@@ -53,7 +53,7 @@ describe('enactedLawsTool', () => {
   });
 
   it('gets a specific law', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: enactedLawsTool.errors });
     mockApi.getLaw.mockResolvedValue({ law: { title: 'Public Law 118-1' } });
     const input = enactedLawsTool.input.parse({
       operation: 'get',
@@ -70,7 +70,7 @@ describe('enactedLawsTool', () => {
   });
 
   it('throws when get is missing lawType or lawNumber', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: enactedLawsTool.errors });
     const input = enactedLawsTool.input.parse({ operation: 'get', congress: 118 });
     await expect(enactedLawsTool.handler(input, ctx)).rejects.toThrow(/requires/);
   });

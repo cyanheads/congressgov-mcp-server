@@ -27,7 +27,7 @@ describe('billLookupTool', () => {
   });
 
   it('lists bills by congress', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: billLookupTool.errors });
     mockApi.listBills.mockResolvedValue({
       data: [{ number: 1 }, { number: 2 }],
       pagination: { count: 2, nextOffset: null },
@@ -46,7 +46,7 @@ describe('billLookupTool', () => {
   });
 
   it('lists bills filtered by type', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: billLookupTool.errors });
     mockApi.listBills.mockResolvedValue({
       data: [{ number: 1 }],
       pagination: { count: 1, nextOffset: null },
@@ -64,7 +64,7 @@ describe('billLookupTool', () => {
   });
 
   it('gets a specific bill', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: billLookupTool.errors });
     mockApi.getBill.mockResolvedValue({ bill: { title: 'Test Bill' } });
     const input = billLookupTool.input.parse({
       operation: 'get',
@@ -87,14 +87,114 @@ describe('billLookupTool', () => {
     expect(enrichment.totalCount).toBe(1);
   });
 
+  // ── #43: list rows carry `number` as a string — drill-downs must accept it ──
+
+  describe('numeric-string billNumber chaining', () => {
+    it('accepts the string form a list row carries and normalizes it to a number', async () => {
+      const ctx = createMockContext({ errors: billLookupTool.errors });
+      mockApi.getBill.mockResolvedValue({ bill: { title: 'Test Bill' } });
+      const input = billLookupTool.input.parse({
+        operation: 'get',
+        congress: 119,
+        billType: 'hr',
+        billNumber: '9479',
+      });
+      await billLookupTool.handler(input, ctx);
+      expect(mockApi.getBill).toHaveBeenCalledWith(
+        { congress: 119, billType: 'hr', billNumber: 9479 },
+        ctx,
+      );
+      expect(getEnrichment(ctx).effectiveQuery).toContain('HR 9479');
+    });
+
+    it('accepts a zero-padded digit string', async () => {
+      const ctx = createMockContext({ errors: billLookupTool.errors });
+      mockApi.getBill.mockResolvedValue({ bill: { title: 'Test Bill' } });
+      const input = billLookupTool.input.parse({
+        operation: 'get',
+        congress: 119,
+        billType: 'hr',
+        billNumber: '0009479',
+      });
+      await billLookupTool.handler(input, ctx);
+      expect(mockApi.getBill).toHaveBeenCalledWith(
+        expect.objectContaining({ billNumber: 9479 }),
+        ctx,
+      );
+    });
+
+    it('normalizes the string form on sub-resource operations too', async () => {
+      const ctx = createMockContext({ errors: billLookupTool.errors });
+      mockApi.getBillSubResource.mockResolvedValue({
+        data: [],
+        pagination: { count: 0, nextOffset: null },
+      });
+      const input = billLookupTool.input.parse({
+        operation: 'actions',
+        congress: 119,
+        billType: 'hr',
+        billNumber: '9479',
+      });
+      await billLookupTool.handler(input, ctx);
+      expect(mockApi.getBillSubResource).toHaveBeenCalledWith(
+        expect.objectContaining({ billNumber: 9479, subResource: 'actions' }),
+        ctx,
+      );
+    });
+
+    it.each([
+      ['non-numeric', 'abc'],
+      ['digits with a trailing letter', '9479x'],
+      ['letter-infixed digits', '12a'],
+      ['decimal', '94.5'],
+      ['negative', '-5'],
+      ['explicitly signed', '+5'],
+      ['zero', '0'],
+      ['zero-padded zero', '000'],
+      ['empty', ''],
+      ['whitespace-only', '   '],
+      ['padded digits', ' 9479 '],
+      ['scientific notation', '1e3'],
+      ['hexadecimal', '0x10'],
+    ])('rejects a %s billNumber at schema parse time', (_label, value) => {
+      expect(() =>
+        billLookupTool.input.parse({
+          operation: 'get',
+          congress: 119,
+          billType: 'hr',
+          billNumber: value,
+        }),
+      ).toThrow();
+    });
+
+    it('still rejects a non-positive numeric billNumber', () => {
+      expect(() =>
+        billLookupTool.input.parse({
+          operation: 'get',
+          congress: 119,
+          billType: 'hr',
+          billNumber: 0,
+        }),
+      ).toThrow();
+      expect(() =>
+        billLookupTool.input.parse({
+          operation: 'get',
+          congress: 119,
+          billType: 'hr',
+          billNumber: 1.5,
+        }),
+      ).toThrow();
+    });
+  });
+
   it('throws when get is missing billType or billNumber', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: billLookupTool.errors });
     const input = billLookupTool.input.parse({ operation: 'get', congress: 118 });
     await expect(billLookupTool.handler(input, ctx)).rejects.toThrow(/requires/);
   });
 
   it('fetches bill sub-resources', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: billLookupTool.errors });
     mockApi.getBillSubResource.mockResolvedValue({
       data: [{ action: 'Introduced' }],
       pagination: { count: 1, nextOffset: null },
@@ -114,7 +214,7 @@ describe('billLookupTool', () => {
   });
 
   it('maps related operation to relatedbills sub-resource', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: billLookupTool.errors });
     mockApi.getBillSubResource.mockResolvedValue({
       data: [],
       pagination: { count: 0, nextOffset: null },
@@ -133,7 +233,7 @@ describe('billLookupTool', () => {
   });
 
   it('ignores empty-string date filters from form-based clients', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: billLookupTool.errors });
     mockApi.listBills.mockResolvedValue({
       data: [],
       pagination: { count: 0, nextOffset: null },
@@ -145,7 +245,7 @@ describe('billLookupTool', () => {
       toDateTime: '',
     });
     await billLookupTool.handler(input, ctx);
-    const [paramsArg, passedCtx] = mockApi.listBills.mock.calls[0];
+    const [paramsArg, passedCtx] = mockApi.listBills.mock.calls[0]!;
     expect(paramsArg.fromDateTime).toBeUndefined();
     expect(paramsArg.toDateTime).toBeUndefined();
     expect(passedCtx).toBe(ctx);
@@ -158,7 +258,7 @@ describe('billLookupTool', () => {
   });
 
   it('populates notice when list returns empty results', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: billLookupTool.errors });
     mockApi.listBills.mockResolvedValue({
       data: [],
       pagination: { count: 0, nextOffset: null },

@@ -33,7 +33,7 @@ describe('rollVotesTool', () => {
   });
 
   it('lists votes by congress and session', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: rollVotesTool.errors });
     mockApi.listVotes.mockResolvedValue({
       data: [{ voteNumber: 1 }],
       pagination: { count: 1, nextOffset: null },
@@ -48,7 +48,7 @@ describe('rollVotesTool', () => {
   });
 
   it('gets a specific vote', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: rollVotesTool.errors });
     mockApi.getVote.mockResolvedValue({ vote: { question: 'On Passage' } });
     const input = rollVotesTool.input.parse({
       operation: 'get',
@@ -61,7 +61,7 @@ describe('rollVotesTool', () => {
   });
 
   it('returns member positions as a roster in data[] with the vote as a sibling (issue #36)', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: rollVotesTool.errors });
     mockApi.getVoteMembers.mockResolvedValue({
       data: [{ bioguideId: 'S000148', lastName: 'Smith', voteCast: 'Yea' }],
       vote: { rollCallNumber: 42, voteQuestion: 'On Passage', result: 'Passed' },
@@ -79,7 +79,7 @@ describe('rollVotesTool', () => {
   });
 
   it('throws when get/members is missing voteNumber', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: rollVotesTool.errors });
     const input = rollVotesTool.input.parse({
       operation: 'get',
       congress: 118,
@@ -92,7 +92,7 @@ describe('rollVotesTool', () => {
     /** Mirrors the bug repro: upstream returns rows in opaque order; the head row
      * (Roll 176) has an older updateDate than Rolls 182-185. Strict newest-first
      * must put 185 first, not 176. */
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: rollVotesTool.errors });
     mockApi.listVotes.mockResolvedValue({
       data: [
         { rollCallNumber: 176, updateDate: '2026-05-21T00:53:25-04:00' },
@@ -116,7 +116,7 @@ describe('rollVotesTool', () => {
   });
 
   it("order='recent' paginates across multiple upstream pages and returns the requested slice", async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: rollVotesTool.errors });
     /** Total > PAGE_SIZE(250) triggers parallel page fetches. */
     mockApi.listVotes
       .mockResolvedValueOnce({
@@ -150,7 +150,7 @@ describe('rollVotesTool', () => {
   });
 
   it("defaults chamber to 'house' and routes to the Congress.gov API", async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: rollVotesTool.errors });
     mockApi.listVotes.mockResolvedValue({ data: [], pagination: { count: 0, nextOffset: null } });
     const input = rollVotesTool.input.parse({ operation: 'list', congress: 118, session: 1 });
     expect(input.chamber).toBe('house');
@@ -174,7 +174,7 @@ describe('rollVotesTool — Senate chamber', () => {
   });
 
   it('routes list to the Senate service, not the Congress.gov API', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: rollVotesTool.errors });
     mockSenate.listVotes.mockResolvedValue({
       chamber: 'senate',
       data: [{ chamber: 'senate', voteNumber: 339 }],
@@ -194,7 +194,7 @@ describe('rollVotesTool — Senate chamber', () => {
   });
 
   it('gets a specific Senate vote', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: rollVotesTool.errors });
     mockSenate.getVote.mockResolvedValue({
       chamber: 'senate',
       vote: { chamber: 'senate', voteNumber: 1, voteResult: 'Cloture Motion Agreed to' },
@@ -215,7 +215,7 @@ describe('rollVotesTool — Senate chamber', () => {
   });
 
   it('returns the Senate roster for members', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: rollVotesTool.errors });
     mockSenate.getVoteMembers.mockResolvedValue({
       chamber: 'senate',
       data: [{ chamber: 'senate', memberFull: 'Baldwin (D-WI)', voteCast: 'Yea' }],
@@ -235,7 +235,7 @@ describe('rollVotesTool — Senate chamber', () => {
   });
 
   it('throws when get/members is missing voteNumber', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: rollVotesTool.errors });
     const input = rollVotesTool.input.parse({
       operation: 'members',
       chamber: 'senate',

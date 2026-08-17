@@ -12,6 +12,7 @@ import {
   congressErrorContracts,
   listEnrichment,
   listOrDetail,
+  notifyIfNoMatches,
 } from '@/mcp-server/tools/tool-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 
@@ -57,10 +58,11 @@ export const enactedLawsTool = tool('congressgov_enacted_laws', {
         buildEffectiveQuery('enacted laws', { congress: input.congress, lawType: input.lawType }),
       );
       ctx.enrich.total(result.pagination.count);
-      if (result.data.length === 0)
-        ctx.enrich.notice(
-          'No laws matched the filters. Verify the congress number or try a different lawType.',
-        );
+      notifyIfNoMatches(
+        ctx,
+        result,
+        'No laws matched the filters. Verify the congress number or try a different lawType.',
+      );
       return result;
     }
 

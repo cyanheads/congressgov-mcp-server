@@ -12,6 +12,7 @@ import {
   congressErrorContracts,
   listEnrichment,
   listOrDetail,
+  notifyIfNoMatches,
 } from '@/mcp-server/tools/tool-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 
@@ -66,10 +67,11 @@ export const committeeReportsTool = tool('congressgov_committee_reports', {
         }),
       );
       ctx.enrich.total(result.pagination.count);
-      if (result.data.length === 0)
-        ctx.enrich.notice(
-          'No committee reports found. Try removing the reportType filter or check the congress number.',
-        );
+      notifyIfNoMatches(
+        ctx,
+        result,
+        'No committee reports found. Try removing the reportType filter or check the congress number.',
+      );
       return result;
     }
 
