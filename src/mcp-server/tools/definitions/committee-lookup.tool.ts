@@ -13,6 +13,7 @@ import {
   congressErrorContracts,
   listEnrichment,
   listOrDetail,
+  notifyIfNoMatches,
 } from '@/mcp-server/tools/tool-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 import type { Chamber } from '@/services/congress-api/types.js';
@@ -96,6 +97,18 @@ function filterCommittees(items: ApiRecord[], filter: string): ApiRecord[] {
   return scored.map(({ item }) => ({ ...item, approximate: true }));
 }
 
+/**
+ * Shape of a committee system code: chamber-prefixed letters + a 2-digit suffix
+ * (`hsju00`, `ssbk13`). Anything else in `committeeCode` is treated as a committee
+ * name and routed to the resolver — testing for the code shape rather than for
+ * whitespace is what lets single-token names ('Judiciary') resolve.
+ * Resolves cyanheads/congressgov-mcp-server#46.
+ *
+ * Matched case-insensitively: upstream `systemCode` values are lowercase, so an
+ * uppercased code is normalized rather than mistaken for a name.
+ */
+const COMMITTEE_CODE_SHAPE = /^[a-z]{2,6}\d{2}$/i;
+
 /** Committee codes carry chamber in the first letter (h=House, s=Senate, j=Joint). */
 function inferChamberFromCode(code: string): Chamber | undefined {
   const first = code[0]?.toLowerCase();
@@ -123,12 +136,12 @@ export const committeeLookupTool = tool('congressgov_committee_lookup', {
     committeeCode: z
       .string()
       .regex(
-        /^([a-z]{2,6}\d{2}|.*\s.*)$/,
-        "Committee codes are lowercase letters + a 2-digit suffix (e.g. 'hsju00'). Use operation:'list' with filter to resolve a name to its code.",
+        /\S/,
+        "committeeCode must not be blank. Pass a code like 'hsju00', or a committee name to resolve.",
       )
       .optional()
       .describe(
-        "Committee system code, e.g. 'hsju00'. Required for 'get' and sub-resources. Codes are lowercase letters + 2-digit suffix. Pass a committee name here and the tool will attempt to resolve it automatically — or use operation:'list' with filter to browse.",
+        "Committee system code, e.g. 'hsju00'. Required for 'get' and sub-resources. Codes are letters + a 2-digit suffix and are matched case-insensitively. Any other non-blank value is treated as a committee name and resolved automatically — single-word names ('Judiciary') included — or use operation:'list' with filter to browse.",
       ),
     // Provisional param name — tracking fleet-wide convention in cyanheads/mcp-ts-core#186.
     filter: z
@@ -174,8 +187,23 @@ export const committeeLookupTool = tool('congressgov_committee_lookup', {
           );
 
       const matched = filter ? filterCommittees(result.data as ApiRecord[], filter) : result.data;
+      // The filtered set is matched against every fetched row, so it is paginated
+      // here rather than upstream — `count` stays the full match total while `data`
+      // carries only the caller's window. Resolves cyanheads/congressgov-mcp-server#44.
+      const windowEnd = input.offset + input.limit;
+      const listResult = filter
+        ? {
+            ...result,
+            data: matched.slice(input.offset, windowEnd),
+            pagination: {
+              count: matched.length,
+              nextOffset: windowEnd < matched.length ? windowEnd : null,
+            },
+          }
+        : { ...result, data: matched };
       ctx.log.info('Committees listed', {
         count: matched.length,
+        shown: listResult.data.length,
         total: result.pagination.count,
         filter,
       });
@@ -186,16 +214,15 @@ export const committeeLookupTool = tool('congressgov_committee_lookup', {
           filter,
         }),
       );
-      ctx.enrich.total(filter ? matched.length : result.pagination.count);
-      if (matched.length === 0)
-        ctx.enrich.notice(
-          filter
-            ? `No committees matched '${filter}'. Call 'list' without filter to browse all committees.`
-            : 'No committees found. Try removing the chamber filter or check the congress number.',
-        );
-      return filter
-        ? { ...result, data: matched, pagination: { count: matched.length, nextOffset: null } }
-        : { ...result, data: matched };
+      ctx.enrich.total(listResult.pagination.count);
+      notifyIfNoMatches(
+        ctx,
+        listResult,
+        filter
+          ? `No committees matched '${filter}'. Call 'list' without filter to browse all committees.`
+          : 'No committees found. Try removing the chamber filter or check the congress number.',
+      );
+      return listResult;
     }
 
     if (!input.committeeCode) {
@@ -205,11 +232,13 @@ export const committeeLookupTool = tool('congressgov_committee_lookup', {
       );
     }
 
-    // Name-like input: a committeeCode containing whitespace looks like a committee name.
-    // Attempt to auto-resolve via the same primary (all-token) match the 'list' + filter
-    // path uses, restricted to parent committees (systemCode ending '00').
-    let committeeCode = input.committeeCode;
-    if (/\s/.test(committeeCode)) {
+    // Anything that isn't a committee-code shape is treated as a committee name and
+    // auto-resolved via the same primary (all-token) match the 'list' + filter path
+    // uses, restricted to parent committees (systemCode ending '00').
+    let committeeCode = input.committeeCode.trim();
+    if (COMMITTEE_CODE_SHAPE.test(committeeCode)) {
+      committeeCode = committeeCode.toLowerCase();
+    } else {
       // Page the complete cross-chamber committee set so name resolution matches
       // rows past the 250-row request cap.
       const all = await fetchAllCommittees({}, ctx);
@@ -219,11 +248,17 @@ export const committeeLookupTool = tool('congressgov_committee_lookup', {
       const matches = filterCommittees(parents, committeeCode);
 
       if (matches.length !== 1) {
-        // Zero or multiple — return candidates so the caller can choose.
+        /**
+         * Zero or multiple — return candidates so the caller can choose. Zero
+         * covers both a name nothing answers to and a malformed code-like token
+         * ('ssbk'); one message names the code shape and the name→code route so
+         * neither dead-ends.
+         */
         const notice =
           matches.length === 0
-            ? `No committee matched '${committeeCode}'. Use operation:'list' with filter to browse.`
+            ? `No committee code or name matched '${committeeCode}'. Committee codes are letters + a 2-digit suffix (e.g. 'hsju00'); to find one by name use operation:'list' with filter.`
             : `'${committeeCode}' matched ${matches.length} committees. Use the systemCode from one of these results, or narrow your name.`;
+        ctx.enrich.echo(buildEffectiveQuery('committee name resolution', { name: committeeCode }));
         ctx.enrich.notice(notice);
         ctx.enrich.total(matches.length);
         ctx.log.info('Committee name resolution — candidates returned', {
@@ -281,8 +316,7 @@ export const committeeLookupTool = tool('congressgov_committee_lookup', {
       );
       ctx.enrich.echo(`bills for committee ${committeeCode} (recent order)`);
       ctx.enrich.total(recentResult.pagination.count);
-      if (recentResult.data.length === 0)
-        ctx.enrich.notice(`No bills found for committee ${committeeCode}.`);
+      notifyIfNoMatches(ctx, recentResult, `No bills found for committee ${committeeCode}.`);
       return recentResult;
     }
 
@@ -302,8 +336,7 @@ export const committeeLookupTool = tool('congressgov_committee_lookup', {
     });
     ctx.enrich.echo(`${input.operation} for committee ${committeeCode}`);
     ctx.enrich.total(result.pagination.count);
-    if (result.data.length === 0)
-      ctx.enrich.notice(`No ${input.operation} found for committee ${committeeCode}.`);
+    notifyIfNoMatches(ctx, result, `No ${input.operation} found for committee ${committeeCode}.`);
     return result;
   },
 });
