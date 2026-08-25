@@ -4,7 +4,12 @@
 # This stage installs all dependencies (including dev), builds the TypeScript
 # source code into JavaScript, and prepares the production assets.
 # ==============================================================================
-FROM oven/bun:1.3.14 AS build
+# Pinned to $BUILDPLATFORM: bun >= 1.4 aborts under QEMU user-mode emulation, so
+# leaving the build stage on the target platform kills the linux/amd64 leg of a
+# multi-arch buildx run on an arm64 host. This stage only runs tsc and emits
+# architecture-independent JavaScript, and the production stage installs its own
+# dependencies natively, so building it on the host architecture is safe.
+FROM --platform=$BUILDPLATFORM oven/bun:1.4.0 AS build
 
 WORKDIR /usr/src/app
 
@@ -34,7 +39,7 @@ RUN bun run build
 # application. It uses a slim base image and only includes production
 # dependencies and build artifacts.
 # ==============================================================================
-FROM oven/bun:1.3.14-slim AS production
+FROM oven/bun:1.4.0-slim AS production
 
 WORKDIR /usr/src/app
 
