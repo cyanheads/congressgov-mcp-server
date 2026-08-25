@@ -4,6 +4,7 @@
  * @module tests/mcp-server/tools/definitions/input-validation.test
  */
 
+import { z } from '@cyanheads/mcp-ts-core';
 import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -570,6 +571,48 @@ describe('error contracts', () => {
     it(`${name} advertises the shared upstream error contract`, () => {
       const reasons = (contractTool.errors ?? []).map((entry) => entry.reason);
       expect(reasons).toEqual(expect.arrayContaining(REQUIRED_REASONS));
+    });
+  }
+});
+
+// ── Strict inputs ────────────────────────────────────────────────────────────
+
+/**
+ * Every parameter each tool accepts is declared, so no input is deliberately
+ * open: an undeclared key is a caller's typo and must be rejected by name
+ * rather than stripped, which would answer a different question than the one
+ * asked. `tool()` stores `input` with `.strict()` applied and advertises
+ * `additionalProperties: false` to match.
+ */
+describe('strict tool inputs', () => {
+  const strictTools = {
+    bill_lookup: [billLookupTool, { operation: 'list', congress: 118 }],
+    bill_summaries: [billSummariesTool, { congress: 118 }],
+    committee_lookup: [committeeLookupTool, { operation: 'list', chamber: 'house' }],
+    committee_reports: [committeeReportsTool, { operation: 'list', congress: 118 }],
+    crs_reports: [crsReportsTool, { operation: 'list' }],
+    daily_record: [dailyRecordTool, { operation: 'list' }],
+    enacted_laws: [enactedLawsTool, { operation: 'list', congress: 118 }],
+    member_lookup: [memberLookupTool, { operation: 'list' }],
+    roll_votes: [rollVotesTool, { operation: 'list', chamber: 'house', congress: 118, session: 1 }],
+    senate_nominations: [senateNominationsTool, { operation: 'list', congress: 118 }],
+  } as const satisfies Record<string, readonly [{ input: z.ZodType }, Record<string, unknown>]>;
+
+  for (const [name, [strictTool, valid]] of Object.entries(strictTools)) {
+    it(`${name} rejects an undeclared argument key by name`, () => {
+      const result = strictTool.input.safeParse({ ...valid, querry: 'semiconductors' });
+      expect(result.success).toBe(false);
+      expect(result.error?.issues[0]).toMatchObject({
+        code: 'unrecognized_keys',
+        keys: ['querry'],
+      });
+    });
+
+    it(`${name} advertises additionalProperties: false`, () => {
+      const json = z.toJSONSchema(strictTool.input, { io: 'input' }) as {
+        additionalProperties?: boolean;
+      };
+      expect(json.additionalProperties).toBe(false);
     });
   }
 });

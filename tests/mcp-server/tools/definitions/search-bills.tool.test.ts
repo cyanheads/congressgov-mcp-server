@@ -161,4 +161,14 @@ describe('congressgov_search_bills', () => {
     expect(text).toContain('Semiconductor Export Control Act');
     expect(text).toContain('119/hr/1');
   });
+
+  /** Every accepted filter is declared, so a stray key is a typo to name, not to strip. */
+  it('rejects an undeclared argument key by name', () => {
+    const result = searchBillsTool.input.safeParse({ query: 'semiconductor', billTpye: 'hr' });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues[0]).toMatchObject({
+      code: 'unrecognized_keys',
+      keys: ['billTpye'],
+    });
+  });
 });
