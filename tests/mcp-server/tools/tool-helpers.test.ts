@@ -82,7 +82,7 @@ describe('validateIsoDateTime', () => {
   });
 
   it('rejects very long strings (oversized input)', () => {
-    const oversized = '2026-01-15T00:00:00Z' + 'x'.repeat(5000);
+    const oversized = `2026-01-15T00:00:00Z${'x'.repeat(5000)}`;
     expect(() => validateIsoDateTime(oversized, 'fromDateTime')).toThrow(/ISO 8601/);
   });
 

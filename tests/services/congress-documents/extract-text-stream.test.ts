@@ -189,6 +189,13 @@ describe('createStreamingExtractor', () => {
   });
 
   describe('multi-megabyte documents', () => {
+    /**
+     * These cases re-stream a multi-megabyte body dozens of times, which runs
+     * several seconds and has no headroom under Vitest's 5s default when the
+     * suite is running files in parallel.
+     */
+    const MULTI_MB_TIMEOUT_MS = 30_000;
+
     /** A GPO Formatted Text body several megabytes past the old 5 MB ceiling. */
     function buildBill(sections: number): string {
       const parts: string[] = ['<html><body><pre>\n[Congressional Bills 116th Congress]\n'];
@@ -208,41 +215,49 @@ describe('createStreamingExtractor', () => {
       expect(new TextEncoder().encode(body).byteLength).toBeGreaterThan(5_000_000);
     });
 
-    it('matches the whole-string extractor at the start, middle, and end', () => {
-      const windows = [
-        { characterOffset: 0, characterLimit: 100_000 },
-        { characterOffset: Math.floor(reference.length / 2), characterLimit: 100_000 },
-        { characterOffset: reference.length - 100, characterLimit: 100_000 },
-      ];
-      for (const window of windows) {
-        const extractor = createStreamingExtractor(window);
-        for (let i = 0; i < body.length; i += 65_536) extractor.push(body.slice(i, i + 65_536));
-        const result = extractor.finish();
-        expect(result.totalCharacters, JSON.stringify(window)).toBe(reference.length);
-        expect(result.text, JSON.stringify(window)).toBe(
-          reference.slice(window.characterOffset, window.characterOffset + window.characterLimit),
-        );
-      }
-    });
+    it(
+      'matches the whole-string extractor at the start, middle, and end',
+      () => {
+        const windows = [
+          { characterOffset: 0, characterLimit: 100_000 },
+          { characterOffset: Math.floor(reference.length / 2), characterLimit: 100_000 },
+          { characterOffset: reference.length - 100, characterLimit: 100_000 },
+        ];
+        for (const window of windows) {
+          const extractor = createStreamingExtractor(window);
+          for (let i = 0; i < body.length; i += 65_536) extractor.push(body.slice(i, i + 65_536));
+          const result = extractor.finish();
+          expect(result.totalCharacters, JSON.stringify(window)).toBe(reference.length);
+          expect(result.text, JSON.stringify(window)).toBe(
+            reference.slice(window.characterOffset, window.characterOffset + window.characterLimit),
+          );
+        }
+      },
+      MULTI_MB_TIMEOUT_MS,
+    );
 
-    it('reassembles exactly when walked window by window', () => {
-      const limit = 100_000;
-      const chunks: string[] = [];
-      let offset = 0;
-      while (offset < reference.length) {
-        const extractor = createStreamingExtractor({
-          characterOffset: offset,
-          characterLimit: limit,
-        });
-        for (let i = 0; i < body.length; i += 262_144) extractor.push(body.slice(i, i + 262_144));
-        const page = extractor.finish();
-        expect(page.totalCharacters).toBe(reference.length);
-        expect(page.text.length).toBeGreaterThan(0);
-        chunks.push(page.text);
-        offset += page.text.length;
-      }
-      expect(chunks.join('')).toBe(reference);
-      expect(chunks.length).toBeGreaterThan(1);
-    });
+    it(
+      'reassembles exactly when walked window by window',
+      () => {
+        const limit = 100_000;
+        const chunks: string[] = [];
+        let offset = 0;
+        while (offset < reference.length) {
+          const extractor = createStreamingExtractor({
+            characterOffset: offset,
+            characterLimit: limit,
+          });
+          for (let i = 0; i < body.length; i += 262_144) extractor.push(body.slice(i, i + 262_144));
+          const page = extractor.finish();
+          expect(page.totalCharacters).toBe(reference.length);
+          expect(page.text.length).toBeGreaterThan(0);
+          chunks.push(page.text);
+          offset += page.text.length;
+        }
+        expect(chunks.join('')).toBe(reference);
+        expect(chunks.length).toBeGreaterThan(1);
+      },
+      MULTI_MB_TIMEOUT_MS,
+    );
   });
 });
