@@ -29,7 +29,8 @@ import {
   notFound,
   serviceUnavailable,
 } from '@cyanheads/mcp-ts-core/errors';
-import { fetchWithTimeout, withRetry } from '@cyanheads/mcp-ts-core/utils';
+import type { RequestContext } from '@cyanheads/mcp-ts-core/utils';
+import { fetchWithTimeout, requestContextService, withRetry } from '@cyanheads/mcp-ts-core/utils';
 import { createStreamingExtractor, type ExtractedWindow } from './extract-text-stream.js';
 import type { DocumentContent, FetchDocumentParams } from './types.js';
 
@@ -65,12 +66,6 @@ const DOCUMENT_UNAVAILABLE = 'document_unavailable';
 const DOCUMENT_FETCH_FAILED = 'document_fetch_failed';
 const DOCUMENT_TOO_LARGE = 'document_too_large';
 const OFFSET_PAST_END = 'offset_past_end';
-
-interface RequestContextLike extends Record<string, unknown> {
-  operation: string;
-  requestId: string;
-  timestamp: string;
-}
 
 function isNativeAbortSignal(value: unknown): value is AbortSignal {
   if (
@@ -174,7 +169,7 @@ export class CongressDocumentsService {
 
   private async doFetch(
     params: FetchDocumentParams,
-    requestContext: RequestContextLike,
+    requestContext: RequestContext,
     ctx: Context,
     signal?: AbortSignal,
   ): Promise<ExtractedWindow> {
@@ -338,13 +333,13 @@ export class CongressDocumentsService {
     return true;
   }
 
-  private getRequestContext(ctx: Context, operation: string): RequestContextLike {
-    const ctxRecord = ctx as unknown as Record<string, unknown>;
-    const requestId =
-      typeof ctxRecord.requestId === 'string' ? ctxRecord.requestId : 'congress-documents-service';
-    const timestamp =
-      typeof ctxRecord.timestamp === 'string' ? ctxRecord.timestamp : new Date().toISOString();
-    return { operation, requestId, timestamp };
+  /**
+   * Derive the context the network helpers log and report against. `Context`
+   * extends `RequestContext`, so the handler's own context is the parent — the
+   * request ID carries through and only the operation label is per-call.
+   */
+  private getRequestContext(ctx: Context, operation: string): RequestContext {
+    return requestContextService.createRequestContext({ operation, parentContext: ctx });
   }
 
   private getAbortSignal(ctx: Context): AbortSignal | undefined {

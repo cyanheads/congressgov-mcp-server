@@ -25,7 +25,8 @@ import {
   notFound,
   serviceUnavailable,
 } from '@cyanheads/mcp-ts-core/errors';
-import { fetchWithTimeout, withRetry } from '@cyanheads/mcp-ts-core/utils';
+import type { RequestContext } from '@cyanheads/mcp-ts-core/utils';
+import { fetchWithTimeout, requestContextService, withRetry } from '@cyanheads/mcp-ts-core/utils';
 import { computePartyTotals, parseRollCallVote, parseVoteMenu } from './parse.js';
 import type { SenateMemberVote, SenateVoteDetail, SenateVoteSummary } from './types.js';
 
@@ -51,12 +52,6 @@ const UPSTREAM_ERROR_RECOVERY = {
     hint: 'Retry after a short delay; the Senate.gov LIS feed may be temporarily unavailable.',
   },
 } as const;
-
-interface RequestContextLike extends Record<string, unknown> {
-  operation: string;
-  requestId: string;
-  timestamp: string;
-}
 
 interface ListVotesParams {
   congress: number;
@@ -226,7 +221,7 @@ export class SenateVoteService {
 
   private async doFetch(
     url: string,
-    requestContext: RequestContextLike,
+    requestContext: RequestContext,
     signal?: AbortSignal,
   ): Promise<string> {
     try {
@@ -261,13 +256,16 @@ export class SenateVoteService {
     return true;
   }
 
-  private getRequestContext(ctx: Context | undefined, operation: string): RequestContextLike {
-    const ctxRecord = ctx as unknown as Record<string, unknown> | undefined;
-    const requestId =
-      typeof ctxRecord?.requestId === 'string' ? ctxRecord.requestId : 'senate-vote-service';
-    const timestamp =
-      typeof ctxRecord?.timestamp === 'string' ? ctxRecord.timestamp : new Date().toISOString();
-    return { operation, requestId, timestamp };
+  /**
+   * Derive the context the network helpers log and report against. `Context`
+   * extends `RequestContext`, so the handler's own context is the parent — the
+   * request ID carries through and only the operation label is per-call.
+   */
+  private getRequestContext(ctx: Context | undefined, operation: string): RequestContext {
+    return requestContextService.createRequestContext({
+      operation,
+      ...(ctx ? { parentContext: ctx } : {}),
+    });
   }
 
   private getAbortSignal(ctx?: Context): AbortSignal | undefined {
