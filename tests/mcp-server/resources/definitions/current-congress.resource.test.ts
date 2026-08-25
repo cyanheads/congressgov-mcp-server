@@ -39,4 +39,10 @@ describe('currentCongressResource', () => {
     expect(result.congress).toBe(119);
     expect(mockApi.getCurrentCongress).toHaveBeenCalledWith(ctx);
   });
+
+  /** The congress number turns over every two years, the session dates at a session boundary. */
+  it('declares an hour-long shared cache hint', () => {
+    expect(currentCongressResource.cacheHint).toEqual({ ttlMs: 3_600_000, cacheScope: 'public' });
+    expect(Number.isSafeInteger(currentCongressResource.cacheHint?.ttlMs)).toBe(true);
+  });
 });

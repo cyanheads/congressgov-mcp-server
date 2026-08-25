@@ -11,6 +11,8 @@ export const currentCongressResource = resource('congress://current', {
   description:
     'Current congress number, session dates, and chamber info. Baseline context for queries.',
   mimeType: 'application/json',
+  /** The congress number turns over every two years and the session dates at a session boundary — an hour is well inside either. */
+  cacheHint: { ttlMs: 3_600_000, cacheScope: 'public' },
 
   list: async () => ({
     resources: [

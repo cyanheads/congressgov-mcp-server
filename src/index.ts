@@ -9,6 +9,7 @@ import type {
   AnyPromptDefinition,
   AnyResourceDefinition,
   AnyToolDefinition,
+  CacheHints,
 } from '@cyanheads/mcp-ts-core';
 import { createApp } from '@cyanheads/mcp-ts-core';
 import { logger, schedulerService } from '@cyanheads/mcp-ts-core/utils';
@@ -56,9 +57,32 @@ const withSource = <T extends AnyToolDefinition | AnyResourceDefinition | AnyPro
   file: string,
 ): T => ({ ...def, sourceUrl: srcUrl(kind, file) });
 
+/**
+ * Cache hints for the 2026-07-28 cacheable results. 2025-era responses are
+ * unaffected — the hint rides a symbol-keyed property that never serializes.
+ *
+ * The catalog (tools, prompts, resources, server card) is fixed for the life of
+ * the process — the one variable is the `CONGRESS_MIRROR_ENABLED` gate on
+ * `congressgov_search_bills`, a deployment-level env var — and no definition
+ * declares auth scopes, so every client of a deployment sees the same list:
+ * `public` is safe. The `resources/read` entry covers the three live resources
+ * (member, bill, committee), whose upstream records accrue actions through the
+ * legislative day; the two reference resources override it field by field.
+ */
+const CATALOG_TTL_MS = 3_600_000;
+const cacheHints = {
+  'tools/list': { ttlMs: CATALOG_TTL_MS, cacheScope: 'public' },
+  'prompts/list': { ttlMs: CATALOG_TTL_MS, cacheScope: 'public' },
+  'resources/list': { ttlMs: CATALOG_TTL_MS, cacheScope: 'public' },
+  'resources/templates/list': { ttlMs: CATALOG_TTL_MS, cacheScope: 'public' },
+  'server/discover': { ttlMs: CATALOG_TTL_MS, cacheScope: 'public' },
+  'resources/read': { ttlMs: 300_000, cacheScope: 'public' },
+} as const satisfies CacheHints;
+
 await createApp({
   name: 'congressgov-mcp-server',
   title: 'congressgov-mcp-server',
+  cacheHints,
   tools: [
     withSource(billLookupTool, 'tools', 'bill-lookup.tool.ts'),
     withSource(enactedLawsTool, 'tools', 'enacted-laws.tool.ts'),

@@ -30,4 +30,10 @@ describe('billTypesResource', () => {
       expect(bt).toHaveProperty('example');
     }
   });
+
+  /** Served from this file, so a read outlives any single request. */
+  it('declares a day-long shared cache hint', () => {
+    expect(billTypesResource.cacheHint).toEqual({ ttlMs: 86_400_000, cacheScope: 'public' });
+    expect(Number.isSafeInteger(billTypesResource.cacheHint?.ttlMs)).toBe(true);
+  });
 });

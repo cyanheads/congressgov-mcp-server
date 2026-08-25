@@ -35,6 +35,8 @@ export const billTypesResource = resource('congress://bill-types', {
   name: 'bill-types',
   description: 'Reference table of valid bill type codes (hr, s, hjres, etc.) with descriptions.',
   mimeType: 'application/json',
+  /** Fixed by chamber rules and served from this file — no upstream call, nothing that goes stale within a day. */
+  cacheHint: { ttlMs: 86_400_000, cacheScope: 'public' },
 
   list: async () => ({
     resources: [
