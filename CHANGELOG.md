@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.5.2](changelog/0.5.x/0.5.2.md) — 2026-08-25
+
+Adopts mcp-ts-core 0.12.x: HTTP serves protocol revision 2026-07-28, tool arguments are strict and advertised as 2020-12 JSON Schema with a declared error envelope, and the catalog and resource reads now carry cache hints.
+
 ## [0.5.1](changelog/0.5.x/0.5.1.md) — 2026-08-17
 
 Raise the `content` document ceiling to 25 MB via a streaming extractor, reaching the largest enacted bills; map mid-stream fetch failures correctly and fix the too-large recovery hint.
