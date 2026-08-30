@@ -1,6 +1,6 @@
 # congressgov-mcp-server - Directory Structure
 
-Generated on: 2026-08-17 03:46:31
+Generated on: 2026-08-30 21:54:47
 
 ```text
 congressgov-mcp-server/
@@ -27,6 +27,7 @@ congressgov-mcp-server/
 │   ├── 0.3.x/
 │   ├── 0.4.x/
 │   ├── 0.5.x/
+│   ├── 0.6.x/
 │   └── template.md
 ├── docs/
 │   └── congress-gov-mcp-design.md
@@ -216,7 +217,8 @@ congressgov-mcp-server/
 │   │       │   ├── output-fidelity.parity.test.ts
 │   │       │   ├── roll-votes.tool.test.ts
 │   │       │   ├── search-bills.tool.test.ts
-│   │       │   └── senate-nominations.tool.test.ts
+│   │       │   ├── senate-nominations.tool.test.ts
+│   │       │   └── tool-catalog.contract.test.ts
 │   │       ├── format-helpers-extended.test.ts
 │   │       ├── format-helpers-fidelity.test.ts
 │   │       ├── format-helpers-list-fidelity.test.ts
