@@ -17,6 +17,7 @@ import {
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 
 export const memberLookupTool = tool('congressgov_member_lookup', {
+  title: 'Congress.gov Member Lookup',
   description: `Discover congressional members and their legislative activity. No name search. For 'list', filter by stateCode (optionally with district), by congress, or by both together (e.g., 118th Congress + CA, or CA district 12 in the 118th). Add currentMember=true to restrict to currently serving members. Once you have a bioguideId, use 'get' for full profile or 'sponsored'/'cosponsored' for their legislative portfolio.`,
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
   errors: congressErrorContracts,
@@ -26,6 +27,7 @@ export const memberLookupTool = tool('congressgov_member_lookup', {
       .describe('Which data to retrieve.'),
     bioguideId: z
       .string()
+      .regex(/^[A-Za-z]\d{6}$/)
       .optional()
       .describe(
         "Unique member identifier (e.g., 'P000197'). Required for get/sponsored/cosponsored.",
@@ -33,7 +35,7 @@ export const memberLookupTool = tool('congressgov_member_lookup', {
     congress: z.number().int().positive().optional().describe('Congress number to filter by.'),
     stateCode: z
       .string()
-      .length(2)
+      .regex(/^[A-Za-z]{2}$/)
       .optional()
       .describe("Two-letter state code (e.g., 'CA', 'TX')."),
     district: z
@@ -52,7 +54,7 @@ export const memberLookupTool = tool('congressgov_member_lookup', {
     offset: z.number().int().min(0).default(0).describe('Pagination offset.'),
   }),
   output: listOrDetail(
-    'member',
+    { member: 'record' },
     'Member profile for `get` (name, state, terms, party history, leadership, legislation counts); absent for `list`, `sponsored`, `cosponsored`.',
   ),
   enrichment: listEnrichment,

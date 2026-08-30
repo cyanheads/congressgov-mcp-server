@@ -119,6 +119,7 @@ function inferChamberFromCode(code: string): Chamber | undefined {
 }
 
 export const committeeLookupTool = tool('congressgov_committee_lookup', {
+  title: 'Congress.gov Committee Lookup',
   description: `Browse congressional committees and their legislation, reports, and nominations. Committee codes follow the pattern chamber-prefix (h/s/j) + abbreviation + 2-digit number — use 'list' (with optional 'filter' for name→code resolution) to discover codes, then 'get' or drill into 'bills', 'reports', or 'nominations' ('nominations' is Senate-only). 'get' and sub-resources only need committeeCode (chamber is inferred from the prefix); pass chamber explicitly to override. The 'bills' sub-resource defaults to 'recent' order (newest update-date first); pass order='oldest' for ascending update-date order. Upstream omits bill titles from the 'bills' sub-resource — rows carry only {congress, billType, billNumber, actionDate, relationshipType, url}; chain 'congressgov_bill_lookup get' per row to retrieve titles and policy area.`,
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
   errors: congressErrorContracts,
@@ -148,7 +149,7 @@ export const committeeLookupTool = tool('congressgov_committee_lookup', {
       .string()
       .optional()
       .describe(
-        "Filter committee list results by name (e.g., 'transportation', 'armed services'). Only meaningful for 'list'. Fetches the full chamber set and matches client-side; fuzzy-matched rows are labeled approximate.",
+        "Filter committee-list results by name (e.g., 'transportation', 'armed services'). Only meaningful for 'list'; fuzzy-matched rows are labeled approximate.",
       ),
     limit: z.number().int().min(1).max(250).default(20).describe('Results per page (1-250).'),
     offset: z.number().int().min(0).default(0).describe('Pagination offset.'),
@@ -160,7 +161,7 @@ export const committeeLookupTool = tool('congressgov_committee_lookup', {
       ),
   }),
   output: listOrDetail(
-    'committee',
+    { committee: 'record' },
     'Committee record for `get` (name, chamber, subcommittees, history, sub-resource counts); absent for `list` and sub-resources.',
   ),
   enrichment: listEnrichment,

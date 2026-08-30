@@ -23,12 +23,13 @@ import { BILL_TYPE_CODES } from '@/services/congress-api/types.js';
 import { getCongressMirror } from '@/services/congress-mirror/congress-mirror-service.js';
 
 const searchBillsDef = tool('congressgov_search_bills', {
+  title: 'Congress.gov Bill Search',
   description: `Keyword-search U.S. bills by title and CRS summary text — the discovery path the Congress.gov API itself lacks (it has no keyword search). Backed by a local full-text index over a bounded congress window; title and summary are indexed, but policy area and full bill text are not. Returns BM25-ranked matches, each with the bill's derived id (congress/billType/billNumber) for follow-up congressgov_bill_lookup calls and a truncated summary preview. Narrow with the optional congress, billType, and originChamber filters. Searches the local mirror, not the live API — if the mirror has not finished its initial build it returns an empty result with a notice, not an error.`,
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   input: z.object({
     query: z
       .string()
-      .min(1)
+      .regex(/[\p{L}\p{N}]/u, 'Query must contain at least one letter or number.')
       .describe(
         'Free-text keywords matched against bill titles and summaries (e.g. "semiconductor export controls"). Tokens are AND-combined.',
       ),

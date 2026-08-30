@@ -51,6 +51,7 @@ const SUB_RESOURCE_MAP: Record<string, string> = {
 };
 
 export const billLookupTool = tool('congressgov_bill_lookup', {
+  title: 'Congress.gov Bill Lookup',
   description: `Browse and retrieve U.S. legislative bill data from Congress.gov. Discover bills by filtering on congress, bill type, and date range — there is no keyword search. Use 'list' to browse (requires congress, defaults to most-recently-updated first), 'get' for full bill detail (sponsor, policy area, CBO estimates, law info), or drill into a specific bill with 'actions', 'amendments', 'cosponsors', 'committees', 'subjects', 'summaries', 'text', 'titles', or 'related' (each requires congress + billType + billNumber). 'text' lists the published versions and their format URLs; 'content' then reads one version's actual text, a bounded character window at a time.`,
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
   errors: [...congressErrorContracts, ...documentErrorContracts],
@@ -92,7 +93,7 @@ export const billLookupTool = tool('congressgov_bill_lookup', {
     ...documentWindowInput,
   }),
   output: listOrDetail(
-    'bill',
+    { bill: 'record', content: 'record' },
     "Bill record (sponsor, policy area, latest action, CBO estimates, law citation) for `get`; absent for `list` and sub-resources. For `content`, an alternative key 'content' carries {text, format, sourceUrl, documentTitle, totalCharacters, offset, truncated, nextOffset} — one exact character window of the document.",
   ),
   enrichment: listEnrichment,

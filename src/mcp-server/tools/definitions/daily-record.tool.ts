@@ -25,6 +25,7 @@ import {
 } from '@/services/congress-documents/document-formats.js';
 
 export const dailyRecordTool = tool('congressgov_daily_record', {
+  title: 'Congress.gov Daily Record',
   description: `Browse the daily Congressional Record — floor speeches, debates, and legislative text published each day Congress is in session. Navigation is hierarchical: volumes (via 'list') → issues (via 'issues') → articles (via 'articles'). Use 'list' to find recent volumes, 'issues' to see what's in a volume, and 'articles' to access individual speeches and debate sections. 'articles' lists each article and its format URLs; 'content' then reads one article's actual text, a bounded character window at a time.`,
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
   errors: [...congressErrorContracts, ...documentErrorContracts],
@@ -51,7 +52,7 @@ export const dailyRecordTool = tool('congressgov_daily_record', {
     ...documentWindowInput,
   }),
   output: listOrDetail(
-    'content',
+    { content: 'record' },
     '{text, format, sourceUrl, documentTitle, totalCharacters, offset, truncated, nextOffset} for `content` — one exact character window of an article; absent for `list`, `issues`, and `articles`, which carry `data` + `pagination`.',
   ),
   enrichment: listEnrichment,

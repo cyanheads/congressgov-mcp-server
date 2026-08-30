@@ -19,6 +19,7 @@ import {
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 
 export const enactedLawsTool = tool('congressgov_enacted_laws', {
+  title: 'Congress.gov Enacted Laws',
   description: `Browse enacted public and private laws from Congress.gov by congress and law type ('pub' for public laws, 'priv' for private). 'list' filters by enactment status and law type — the discovery path 'bill_lookup' does not offer. 'get' returns the origin bill record (sponsor, actions, summaries, text), with the public/private law citation on the bill's 'laws' array (e.g. {"number":"118-2","type":"Public Law"}).`,
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
   errors: congressErrorContracts,
@@ -38,7 +39,7 @@ export const enactedLawsTool = tool('congressgov_enacted_laws', {
     offset: z.number().int().min(0).default(0).describe('Pagination offset.'),
   }),
   output: listOrDetail(
-    'law',
+    { law: 'record' },
     "Origin bill record for `get`; absent for `list`. The bill's `laws` array carries the law citation.",
   ),
   enrichment: listEnrichment,

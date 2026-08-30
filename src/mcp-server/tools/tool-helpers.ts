@@ -46,6 +46,15 @@ const dataRows = z
   )
   .describe('Result rows. Per-tool item shape is rendered in the markdown body.');
 
+const detailRecord = z.object({}).passthrough().describe('Dynamic upstream JSON record.');
+
+const detailRecords = z.array(detailRecord).describe('Dynamic upstream JSON records.');
+
+const detailRootSchemas = {
+  record: detailRecord,
+  records: detailRecords,
+} as const;
+
 /** Result envelope shared by every `list`-style operation. */
 export const listOutput = z
   .object({
@@ -57,21 +66,33 @@ export const listOutput = z
 /**
  * Union of list + detail envelopes — tools with both modes.
  *
- * Detail-mode payloads carry a single nested record under a named key (e.g.
- * `bill`, `law`, `member`); list-mode carries `data` + `pagination`. The
- * detail-mode key stays on `.passthrough()` rather than as a declared field —
- * otherwise the framework's inferred handler return type would conflict with
- * the upstream record's `[k:string]: unknown` index signature.
+ * Detail-mode payloads carry one or more explicitly advertised roots; list-mode
+ * carries `data` + `pagination`. Each root stays permissive below its declared
+ * boundary so Congress.gov's sparse, variable records remain type-compatible.
  */
-export function listOrDetail(entityKey: string, description?: string) {
-  const detailDesc = description ?? `the ${entityKey} record from Congress.gov.`;
+export function listOrDetail<const TRoots extends Record<string, keyof typeof detailRootSchemas>>(
+  roots: TRoots,
+  description?: string,
+) {
+  const detailShape = Object.fromEntries(
+    Object.entries(roots).map(([key, kind]) => [key, detailRootSchemas[kind].optional()]),
+  ) as unknown as {
+    /**
+     * Runtime schemas remain precise while handler-facing root values stay compatible
+     * with Congress.gov records whose nested fields are intentionally unknown.
+     */
+    [K in keyof TRoots]: z.ZodOptional<z.ZodType<unknown>>;
+  };
+  const rootNames = Object.keys(roots).map((key) => `'${key}'`);
+  const detailDesc = description ?? 'Dynamic records from Congress.gov.';
   return z
     .object({
       data: dataRows.optional(),
       pagination: paginationShape.optional(),
+      ...detailShape,
     })
     .passthrough()
-    .describe(`Detail-mode key '${entityKey}' carries: ${detailDesc}`);
+    .describe(`Non-list roots ${rootNames.join(', ')} carry: ${detailDesc}`);
 }
 
 /**

@@ -16,6 +16,7 @@ import {
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 
 export const crsReportsTool = tool('congressgov_crs_reports', {
+  title: 'Congress.gov CRS Reports',
   description: `Browse and retrieve CRS (Congressional Research Service) reports — nonpartisan policy analyses by subject-matter experts at the Library of Congress, covering policy areas, legislative proposals, and legal questions. Report IDs use letter-number codes (e.g., R40097, RL33612, IF12345). Use 'list' to browse available reports or 'get' for full detail (authors, topics, summary, download formats).`,
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
   errors: congressErrorContracts,
@@ -29,7 +30,7 @@ export const crsReportsTool = tool('congressgov_crs_reports', {
     offset: z.number().int().min(0).default(0).describe('Pagination offset.'),
   }),
   output: listOrDetail(
-    'report',
+    { report: 'record' },
     'CRS report record for `get` (authors, topics, summary, formats, related materials); absent for `list`.',
   ),
   enrichment: listEnrichment,

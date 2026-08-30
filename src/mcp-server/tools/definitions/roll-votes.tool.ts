@@ -21,6 +21,7 @@ import { getCongressApi } from '@/services/congress-api/congress-api-service.js'
 import { getSenateVoteService } from '@/services/senate-lis/senate-vote-service.js';
 
 export const rollVotesTool = tool('congressgov_roll_votes', {
+  title: 'Congress.gov Roll Votes',
   description: `Retrieve U.S. congressional roll call votes and individual member voting positions for either chamber. Set 'chamber' to 'house' (default, from the Congress.gov API) or 'senate' (from the Senate's official LIS feed). Use 'list' to find votes by congress and session (newest first by default), 'get' for vote details (question, result, tallies, party breakdown, associated bill/nomination/amendment), or 'members' for how each member voted.`,
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
   errors: congressErrorContracts,
@@ -55,7 +56,7 @@ export const rollVotesTool = tool('congressgov_roll_votes', {
     offset: z.number().int().min(0).default(0).describe('Pagination offset.'),
   }),
   output: listOrDetail(
-    'vote',
+    { vote: 'record' },
     'Vote record for `get` and `members` (question, result, party totals, member positions); absent for `list`.',
   ),
   enrichment: listEnrichment,

@@ -1911,8 +1911,6 @@ function makeFormatter(
 
 /** Bill browse, detail, and sub-resources (actions, amendments, cosponsors, etc.). */
 export function formatBills(result: Record<string, unknown>): TextBlock[] {
-  const content = documentContentOf(result);
-  if (content) return tb(renderDocumentContent(content));
   if (Array.isArray(result.data)) {
     const first = result.data[0];
     const firstRecord =
@@ -1920,6 +1918,8 @@ export function formatBills(result: Record<string, unknown>): TextBlock[] {
     const renderer = firstRecord ? pickBillListRenderer(firstRecord) : undefined;
     return tb(renderList(result, renderer));
   }
+  const content = documentContentOf(result);
+  if (content) return tb(renderDocumentContent(content));
   if (result.bill != null) return tb(renderBillDetail(result.bill as Record<string, unknown>));
   return tb(renderDetail(result));
 }
@@ -2067,9 +2067,9 @@ export function formatCommittees(result: Record<string, unknown>): TextBlock[] {
 
 /** Committee reports — list, detail, and text. */
 export function formatCommitteeReports(result: Record<string, unknown>): TextBlock[] {
+  if (Array.isArray(result.data)) return tb(renderList(result, renderCommitteeReportListItem));
   const content = documentContentOf(result);
   if (content) return tb(renderDocumentContent(content));
-  if (Array.isArray(result.data)) return tb(renderList(result, renderCommitteeReportListItem));
   if (Array.isArray(result.text)) {
     const textResult = { data: result.text, pagination: { count: result.text.length } };
     return tb(renderList(textResult, renderCommitteeReportTextItem));
@@ -2089,8 +2089,6 @@ export function formatCrsReports(result: Record<string, unknown>): TextBlock[] {
 
 /** Daily Congressional Record. Dispatches between volumes/issues and flattened articles. */
 export function formatDailyRecord(result: Record<string, unknown>): TextBlock[] {
-  const content = documentContentOf(result);
-  if (content) return tb(renderDocumentContent(content));
   if (Array.isArray(result.data)) {
     const first = result.data[0];
     const firstRecord =
@@ -2101,6 +2099,8 @@ export function formatDailyRecord(result: Record<string, unknown>): TextBlock[] 
         : renderDailyRecordItem;
     return tb(renderList(result, renderer));
   }
+  const content = documentContentOf(result);
+  if (content) return tb(renderDocumentContent(content));
   return tb(renderDetail(result));
 }
 

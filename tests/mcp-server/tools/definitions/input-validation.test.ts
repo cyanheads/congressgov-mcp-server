@@ -113,6 +113,34 @@ describe('memberLookupTool — Zod schema validation', () => {
     expect(() => memberLookupTool.input.parse({ operation: 'list', stateCode: 'C' })).toThrow();
   });
 
+  it.each(['pelosi', 'P00197', 'P0001970', '1000197', 'Ñ000197'])(
+    'rejects malformed bioguideId %o',
+    (bioguideId) => {
+      expect(() => memberLookupTool.input.parse({ operation: 'get', bioguideId })).toThrow();
+    },
+  );
+
+  it('accepts a valid bioguideId', () => {
+    expect(
+      memberLookupTool.input.parse({ operation: 'get', bioguideId: 'P000197' }).bioguideId,
+    ).toBe('P000197');
+  });
+
+  it.each(['12', 'C-', 'ÇA', 'California'])(
+    'rejects non-ASCII-alphabetic stateCode %o',
+    (stateCode) => {
+      expect(() => memberLookupTool.input.parse({ operation: 'list', stateCode })).toThrow();
+    },
+  );
+
+  it('advertises the verified bioguideId and stateCode patterns', () => {
+    const json = z.toJSONSchema(memberLookupTool.input, { io: 'input' }) as {
+      properties?: Record<string, { pattern?: string }>;
+    };
+    expect(json.properties?.bioguideId?.pattern).toBe('^[A-Za-z]\\d{6}$');
+    expect(json.properties?.stateCode?.pattern).toBe('^[A-Za-z]{2}$');
+  });
+
   it('rejects negative district', () => {
     // district min is 0 (at-large), negative is invalid
     expect(() =>

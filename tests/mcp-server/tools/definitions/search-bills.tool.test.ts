@@ -11,7 +11,7 @@ import { existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { searchBillsTool } from '@/mcp-server/tools/definitions/search-bills.tool.js';
 import {
   getCongressMirror,
@@ -88,6 +88,25 @@ describe('congressgov_search_bills', () => {
     expect(enrichment.totalCount).toBe(0);
     expect(String(enrichment.notice)).toMatch(/mirror|build/i);
   });
+
+  it.each(['   ', '""', '---', '...', '§', '()'])(
+    'rejects tokenless query %o at the input boundary before checking readiness',
+    (query) => {
+      const ready = vi.spyOn(getCongressMirror(), 'ready');
+      const result = searchBillsTool.input.safeParse({ query });
+
+      expect(result.success).toBe(false);
+      expect(result.error?.issues[0]?.path).toEqual(['query']);
+      expect(ready).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['COVID-19', '501(c)(3)', 'e-mail', '§1983', 'café', '半導体'])(
+    'accepts punctuation-bearing or Unicode query %o',
+    (query) => {
+      expect(searchBillsTool.input.safeParse({ query }).success).toBe(true);
+    },
+  );
 
   it('returns a ranked keyword hit once the mirror is built', async () => {
     await getCongressMirror().mirrorInstance.runSync({
