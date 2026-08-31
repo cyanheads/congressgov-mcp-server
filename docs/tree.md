@@ -1,6 +1,6 @@
 # congressgov-mcp-server - Directory Structure
 
-Generated on: 2026-08-30 21:54:47
+Generated on: 2026-08-31 03:10:56
 
 ```text
 congressgov-mcp-server/
@@ -28,6 +28,7 @@ congressgov-mcp-server/
 │   ├── 0.4.x/
 │   ├── 0.5.x/
 │   ├── 0.6.x/
+│   ├── 0.7.x/
 │   └── template.md
 ├── docs/
 │   └── congress-gov-mcp-design.md

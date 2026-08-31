@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.7.0](changelog/0.7.x/0.7.0.md) — 2026-08-30 · ⚠️ Breaking
+
+Preserves HTML list structure, safely fences document text, and separates adjacent XML elements in the content contract.
+
 ## [0.6.0](changelog/0.6.x/0.6.0.md) — 2026-08-30 · ⚠️ Breaking
 
 Tightens advertised tool contracts: names every result root, adds readable titles, and validates searches and member identifiers at the MCP boundary.
