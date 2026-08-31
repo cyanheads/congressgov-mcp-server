@@ -9,9 +9,10 @@
  * how much of it fits in a buffer. The two are pinned against each other by a
  * differential test — if this file drifts, that test fails, not production.
  *
- * The whole-string pipeline is `normalize newlines → strip comments → unwrap
- * <pre> → strip tags → decode entities → trim`, and three of those stages are
- * decided by content that arrives arbitrarily late:
+ * The whole-string pipeline is `normalize newlines → strip comments → choose
+ * verbatim <pre> or sibling-normalized XML → strip tags → decode entities →
+ * trim`, and three of those stages are decided by content that arrives
+ * arbitrarily late:
  *
  * - **Is there a `<pre>` at all?** Only a body with none is read whole. Both
  *   readings run at once, in two sinks; the losing one is dropped the moment a
@@ -81,6 +82,10 @@ function isAsciiLetter(ch: string): boolean {
   return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z');
 }
 
+function isTagNameCharacter(ch: string): boolean {
+  return isAsciiLetter(ch) || isDigit(ch) || ch === '_' || ch === ':' || ch === '-' || ch === '.';
+}
+
 function isDigit(ch: string): boolean {
   return ch >= '0' && ch <= '9';
 }
@@ -107,6 +112,17 @@ const MAX_ENTITY_NAME = 8;
 /** The largest code point a numeric reference can name. */
 const MAX_CODE_POINT = 0x10ffff;
 
+/** Minimal tag classification needed for XML sibling-boundary normalization. */
+const TAG_UNDECIDED = 0;
+const TAG_OPEN = 1;
+const TAG_CLOSE_SLASH = 2;
+const TAG_CLOSE = 3;
+const TAG_SPECIAL = 4;
+const TAG_OTHER = 5;
+
+const INLINE_XML_TAGS = new Set(['a', 'b', 'em', 'i', 'span', 'strong', 'sub', 'sup']);
+const MAX_INLINE_TAG_NAME = 6;
+
 /** A rewind point for one sink. Fixed size, whatever the document does. */
 interface SinkMark {
   emitted: number;
@@ -116,8 +132,16 @@ interface SinkMark {
   entityName: string;
   entityZeros: number;
   inTag: boolean;
+  lastEmittedWhitespace: boolean;
+  pendingCloseRun: boolean;
+  pendingCloseRunStructural: boolean;
+  pendingSiblingSeparator: boolean;
   started: boolean;
+  tagKind: number;
   tagMark: SinkMark | null;
+  tagName: string;
+  tagNameOverflow: boolean;
+  tagNameReading: boolean;
   trailingWs: number;
   /** Set only by {@link WindowSink.protect} — see the note there. */
   windowCopy?: readonly string[];
@@ -141,8 +165,16 @@ class WindowSink {
   private entityName = '';
   private entityZeros = 0;
   private inTag = false;
+  private lastEmittedWhitespace = false;
+  private pendingCloseRun = false;
+  private pendingCloseRunStructural = false;
+  private pendingSiblingSeparator = false;
   private started = false;
+  private tagKind = TAG_UNDECIDED;
   private tagMark: SinkMark | null = null;
+  private tagName = '';
+  private tagNameOverflow = false;
+  private tagNameReading = false;
   private trailingWs = 0;
   private readonly windowChars: string[] = [];
   private readonly windowEnd: number;
@@ -150,6 +182,7 @@ class WindowSink {
   constructor(
     private readonly windowStart: number,
     windowLimit: number,
+    private readonly normalizeSiblingBoundaries = false,
   ) {
     this.windowEnd = windowStart + windowLimit;
   }
@@ -184,8 +217,16 @@ class WindowSink {
       entityName: this.entityName,
       entityZeros: this.entityZeros,
       inTag: this.inTag,
+      lastEmittedWhitespace: this.lastEmittedWhitespace,
+      pendingCloseRun: this.pendingCloseRun,
+      pendingCloseRunStructural: this.pendingCloseRunStructural,
+      pendingSiblingSeparator: this.pendingSiblingSeparator,
       started: this.started,
+      tagKind: this.tagKind,
       tagMark: this.tagMark,
+      tagName: this.tagName,
+      tagNameOverflow: this.tagNameOverflow,
+      tagNameReading: this.tagNameReading,
       trailingWs: this.trailingWs,
       windowLength: this.windowChars.length,
     };
@@ -219,8 +260,16 @@ class WindowSink {
     this.entityName = mark.entityName;
     this.entityZeros = mark.entityZeros;
     this.inTag = mark.inTag;
+    this.lastEmittedWhitespace = mark.lastEmittedWhitespace;
+    this.pendingCloseRun = mark.pendingCloseRun;
+    this.pendingCloseRunStructural = mark.pendingCloseRunStructural;
+    this.pendingSiblingSeparator = mark.pendingSiblingSeparator;
     this.started = mark.started;
+    this.tagKind = mark.tagKind;
     this.tagMark = mark.tagMark;
+    this.tagName = mark.tagName;
+    this.tagNameOverflow = mark.tagNameOverflow;
+    this.tagNameReading = mark.tagNameReading;
     this.trailingWs = mark.trailingWs;
     this.windowChars.length = mark.windowLength;
     if (mark.windowCopy !== undefined) {
@@ -249,19 +298,89 @@ class WindowSink {
     if (this.inTag) {
       /** `<[^>]*>` ends at the first `>`; everything it spanned was markup. */
       if (ch === '>') {
+        const completedTagKind = this.tagKind;
+        const completedTagName = this.tagName;
+        const completedTagNameOverflow = this.tagNameOverflow;
         this.restore(this.tagMark as SinkMark);
+        this.completeTag(completedTagKind, completedTagName, completedTagNameOverflow);
         return;
       }
+      this.classifyTagCharacter(ch);
       this.literal(ch);
       return;
     }
     if (ch === '<') {
       this.tagMark = this.mark();
       this.inTag = true;
+      this.tagKind = TAG_UNDECIDED;
+      this.tagName = '';
+      this.tagNameOverflow = false;
+      this.tagNameReading = false;
       this.literal(ch);
       return;
     }
+    if (this.normalizeSiblingBoundaries) {
+      this.pendingCloseRun = false;
+      this.pendingCloseRunStructural = false;
+    }
     this.literal(ch);
+  }
+
+  /** Classify a tag while retaining only enough of its name to identify inline tags. */
+  private classifyTagCharacter(ch: string): void {
+    if (this.tagKind === TAG_UNDECIDED) {
+      if (isWhitespace(ch)) return;
+      if (ch === '/') this.tagKind = TAG_CLOSE_SLASH;
+      else if (ch === '!' || ch === '?') this.tagKind = TAG_SPECIAL;
+      else if (isAsciiLetter(ch)) {
+        this.tagKind = TAG_OPEN;
+        this.tagNameReading = true;
+        this.appendTagName(ch);
+      } else this.tagKind = TAG_OTHER;
+      return;
+    }
+    if (this.tagKind === TAG_CLOSE_SLASH && !isWhitespace(ch)) {
+      if (isAsciiLetter(ch)) {
+        this.tagKind = TAG_CLOSE;
+        this.tagNameReading = true;
+        this.appendTagName(ch);
+      } else this.tagKind = TAG_OTHER;
+      return;
+    }
+    if ((this.tagKind === TAG_OPEN || this.tagKind === TAG_CLOSE) && this.tagNameReading) {
+      if (isTagNameCharacter(ch)) this.appendTagName(ch);
+      else this.tagNameReading = false;
+    }
+  }
+
+  private appendTagName(ch: string): void {
+    if (this.tagName.length < MAX_INLINE_TAG_NAME) this.tagName += ch.toLowerCase();
+    else this.tagNameOverflow = true;
+  }
+
+  /** Apply the no-`<pre>` close-to-open element boundary policy. */
+  private completeTag(kind: number, name: string, nameOverflow: boolean): void {
+    if (!this.normalizeSiblingBoundaries) return;
+    if (kind === TAG_CLOSE) {
+      this.pendingCloseRun = true;
+      this.pendingCloseRunStructural ||= nameOverflow || !INLINE_XML_TAGS.has(name);
+      return;
+    }
+    if (kind === TAG_OPEN && this.pendingCloseRun) {
+      const structural =
+        this.pendingCloseRunStructural || nameOverflow || !INLINE_XML_TAGS.has(name);
+      this.pendingCloseRun = false;
+      this.pendingCloseRunStructural = false;
+      if (structural) {
+        this.flushEntityVerbatim();
+        this.pendingSiblingSeparator = true;
+      }
+      return;
+    }
+    if (kind !== TAG_OPEN) {
+      this.pendingCloseRun = false;
+      this.pendingCloseRunStructural = false;
+    }
   }
 
   /** Feed one character to the entity decoder. */
@@ -409,21 +528,40 @@ class WindowSink {
   }
 
   private emitChar(ch: string): void {
+    if (this.pendingSiblingSeparator) {
+      this.pendingSiblingSeparator = false;
+      if (this.started && !this.lastEmittedWhitespace && !isWhitespace(ch)) this.appendChar(' ');
+    }
+    this.appendChar(ch);
+  }
+
+  private appendChar(ch: string): void {
     if (!this.started) {
       if (isWhitespace(ch)) return;
       this.started = true;
     }
     const index = this.emitted;
     this.emitted = index + 1;
-    if (isWhitespace(ch)) this.trailingWs++;
+    this.lastEmittedWhitespace = isWhitespace(ch);
+    if (this.lastEmittedWhitespace) this.trailingWs++;
     else this.trailingWs = 0;
     if (index >= this.windowStart && index < this.windowEnd) this.windowChars.push(ch);
   }
 
   /** Bulk path for a run with no markup, no entity, and no whitespace in it. */
   private emitRun(text: string, from: number, to: number): void {
+    if (this.normalizeSiblingBoundaries) {
+      this.pendingCloseRun = false;
+      this.pendingCloseRunStructural = false;
+    }
+    if (this.pendingSiblingSeparator) {
+      this.emitChar(text[from] as string);
+      from++;
+      if (from === to) return;
+    }
     const start = this.emitted;
     this.emitted = start + (to - from);
+    this.lastEmittedWhitespace = false;
     this.trailingWs = 0;
     if (start >= this.windowEnd || this.emitted <= this.windowStart) return;
     const sliceFrom = Math.max(from, from + (this.windowStart - start));
@@ -486,7 +624,7 @@ class DocumentTextStream implements StreamingExtractor {
   constructor(request: TextWindowRequest) {
     this.windowStart = request.characterOffset;
     this.windowLimit = request.characterLimit;
-    this.noPre = new WindowSink(this.windowStart, this.windowLimit);
+    this.noPre = new WindowSink(this.windowStart, this.windowLimit, true);
   }
 
   push(chunk: string): void {

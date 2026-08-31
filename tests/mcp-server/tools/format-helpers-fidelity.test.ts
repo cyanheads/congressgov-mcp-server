@@ -764,6 +764,94 @@ describe('#51 — inline emphasis keeps whitespace outside the markers', () => {
   });
 });
 
+// ── #58 — HTML list boundaries remain visible ────────────────────────
+
+const LIST_HTML =
+  '<p>Exceptions include:</p><ul><li>First item;</li><li>Second item; </li><li>Third item;&nbsp;</li></ul><p>Afterward.</p>';
+
+describe('#58 — HTML list boundaries remain visible', () => {
+  it('separates list items and the following paragraph in bill_summaries', () => {
+    const text = textOf(
+      formatSummaries({
+        data: [{ text: LIST_HTML, bill: { congress: 119, type: 'HR', number: '58' } }],
+        pagination: { count: 1, nextOffset: null },
+      }),
+    );
+
+    expect(text).toContain(
+      'Exceptions include:\n\nFirst item;\nSecond item;\nThird item;\n\nAfterward.',
+    );
+    expect(text).not.toContain('First item;Second item;');
+    expect(text).not.toContain('Third item; \n');
+  });
+
+  it('applies the same boundaries to bill_lookup summary rows', () => {
+    const text = textOf(
+      formatBills({
+        data: [{ actionDesc: 'Introduced in House', text: LIST_HTML }],
+        pagination: { count: 1, nextOffset: null },
+      }),
+    );
+
+    expect(text).toContain(
+      'Exceptions include:\n\nFirst item;\nSecond item;\nThird item;\n\nAfterward.',
+    );
+  });
+
+  it('keeps stripHtml inline contexts on one line with one separator', () => {
+    const text = textOf(
+      formatCommittees({
+        committee: {
+          name: 'Boundary Committee',
+          note: '<ul><li>First</li><li>Second</li></ul><p>After</p>',
+        },
+      }),
+    );
+
+    expect(text).toContain('**note:** First Second After');
+    expect(text).not.toContain('FirstSecond');
+  });
+
+  it('keeps stripHtml block contexts separated without doubled whitespace', () => {
+    const prefix = 'Long narrative. '.repeat(24);
+    const text = textOf(
+      formatCommittees({
+        committee: {
+          name: 'Boundary Committee',
+          note: `${prefix}<ul><li>First</li><li>Second&nbsp;</li></ul><p>After</p>`,
+        },
+      }),
+    );
+
+    expect(text).toContain('First\nSecond\n\nAfter');
+    expect(text).not.toContain('Second \n');
+  });
+
+  it('normalizes pretty-printed list transitions to one item newline', () => {
+    const prettyList =
+      '<p>Items:</p><ul><li>One</li>\r\n    <li>Two</li>\n\t<li>Three</li></ul>\r\n<p>After.</p>';
+    const summary = textOf(
+      formatSummaries({
+        data: [{ text: prettyList, bill: { congress: 119, type: 'HR', number: '58' } }],
+        pagination: { count: 1, nextOffset: null },
+      }),
+    );
+    expect(summary).toContain('Items:\n\nOne\nTwo\nThree\n\nAfter.');
+    expect(summary).not.toContain('One\n\nTwo');
+
+    const prefix = 'Long narrative. '.repeat(24);
+    const detail = textOf(
+      formatCommittees({ committee: { name: 'Boundary Committee', note: prefix + prettyList } }),
+    );
+    expect(detail).toContain('Items:\n\nOne\nTwo\nThree\n\nAfter.');
+
+    const inline = textOf(
+      formatCommittees({ committee: { name: 'Boundary Committee', note: prettyList } }),
+    );
+    expect(inline).toContain('**note:** Items: One Two Three After.');
+  });
+});
+
 // ── Boundaries shared by the fidelity fixes ─────────────────────────
 
 describe('boundaries — empty and past-the-end pages still read correctly', () => {

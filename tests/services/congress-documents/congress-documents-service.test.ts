@@ -77,6 +77,10 @@ const LONG_TEXT = Array.from(
     `SEC. ${i + 1}. SECTION HEADING NUMBER ${i + 1}.\n\n    Body line for section ${i + 1}.`,
 ).join('\n\n');
 
+const XML_BODY =
+  '<bill><section><label>SEC. 1.</label><heading>SHORT TITLE</heading><text>pre<em>formatted</em>text &amp; more</text></section><!-- note --><section><label>SEC. 2.</label><text>Second.\r\nLine two.</text></section></bill>';
+const XML_TEXT = 'SEC. 1. SHORT TITLE preformattedtext & more SEC. 2. Second.\nLine two.';
+
 describe('CongressDocumentsService', () => {
   const mockFetch = vi.fn();
   let service: CongressDocumentsService;
@@ -372,6 +376,47 @@ describe('CongressDocumentsService', () => {
         .catch((e: unknown) => e)) as McpError;
       expect(error.data?.reason).toBe('offset_past_end');
       expect(error.message).toContain(String(LONG_TEXT.length));
+    });
+  });
+
+  describe('XML sibling windows', () => {
+    it('returns corrected text and exact metadata across arbitrary stream chunks', async () => {
+      for (const chunkSize of [1, 2, 5, 17, 256]) {
+        mockFetch.mockResolvedValueOnce(streamedResponse(XML_BODY, 'application/xml', chunkSize));
+        const result = await service.fetchDocument(
+          { url: URL_BILL, characterOffset: 9, characterLimit: 21 },
+          createMockContext(),
+        );
+        expect(result).toEqual({
+          text: XML_TEXT.slice(9, 30),
+          totalCharacters: XML_TEXT.length,
+          offset: 9,
+          truncated: true,
+          nextOffset: 30,
+        });
+      }
+    });
+
+    it('walks multiple windows through the final partial window without gaps', async () => {
+      mockFetch.mockImplementation(() =>
+        Promise.resolve(streamedResponse(XML_BODY, 'application/xml', 3)),
+      );
+      const windows: string[] = [];
+      let offset: number | null = 0;
+
+      while (offset !== null) {
+        const page = await service.fetchDocument(
+          { url: URL_BILL, characterOffset: offset, characterLimit: 11 },
+          createMockContext(),
+        );
+        expect(page.offset).toBe(offset);
+        expect(page.totalCharacters).toBe(XML_TEXT.length);
+        windows.push(page.text);
+        offset = page.nextOffset;
+      }
+
+      expect(windows.join('')).toBe(XML_TEXT);
+      expect(windows.at(-1)?.length).toBeLessThan(11);
     });
   });
 

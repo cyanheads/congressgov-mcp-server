@@ -243,6 +243,52 @@ describe('#51 — emphasis normalization reaches content[] while structuredConte
   });
 });
 
+describe('#58 — list boundaries reach content[] while structuredContent keeps the source', () => {
+  const rawSummary =
+    '<p>Exceptions include:</p><ul><li>First item;</li><li>Second item;</li></ul><p>Afterward.</p>';
+
+  it('preserves the raw bill_summaries row and separates its rendered text', async () => {
+    const ctx = createMockContext({ errors: billSummariesTool.errors });
+    mockApi.listSummaries.mockResolvedValue({
+      data: [{ text: rawSummary, bill: { congress: 119, type: 'HR', number: '58' } }],
+      pagination: { count: 1, nextOffset: null },
+    });
+
+    const result = await billSummariesTool.handler(
+      billSummariesTool.input.parse({ congress: 119, billType: 'hr' }),
+      ctx,
+    );
+
+    expect(result.data[0]).toMatchObject({ text: rawSummary });
+    expect(joinText(billSummariesTool.format!(result))).toContain(
+      'First item;\nSecond item;\n\nAfterward.',
+    );
+  });
+
+  it('preserves the raw bill_lookup summary row and separates its rendered text', async () => {
+    const ctx = createMockContext({ errors: billLookupTool.errors });
+    mockApi.getBillSubResource.mockResolvedValue({
+      data: [{ actionDesc: 'Introduced in House', text: rawSummary }],
+      pagination: { count: 1, nextOffset: null },
+    });
+
+    const result = await billLookupTool.handler(
+      billLookupTool.input.parse({
+        operation: 'summaries',
+        congress: 119,
+        billType: 'hr',
+        billNumber: 58,
+      }),
+      ctx,
+    );
+
+    expect(result.data?.[0]).toMatchObject({ text: rawSummary });
+    expect(joinText(billLookupTool.format!(result))).toContain(
+      'First item;\nSecond item;\n\nAfterward.',
+    );
+  });
+});
+
 describe('#55 — list rows reach structuredContent and content[] intact', () => {
   it('carries a subcommittee parent on both surfaces', async () => {
     const ctx = createMockContext({ errors: committeeLookupTool.errors });

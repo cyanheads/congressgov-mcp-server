@@ -80,6 +80,15 @@ const CORPUS: Record<string, string> = {
   commentSpanningPre: '<pre>one<!--two</pre>three-->four</pre>five',
   entityIntoTrailingTrim: '<pre>body&#32;&#32;</pre>',
   tagOnlyDocument: '<html><body></body></html>',
+  siblingXml:
+    '<bill><ordinal>II</ordinal><congress>119th CONGRESS</congress><session>2d Session</session><number>S. 4809</number><heading>IN THE SENATE</heading><date>June 17, 2026</date></bill>',
+  nestedSiblingXml:
+    '<bill><section><label>SEC. 1.</label><heading>SHORT TITLE</heading><text>pre<em>formatted</em>text &amp; more</text></section><!-- split --><section><label>SEC. 2.</label><text>Second.\r\nLine two.</text></section></bill>',
+  ancestorWhitespaceXml: '<outer><a>one</a>&#32;</outer><b>two</b>',
+  followingWhitespaceXml: '<outer><a>one</a></outer><b>&nbsp;two</b>',
+  adjacentInlineXml:
+    '<root>pre<em>form</em><strong>atted</strong><span>text</span><sub>2</sub><sup>x</sup></root>',
+  entityAcrossInlineTags: '<root>&am</i><b>p;</b></root>',
 };
 
 describe('createStreamingExtractor', () => {
@@ -121,6 +130,29 @@ describe('createStreamingExtractor', () => {
       expect(result.text).toBe('alpha');
       expect(result.totalCharacters).toBe(5);
     });
+
+    it('walks corrected nested XML windows and reassembles the exact text', () => {
+      const xml = CORPUS.nestedSiblingXml as string;
+      const expected = extractDocumentText(xml);
+      expect(expected).toBe(
+        'SEC. 1. SHORT TITLE preformattedtext & more SEC. 2. Second.\nLine two.',
+      );
+
+      for (const size of [1, 2, 5, 11, 64]) {
+        const windows: string[] = [];
+        let offset = 0;
+        while (offset < expected.length) {
+          const page = runIncremental(xml, size, offset, 13);
+          expect(page.totalCharacters, `chunk size ${size}`).toBe(expected.length);
+          expect(page.text, `chunk size ${size} offset ${offset}`).toBe(
+            expected.slice(offset, offset + 13),
+          );
+          windows.push(page.text);
+          offset += page.text.length;
+        }
+        expect(windows.join(''), `chunk size ${size}`).toBe(expected);
+      }
+    });
   });
 
   describe('randomized bodies', () => {
@@ -143,6 +175,10 @@ describe('createStreamingExtractor', () => {
       '-->',
       '<b>',
       '</b>',
+      '<em>',
+      '</em>',
+      '<section>',
+      '</section>',
       '<',
       '>',
       '&',
@@ -152,7 +188,9 @@ describe('createStreamingExtractor', () => {
       'lt',
       '&amp;',
       '&#65;',
+      '&#32;',
       '&#x2014;',
+      '&nbsp;',
       '&nope;',
       ' ',
       '\n',

@@ -16,6 +16,11 @@ const NAMED_ENTITIES: Record<string, string> = {
 const COMMENT_RE = /<!--[\s\S]*?-->/g;
 const TAG_RE = /<[^>]*>/g;
 const ENTITY_RE = /&(#[xX][0-9a-fA-F]+|#\d+|[a-zA-Z]+);/g;
+const XML_ELEMENT_BOUNDARY_RE =
+  /(?<!<)((?:<\s*\/\s*[a-zA-Z][^>]*>)+)(?=<\s*([a-zA-Z][\w:.-]*)(?:\s|\/?>))/g;
+const XML_CLOSE_TAG_RE = /<\s*\/\s*([a-zA-Z][\w:.-]*)[^>]*>/g;
+const XML_BOUNDARY_MARKER = '\0';
+const INLINE_XML_TAGS = new Set(['a', 'b', 'em', 'i', 'span', 'strong', 'sub', 'sup']);
 
 /**
  * Resolve the body of one character reference — what sits between `&` and `;`.
@@ -68,6 +73,38 @@ function unwrapPre(body: string): string | undefined {
   return closeAt > start ? body.slice(start, closeAt) : body.slice(start);
 }
 
+/** Mark structural close-to-open XML boundaries before tags are stripped. */
+function normalizeXmlSiblingBoundaries(xml: string): string {
+  return xml.replace(XML_ELEMENT_BOUNDARY_RE, (match, closingTags: string, openName: string) => {
+    let structuralClose = false;
+    for (const [, closeName] of closingTags.matchAll(XML_CLOSE_TAG_RE)) {
+      if (INLINE_XML_TAGS.has((closeName as string).toLowerCase())) continue;
+      structuralClose = true;
+      break;
+    }
+    const structuralOpen = !INLINE_XML_TAGS.has(openName.toLowerCase());
+    return structuralClose || structuralOpen ? `${match}${XML_BOUNDARY_MARKER}` : match;
+  });
+}
+
+/** Resolve a marked boundary only when visible whitespace does not already separate it. */
+function resolveXmlSiblingBoundaries(text: string): string {
+  let output = '';
+  let pendingBoundary = false;
+  for (const ch of text) {
+    if (ch === XML_BOUNDARY_MARKER) {
+      pendingBoundary = true;
+      continue;
+    }
+    if (pendingBoundary) {
+      if (output !== '' && !/\s/u.test(output.at(-1) as string) && !/\s/u.test(ch)) output += ' ';
+      pendingBoundary = false;
+    }
+    output += ch;
+  }
+  return output;
+}
+
 /**
  * Extract the readable plain text of a Congress.gov document body.
  *
@@ -76,8 +113,9 @@ function unwrapPre(body: string): string | undefined {
  * the occasional inline anchor and HTML-escaped entities. The pre-formatted
  * layout (column alignment, indentation, blank-line structure) is the document's
  * real structure, so whitespace is preserved verbatim rather than collapsed the
- * way `htmlToMarkdown` collapses narrative prose. XML bodies run through the same
- * pipeline minus the `<pre>` unwrap.
+ * way `htmlToMarkdown` collapses narrative prose. XML bodies preserve one ASCII
+ * space at a close-to-open sibling boundary that carried no source whitespace;
+ * inline tags remain transparent.
  *
  * The result is the string every character offset indexes into, so it has to be
  * deterministic: line endings are normalized to `\n` before anything else, and
@@ -86,6 +124,8 @@ function unwrapPre(body: string): string | undefined {
 export function extractDocumentText(body: string): string {
   const normalized = body.replace(/\r\n?/g, '\n');
   const stripped = normalized.replace(COMMENT_RE, '');
-  const inner = unwrapPre(stripped) ?? stripped;
-  return decodeEntities(inner.replace(TAG_RE, '')).trim();
+  const pre = unwrapPre(stripped);
+  if (pre !== undefined) return decodeEntities(pre.replace(TAG_RE, '')).trim();
+  const readable = decodeEntities(normalizeXmlSiblingBoundaries(stripped).replace(TAG_RE, ''));
+  return resolveXmlSiblingBoundaries(readable).trim();
 }

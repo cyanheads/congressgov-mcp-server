@@ -99,6 +99,14 @@ function joinText(blocks: Array<{ type: string; text?: string }>): string {
   return blocks.map((b) => b.text ?? '').join('\n');
 }
 
+/** Assert one document window is unchanged inside a delimiter it cannot close. */
+function expectFencedDocument(rendered: string, text: string): void {
+  const longestRun = Math.max(0, ...Array.from(text.matchAll(/`+/g), (match) => match[0].length));
+  const fence = '`'.repeat(Math.max(3, longestRun + 1));
+  expect(rendered).toContain(`\n${fence}\n${text}\n${fence}`);
+  expect(fence.length).toBeGreaterThan(longestRun);
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(getCongressApi).mockReturnValue(mockApi as never);
@@ -144,8 +152,7 @@ describe('congressgov_bill_lookup — content', () => {
     expect(rendered).toContain('**Truncated:** true');
     expect(rendered).toContain('next offset: 60');
     expect(rendered).toContain(`**Source:** ${HTM}`);
-    /** The document text itself reaches the content[]-only client, verbatim. */
-    expect(rendered).toContain(DOC_TEXT.slice(0, 60));
+    expectFencedDocument(rendered, DOC_TEXT.slice(0, 60));
   });
 
   it('populates both required enrichment fields', async () => {
@@ -410,7 +417,7 @@ describe('congressgov_committee_reports — content', () => {
     });
     const rendered = joinText(committeeReportsTool.format!(result));
     expect(rendered).toContain('# Committee Report HRPT 118-1');
-    expect(rendered).toContain(DOC_TEXT.slice(0, 40));
+    expectFencedDocument(rendered, DOC_TEXT.slice(0, 40));
     expect(getEnrichment(ctx).totalCount).toBe(DOC_TEXT.length);
   });
 
@@ -511,7 +518,7 @@ describe('congressgov_daily_record — content', () => {
     });
     const rendered = joinText(dailyRecordTool.format!(result));
     expect(rendered).toContain('COMMITTEE MEETINGS');
-    expect(rendered).toContain(DOC_TEXT.slice(0, 30));
+    expectFencedDocument(rendered, DOC_TEXT.slice(0, 30));
     expect(getEnrichment(ctx).totalCount).toBe(DOC_TEXT.length);
   });
 
@@ -592,6 +599,75 @@ describe('congressgov_daily_record — content', () => {
 });
 
 describe('content rendering boundaries', () => {
+  it('fences Markdown-looking document text with a longer dynamic delimiter', async () => {
+    const markdownDocument = [
+      '<DOC>',
+      '',
+      "    This Act may be cited as the ``First title'' and the ``Second title''.",
+      '',
+      '# SECTION 1',
+      '',
+      '_emphasis_ and [a link](https://example.test).',
+      '- list item',
+      '> quotation',
+      'A literal ```` run.',
+    ].join('\n');
+    mockDocuments.fetchDocument = fakeFetch(markdownDocument);
+    mockApi.getBillSubResource.mockResolvedValue({
+      data: [{ type: 'Enrolled Bill', formats: BILL_FORMATS }],
+      pagination: { count: 1, nextOffset: null },
+    });
+    const ctx = createMockContext({ errors: billLookupTool.errors });
+    const result = await billLookupTool.handler(
+      billLookupTool.input.parse({
+        operation: 'content',
+        congress: 119,
+        billType: 'hr',
+        billNumber: 1,
+      }),
+      ctx,
+    );
+    const content = result.content as unknown as DocumentContent;
+
+    expect(content.text).toBe(markdownDocument);
+    expect(content.totalCharacters).toBe(markdownDocument.length);
+    expect(content.offset).toBe(0);
+    expect(content.nextOffset).toBeNull();
+    expectFencedDocument(joinText(billLookupTool.format!(result)), markdownDocument);
+  });
+
+  it('presents a corrected XML window without changing its structured offsets', async () => {
+    const xmlText = 'SEC. 1. SHORT TITLE preformattedtext SEC. 2. Second.';
+    mockDocuments.fetchDocument = fakeFetch(xmlText);
+    mockApi.getBillSubResource.mockResolvedValue({
+      data: [{ type: 'Enrolled Bill', formats: BILL_FORMATS }],
+      pagination: { count: 1, nextOffset: null },
+    });
+    const ctx = createMockContext({ errors: billLookupTool.errors });
+    const result = await billLookupTool.handler(
+      billLookupTool.input.parse({
+        operation: 'content',
+        congress: 119,
+        billType: 'hr',
+        billNumber: 1,
+        format: 'xml',
+        characterOffset: 7,
+        characterLimit: 19,
+      }),
+      ctx,
+    );
+    const content = result.content as unknown as DocumentContent;
+
+    expect(content).toMatchObject({
+      text: xmlText.slice(7, 26),
+      totalCharacters: xmlText.length,
+      offset: 7,
+      nextOffset: 26,
+      truncated: true,
+    });
+    expectFencedDocument(joinText(billLookupTool.format!(result)), content.text);
+  });
+
   it('marks the final window as the end of the document', async () => {
     mockDocuments.fetchDocument = fakeFetch(DOC_TEXT);
     mockApi.getCommitteeReportText.mockResolvedValue({
@@ -640,6 +716,7 @@ describe('content rendering boundaries', () => {
     const rendered = joinText(committeeReportsTool.format!(result));
     expect(rendered).toContain('**0 characters**');
     expect(rendered).toContain('_This document is empty._');
+    expect(rendered).not.toContain('\n```');
   });
 
   it('renders a window whose limit exceeds the remainder as the whole tail', async () => {
@@ -660,8 +737,7 @@ describe('content rendering boundaries', () => {
     const content = result.content as unknown as DocumentContent;
     expect(content.text).toBe(DOC_TEXT);
     expect(content.nextOffset).toBeNull();
-    /** The whole document reaches the content[]-only client, not a preview of it. */
-    expect(joinText(billLookupTool.format!(result))).toContain(DOC_TEXT);
+    expectFencedDocument(joinText(billLookupTool.format!(result)), DOC_TEXT);
   });
 
   it('rejects a characterLimit above the declared ceiling at the schema', () => {

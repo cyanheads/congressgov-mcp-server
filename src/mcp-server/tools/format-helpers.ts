@@ -36,6 +36,16 @@ function tb(content: string): TextBlock[] {
   return [{ type: 'text', text: content }];
 }
 
+/** Preserve visible block boundaries before the remaining HTML tags are removed. */
+function preserveHtmlBlockBoundaries(html: string): string {
+  return html
+    .replace(/<\s*\/\s*li\s*>\s*<\s*\/\s*(?:ul|ol)\s*>\s*<\s*p(?:\s[^>]*)?>/gi, '\n\n')
+    .replace(/<\s*\/\s*li\s*>\s*<\s*li(?:\s[^>]*)?>/gi, '\n')
+    .replace(/<\s*br\s*\/?\s*>/gi, '\n')
+    .replace(/<\s*\/\s*li\s*>/gi, '\n')
+    .replace(/<\s*\/\s*(?:p|ul|ol)\s*>/gi, '\n\n');
+}
+
 /**
  * Strip HTML to plain text while preserving paragraph and line breaks. Upstream
  * summary fields and other narrative bodies ship as HTML; we want the visible
@@ -44,9 +54,7 @@ function tb(content: string): TextBlock[] {
  * Inline contexts that need single-line output should pass `{ inline: true }`.
  */
 function stripHtml(html: string, { inline = false } = {}): string {
-  const text = html
-    .replace(/<\s*br\s*\/?\s*>/gi, '\n')
-    .replace(/<\s*\/p\s*>/gi, '\n\n')
+  const text = preserveHtmlBlockBoundaries(html)
     .replace(/<[^>]*>/g, '')
     .replace(/&nbsp;/g, ' ')
     .replace(/&#039;/g, "'")
@@ -93,9 +101,7 @@ function wrapEmphasis(inner: string, marker: string): string {
  * through to the generic strip instead of leaving a stray marker.
  */
 function htmlToMarkdown(html: string): string {
-  return html
-    .replace(/<\s*br\s*\/?\s*>/gi, '\n')
-    .replace(/<\s*\/p\s*>/gi, '\n\n')
+  return preserveHtmlBlockBoundaries(html)
     .replace(/<\s*p[^>]*>/gi, '')
     .replace(/<\s*(?:strong|b)\s*>([\s\S]*?)<\s*\/\s*(?:strong|b)\s*>/gi, (_m, inner: string) =>
       wrapEmphasis(inner, '**'),
@@ -1824,11 +1830,10 @@ const COMMITTEE_REPORT_ROW_KEYS = new Set([
  * One character window of a legislative document's text.
  *
  * The other renderers in this file reshape upstream JSON records; this one
- * carries a document body, so the text is emitted verbatim — no entity work, no
- * whitespace collapsing, no markdown wrapper. GPO's pre-formatted layout (column
- * alignment, indentation, blank-line structure) *is* the document's structure,
- * and a code fence would break on the doubled backticks bill text uses for
- * opening quotation marks.
+ * carries a document body. The structured payload holds the exact extracted
+ * window; this Markdown surface wraps the unchanged window in a fence that is
+ * longer than any backtick run it contains. That preserves GPO's pre-formatted
+ * layout while preventing document text from controlling Markdown parsing.
  *
  * The header states the window in both vocabularies: a 1-based human range, and
  * the 0-based `offset` / `nextOffset` a caller actually feeds back.
@@ -1863,7 +1868,16 @@ function renderDocumentContent(content: Record<string, unknown>): string {
   const rest = renderDetailRest(content, DOCUMENT_CONTENT_KEYS);
   if (rest) lines.push('', rest);
 
-  lines.push('', text || '_This document is empty._');
+  if (text) {
+    let longestBacktickRun = 0;
+    for (const match of text.matchAll(/`+/g)) {
+      longestBacktickRun = Math.max(longestBacktickRun, match[0].length);
+    }
+    const fence = '`'.repeat(Math.max(3, longestBacktickRun + 1));
+    lines.push('', `${fence}\n${text}\n${fence}`);
+  } else {
+    lines.push('', '_This document is empty._');
+  }
   return lines.join('\n');
 }
 

@@ -62,6 +62,51 @@ describe('extractDocumentText', () => {
     expect(extractDocumentText(body)).toBe('Sec. 1. \nRescission of amounts.');
   });
 
+  it('separates adjacent sibling XML elements', () => {
+    const body =
+      '<bill><ordinal>II</ordinal><congress>119th CONGRESS</congress><session>2d Session</session><number>S. 4809</number><heading>IN THE SENATE</heading><date>June 17, 2026</date></bill>';
+    expect(extractDocumentText(body)).toBe(
+      'II 119th CONGRESS 2d Session S. 4809 IN THE SENATE June 17, 2026',
+    );
+  });
+
+  it('separates nested siblings while keeping inline tags transparent', () => {
+    const body =
+      '<bill><section><label>SEC. 1.</label><heading>SHORT TITLE</heading><text>pre<em>formatted</em>text</text></section><section><label>SEC. 2.</label><text>Second.</text></section></bill>';
+    expect(extractDocumentText(body)).toBe('SEC. 1. SHORT TITLE preformattedtext SEC. 2. Second.');
+  });
+
+  it('does not double literal whitespace or treat declarations and comments as boundaries', () => {
+    expect(extractDocumentText('<root><a>one</a> \n <b>two</b></root>')).toBe('one \n two');
+    expect(
+      extractDocumentText(
+        '<?xml version="1.0"?><root>pre<!-- note --><em>formatted</em>text</root>',
+      ),
+    ).toBe('preformattedtext');
+  });
+
+  it('does not add a sibling separator beside literal or decoded whitespace', () => {
+    expect(extractDocumentText('<outer><a>one</a> </outer><b>two</b>')).toBe('one two');
+    expect(extractDocumentText('<outer><a>one</a>\n</outer><b>two</b>')).toBe('one\ntwo');
+    expect(extractDocumentText('<outer><a>one</a>&nbsp;</outer><b>two</b>')).toBe('one two');
+    expect(extractDocumentText('<outer><a>one</a>&#32;</outer><b>two</b>')).toBe('one two');
+    expect(extractDocumentText('<outer><a>one</a></outer><b>&#32;two</b>')).toBe('one two');
+  });
+
+  it('keeps adjacent inline spans and entities continuous', () => {
+    expect(
+      extractDocumentText(
+        '<root>pre<em>form</em><strong>atted</strong><span>text</span><sub>2</sub><sup>x</sup></root>',
+      ),
+    ).toBe('preformattedtext2x');
+    expect(extractDocumentText('<root>&am</i><b>p;</b></root>')).toBe('&');
+  });
+
+  it('separates a close-to-open transition when either element is structural', () => {
+    expect(extractDocumentText('<root><label>One</label><em>Two</em></root>')).toBe('One Two');
+    expect(extractDocumentText('<root><em>One</em><heading>Two</heading></root>')).toBe('One Two');
+  });
+
   it('handles a body with no markup at all', () => {
     expect(extractDocumentText('plain text document')).toBe('plain text document');
   });
@@ -79,7 +124,7 @@ describe('extractDocumentText', () => {
   it('does not mistake <preamble> for a <pre> wrapper', () => {
     const body =
       '<bill><preamble>Short preamble.</preamble><section>Sec. 1. The operative text.</section></bill>';
-    expect(extractDocumentText(body)).toBe('Short preamble.Sec. 1. The operative text.');
+    expect(extractDocumentText(body)).toBe('Short preamble. Sec. 1. The operative text.');
   });
 
   it('still unwraps a <pre> carrying attributes', () => {
