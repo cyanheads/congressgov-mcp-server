@@ -184,7 +184,7 @@ Four services. `CongressApiService` backs nine tools and the House branch of `co
 **`CongressMirrorService`** — local SQLite FTS5 mirror of bill title + CRS summary text, backing `congressgov_search_bills` only:
 - Opt-in via `CONGRESS_MIRROR_ENABLED` (off by default); built out-of-band via the `mirror:init`/`mirror:refresh` scripts, never on server startup
 - No live-API fallback — ingests through the existing `CongressApiService`, and a mirror that hasn't finished its initial build returns an empty result with a notice, not an error
-- `createApp({ teardown })` stops the refresh schedule, cancels and awaits an active refresh, then closes the SQLite mirror. HTTP defaults to `stateless`; no handler uses `ctx.requestInput`.
+- `createApp({ teardown })` stops the refresh schedule, cancels and awaits an active refresh, then closes the SQLite mirror. With `MCP_SESSION_MODE` unset, HTTP defaults to stateless; an explicit `MCP_SESSION_MODE` value still overrides it. No handler uses `ctx.requestInput`.
 
 **Usage in tools:**
 ```ts
