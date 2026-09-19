@@ -1,7 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "congressgov-mcp-server",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "Access U.S. congressional data - bills, votes, members, committees - through MCP. STDIO & Streamable HTTP.",
   "author": {
     "name": "cyanheads",

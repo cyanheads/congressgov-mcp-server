@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.7.1](changelog/0.7.x/0.7.1.md) — 2026-09-19 · ⚠️ Breaking
+
+With MCP_SESSION_MODE unset, HTTP defaults to stateless; an explicit MCP_SESSION_MODE value still overrides it. This release also adopts mcp-ts-core 0.13.6 with typed argument recovery.
+
 ## [0.7.0](changelog/0.7.x/0.7.0.md) — 2026-08-30 · ⚠️ Breaking
 
 Preserves HTML list structure, safely fences document text, and separates adjacent XML elements in the content contract.
