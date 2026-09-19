@@ -10,6 +10,7 @@
     "congressgov-mcp-server": "dist/index.js"
   },
   "files": [
+    "changelog/",
     "dist/",
     "scripts/_mirror-context.ts",
     "scripts/congress-mirror-init.ts",
@@ -27,6 +28,7 @@
     "rebuild": "bun scripts/clean.ts && bun scripts/build.ts",
     "clean": "bun scripts/clean.ts",
     "devcheck": "bun scripts/devcheck.ts",
+    "audit:fix": "bun audit fix",
     "audit:refresh": "rm -f bun.lock && bun install && bun audit",
     "tree": "bun scripts/tree.ts",
     "list-skills": "bun scripts/list-skills.ts",
@@ -86,27 +88,27 @@
   "packageManager": "bun@1.4.0",
   "engines": {
     "node": ">=24.0.0",
-    "bun": ">=1.3.0"
+    "bun": ">=1.4.0"
   },
   "publishConfig": {
     "access": "public"
   },
   "dependencies": {
-    "@cyanheads/mcp-ts-core": "^0.12.3",
+    "@cyanheads/mcp-ts-core": "^0.13.6",
     "better-sqlite3": "^13.0.3",
     "fast-xml-parser": "^5.11.1",
     "node-cron": "^4.6.0",
     "pino-pretty": "^13.1.3",
-    "zod": "^4.4.3"
+    "zod": "^4.6.5"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.5.11",
+    "@biomejs/biome": "^2.5.14",
     "@socketsecurity/bun-security-scanner": "^1.1.2",
-    "@types/node": "^26.4.0",
+    "@types/node": "^26.6.1",
     "depcheck": "^1.4.7",
-    "ignore": "^7.0.6",
-    "tsc-alias": "^1.9.2",
+    "ignore": "^7.0.9",
+    "tsc-alias": "^1.9.5",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.11"
+    "vitest": "^5.0.1"
   }
 }
