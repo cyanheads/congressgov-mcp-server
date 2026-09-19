@@ -5,7 +5,7 @@
  * live fallback: a mirror that has not finished its initial build returns an empty
  * result with an enrichment notice rather than a thrown error. Gated behind
  * CONGRESS_MIRROR_ENABLED via disabledTool() — when the mirror is off (the
- * default) the tool stays on the manifest and the landing page for operators but
+ * default) the tool stays on the landing page for operators but
  * is skipped during MCP registration, so clients never see it in tools/list.
  * @module mcp-server/tools/definitions/search-bills
  */

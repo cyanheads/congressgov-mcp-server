@@ -53,10 +53,11 @@ const ServerConfigSchema = z.object({
   /**
    * Master switch for the local bill FTS mirror + `congressgov_search_bills`.
    * Off by default so the standard deploy stays config-free and the live-API
-   * tools are unaffected. Unset/empty/malformed resolves to `false`.
+   * tools are unaffected. Unset/empty uses `false`; malformed values are rejected.
    */
   mirrorEnabled: z
-    .preprocess((v) => (v === undefined || v === null || v === '' ? 'false' : v), z.stringbool())
+    .stringbool()
+    .default(false)
     .describe('Enable the local bill search mirror and the congressgov_search_bills tool.'),
   /** Filesystem path to the SQLite mirror index file (matches the Dockerfile `.mirror` dir). */
   mirrorPath: z
@@ -69,7 +70,9 @@ const ServerConfigSchema = z.object({
    * Unset means no in-process schedule — run `bun run mirror:refresh` out-of-band.
    */
   mirrorRefreshCron: z
-    .preprocess((v) => (v === '' || v === null ? undefined : v), z.string().min(1).optional())
+    .string()
+    .min(1)
+    .optional()
     .describe('Cron schedule for the in-process mirror refresh (HTTP only; omit to run manually).'),
   /**
    * Congresses to mirror. Defaults to the current congress plus the one prior.

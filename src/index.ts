@@ -41,6 +41,8 @@ import {
 import { initSenateVoteService } from '@/services/senate-lis/senate-vote-service.js';
 
 const REPO_ROOT = 'https://github.com/cyanheads/congressgov-mcp-server';
+const refreshController = new AbortController();
+let activeRefresh: Promise<unknown> | undefined;
 
 /**
  * File names strip the `congressgov_` name prefix (e.g. `congressgov_bill_lookup` →
@@ -82,6 +84,7 @@ const cacheHints = {
 await createApp({
   name: 'congressgov-mcp-server',
   title: 'congressgov-mcp-server',
+  sessionMode: 'stateless',
   cacheHints,
   tools: [
     withSource(billLookupTool, 'tools', 'bill-lookup.tool.ts'),
@@ -113,7 +116,7 @@ await createApp({
     tagline: 'U.S. legislative data — bills, votes, members, committees — via MCP.',
     requireAuth: false,
   },
-  setup(core) {
+  async setup(core) {
     initCongressApi();
     initSenateVoteService();
     initCongressDocuments();
@@ -129,9 +132,20 @@ await createApp({
     if (config.mirrorEnabled) {
       initCongressMirror({ mirrorPath: config.mirrorPath, congresses: config.congresses });
       if (core.config.mcpTransportType === 'http' && config.mirrorRefreshCron) {
-        void scheduleMirrorRefresh(config.mirrorRefreshCron);
+        await scheduleMirrorRefresh(config.mirrorRefreshCron);
       }
     }
+  },
+  async teardown(core) {
+    const config = getServerConfig();
+    if (!config.mirrorEnabled) return;
+    if (core.config.mcpTransportType === 'http' && config.mirrorRefreshCron) {
+      schedulerService.stop('congress-bills-refresh');
+    }
+    refreshController.abort();
+    // The scheduler reports sync failures; wait for cancellation before closing SQLite.
+    await activeRefresh?.catch(() => undefined);
+    await getCongressMirror().mirrorInstance.close();
   },
 });
 
@@ -142,7 +156,12 @@ async function scheduleMirrorRefresh(cron: string): Promise<void> {
     cron,
     async (jobCtx) => {
       logger.info('Starting scheduled Congress bill mirror refresh', jobCtx);
-      const result = await getCongressMirror().mirrorInstance.runSync({ mode: 'refresh' });
+      const refresh = getCongressMirror().mirrorInstance.runSync({
+        mode: 'refresh',
+        signal: refreshController.signal,
+      });
+      activeRefresh = refresh;
+      const result = await refresh;
       logger.info(
         `Scheduled Congress bill mirror refresh complete: ${result.recordsApplied} records applied (total ${result.total})`,
         jobCtx,

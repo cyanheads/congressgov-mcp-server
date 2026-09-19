@@ -30,7 +30,12 @@ import {
   serviceUnavailable,
 } from '@cyanheads/mcp-ts-core/errors';
 import type { RequestContext } from '@cyanheads/mcp-ts-core/utils';
-import { fetchWithTimeout, requestContextService, withRetry } from '@cyanheads/mcp-ts-core/utils';
+import {
+  defaultIsTransient,
+  fetchWithTimeout,
+  requestContextService,
+  withRetry,
+} from '@cyanheads/mcp-ts-core/utils';
 import { createStreamingExtractor, type ExtractedWindow } from './extract-text-stream.js';
 import type { DocumentContent, FetchDocumentParams } from './types.js';
 
@@ -196,6 +201,7 @@ export class CongressDocumentsService {
    */
   private classifyFetchError(error: unknown, ctx: Context): unknown {
     if (!(error instanceof McpError)) return error;
+    if (error.code === JsonRpcErrorCode.RequestCancelled) return error;
     if (error.code === JsonRpcErrorCode.NotFound) {
       return notFound(
         'Congress.gov does not hold the document its metadata pointed to.',
@@ -210,7 +216,11 @@ export class CongressDocumentsService {
     /** The framework message embeds the request URL; re-message without echoing it. */
     return serviceUnavailable(
       'Unable to retrieve the document from Congress.gov.',
-      { reason: DOCUMENT_FETCH_FAILED, ...ctx.recoveryFor(DOCUMENT_FETCH_FAILED) },
+      {
+        reason: DOCUMENT_FETCH_FAILED,
+        ...ctx.recoveryFor(DOCUMENT_FETCH_FAILED),
+        ...(error.data?.retryable === false ? { retryable: false } : {}),
+      },
       { cause: error },
     );
   }
@@ -323,14 +333,10 @@ export class CongressDocumentsService {
   }
 
   private isRetryableError(error: unknown): boolean {
-    if (error instanceof McpError) {
-      if (error.data?.retryable === false) return false;
-      return (
-        error.code === JsonRpcErrorCode.ServiceUnavailable ||
-        error.code === JsonRpcErrorCode.Timeout
-      );
-    }
-    return true;
+    return (
+      !(error instanceof McpError && error.code === JsonRpcErrorCode.RateLimited) &&
+      defaultIsTransient(error)
+    );
   }
 
   /**

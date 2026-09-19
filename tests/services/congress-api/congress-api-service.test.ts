@@ -91,6 +91,32 @@ describe('CongressApiService', () => {
   });
 
   describe('error handling', () => {
+    it('preserves in-flight caller cancellation without retrying', async () => {
+      const controller = new AbortController();
+      mockFetch.mockImplementation(
+        (_url, init: RequestInit) =>
+          new Promise((_resolve, reject) => {
+            init.signal?.addEventListener('abort', () =>
+              reject(new DOMException('Aborted', 'AbortError')),
+            );
+            queueMicrotask(() => controller.abort());
+          }),
+      );
+      await expect(
+        service.getCurrentCongress({ ...createMockContext(), signal: controller.signal }),
+      ).rejects.toMatchObject({ code: JsonRpcErrorCode.RequestCancelled });
+      expect(mockFetch).toHaveBeenCalledOnce();
+    });
+
+    it('does not retry an upstream 501 declared non-retryable', async () => {
+      mockFetch.mockResolvedValue(errorResponse(501, 'Not Implemented'));
+      await expect(service.getCurrentCongress(createMockContext())).rejects.toMatchObject({
+        code: JsonRpcErrorCode.ServiceUnavailable,
+        data: { reason: 'upstream_error', retryable: false },
+      });
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
     it('throws rate-limited error on 429', async () => {
       mockFetch.mockResolvedValue(errorResponse(429, 'Too Many Requests', 'Too Many Requests'));
       await expect(service.getCurrentCongress(createMockContext())).rejects.toMatchObject({
@@ -181,7 +207,7 @@ describe('CongressApiService', () => {
       await expect(
         service.getCrsReport({ reportNumber: 'R99999' }, createMockContext()),
       ).rejects.toMatchObject({
-        code: JsonRpcErrorCode.InternalError,
+        code: JsonRpcErrorCode.ServiceUnavailable,
       });
     });
 

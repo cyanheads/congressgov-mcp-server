@@ -13,7 +13,12 @@ import {
   serviceUnavailable,
 } from '@cyanheads/mcp-ts-core/errors';
 import type { RequestContext } from '@cyanheads/mcp-ts-core/utils';
-import { fetchWithTimeout, requestContextService, withRetry } from '@cyanheads/mcp-ts-core/utils';
+import {
+  defaultIsTransient,
+  fetchWithTimeout,
+  requestContextService,
+  withRetry,
+} from '@cyanheads/mcp-ts-core/utils';
 import { getServerConfig } from '@/config/server-config.js';
 import type {
   BillSubResourceParams,
@@ -263,8 +268,8 @@ function readUpstreamBody(error: McpError): string | undefined {
  * upstream URL and which carries no machine-readable reason — into a clean
  * domain error: a stable `data.reason`, an actionable `data.recovery.hint`, and
  * a message that never echoes the request URL. The framework's status-mapped
- * code is preserved for the upstream-error bucket (retry semantics and the 500
- * DoesNotExist path key off InternalError vs ServiceUnavailable), and the
+ * code is preserved for the upstream-error bucket, including cancellation and
+ * non-retryable status outcomes, and the
  * upstream `status`/`body` are carried through so tryNotFound() can still
  * classify the 404 and 500 cases at call sites.
  * Resolves cyanheads/congressgov-mcp-server#34.
@@ -275,6 +280,7 @@ function classifyUpstreamError(error: McpError, path: string): McpError {
   const meta: Record<string, unknown> = { path };
   if (status !== undefined) meta.status = status;
   if (body !== undefined) meta.body = body;
+  if (error.data?.retryable === false) meta.retryable = false;
   const opts = { cause: error };
   const suffix = status !== undefined ? ` (HTTP ${status})` : '';
 
@@ -297,9 +303,7 @@ function classifyUpstreamError(error: McpError, path: string): McpError {
         opts,
       );
     default:
-      // 5xx / Timeout / anything else — preserve the framework's status-mapped
-      // code (retry behavior and the 500 DoesNotExist path depend on it), but
-      // strip the upstream URL from the message.
+      /** Preserve the framework code while removing the upstream URL from the message. */
       return new McpError(
         error.code,
         `Congress.gov returned an unexpected error${suffix}.`,
@@ -876,14 +880,10 @@ export class CongressApiService {
   }
 
   private isRetryableError(error: unknown): boolean {
-    if (error instanceof McpError) {
-      return (
-        error.code === JsonRpcErrorCode.ServiceUnavailable ||
-        error.code === JsonRpcErrorCode.Timeout
-      );
-    }
-
-    return true;
+    return (
+      !(error instanceof McpError && error.code === JsonRpcErrorCode.RateLimited) &&
+      defaultIsTransient(error)
+    );
   }
 
   private parseJsonResponse(text: string, path: string): Record<string, unknown> {

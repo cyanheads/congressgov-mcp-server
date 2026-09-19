@@ -409,6 +409,7 @@ export const documentErrorContracts = [
   {
     code: JsonRpcErrorCode.ServiceUnavailable,
     reason: 'document_fetch_failed',
+    thrownBy: 'service',
     retryable: true,
     when: 'www.congress.gov did not return a readable document — a non-2xx status, a network failure, an empty body, or a content type that is not text or XML.',
     recovery:
@@ -417,6 +418,7 @@ export const documentErrorContracts = [
   {
     code: JsonRpcErrorCode.InvalidParams,
     reason: 'document_too_large',
+    thrownBy: 'service',
     retryable: false,
     when: 'The document is larger than the byte ceiling this server retrieves, so no character window can be served from it.',
     recovery:
@@ -425,6 +427,7 @@ export const documentErrorContracts = [
   {
     code: JsonRpcErrorCode.InvalidParams,
     reason: 'offset_past_end',
+    thrownBy: 'service',
     retryable: false,
     when: 'characterOffset is at or beyond the last character of the document, so the window would be empty.',
     recovery:
@@ -444,6 +447,7 @@ export const congressErrorContracts = [
   {
     code: JsonRpcErrorCode.NotFound,
     reason: 'not_found',
+    thrownBy: 'service',
     retryable: false,
     when: 'A requested bill, member, committee, report, vote, or nomination does not exist in Congress.gov.',
     recovery:
@@ -452,6 +456,7 @@ export const congressErrorContracts = [
   {
     code: JsonRpcErrorCode.RateLimited,
     reason: 'rate_limited',
+    thrownBy: 'service',
     retryable: true,
     when: 'The Congress.gov API rate limit (5,000 requests/hour per key) was exceeded.',
     recovery:
@@ -460,6 +465,7 @@ export const congressErrorContracts = [
   {
     code: JsonRpcErrorCode.InvalidParams,
     reason: 'invalid_request',
+    thrownBy: 'service',
     retryable: false,
     when: 'Congress.gov rejected the request as malformed — a bad date range or an identifier with an unexpected shape.',
     recovery:
@@ -468,6 +474,7 @@ export const congressErrorContracts = [
   {
     code: JsonRpcErrorCode.ServiceUnavailable,
     reason: 'upstream_error',
+    thrownBy: 'service',
     retryable: true,
     when: 'Congress.gov returned an unexpected error (5xx or another non-2xx status).',
     recovery:

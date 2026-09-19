@@ -157,6 +157,37 @@ describe('SenateVoteService', () => {
   });
 
   describe('upstream errors', () => {
+    it('preserves in-flight caller cancellation without retrying', async () => {
+      const controller = new AbortController();
+      mockFetch.mockImplementation(
+        (_url, init: RequestInit) =>
+          new Promise((_resolve, reject) => {
+            init.signal?.addEventListener('abort', () =>
+              reject(new DOMException('Aborted', 'AbortError')),
+            );
+            queueMicrotask(() => controller.abort());
+          }),
+      );
+      await expect(
+        service.getVote(
+          { congress: 118, session: 2, voteNumber: 1 },
+          { ...createMockContext(), signal: controller.signal },
+        ),
+      ).rejects.toMatchObject({ code: JsonRpcErrorCode.RequestCancelled });
+      expect(mockFetch).toHaveBeenCalledOnce();
+    });
+
+    it('does not retry an upstream 501 declared non-retryable', async () => {
+      mockFetch.mockResolvedValue(xmlResponse('Not Implemented', 501));
+      await expect(
+        service.getVote({ congress: 118, session: 2, voteNumber: 1 }, createMockContext()),
+      ).rejects.toMatchObject({
+        code: JsonRpcErrorCode.ServiceUnavailable,
+        data: { reason: 'upstream_error', retryable: false },
+      });
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
     it('classifies an empty body as service unavailable', async () => {
       mockFetch.mockResolvedValue(xmlResponse(''));
       await expect(

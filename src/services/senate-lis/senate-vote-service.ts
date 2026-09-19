@@ -26,7 +26,12 @@ import {
   serviceUnavailable,
 } from '@cyanheads/mcp-ts-core/errors';
 import type { RequestContext } from '@cyanheads/mcp-ts-core/utils';
-import { fetchWithTimeout, requestContextService, withRetry } from '@cyanheads/mcp-ts-core/utils';
+import {
+  defaultIsTransient,
+  fetchWithTimeout,
+  requestContextService,
+  withRetry,
+} from '@cyanheads/mcp-ts-core/utils';
 import { computePartyTotals, parseRollCallVote, parseVoteMenu } from './parse.js';
 import type { SenateMemberVote, SenateVoteDetail, SenateVoteSummary } from './types.js';
 
@@ -236,9 +241,13 @@ export class SenateVoteService {
        *  with HTML), so a genuine non-2xx is an outage/timeout — surface it as a clean,
        *  retryable upstream error without echoing the URL. */
       if (error instanceof McpError) {
+        if (error.code === JsonRpcErrorCode.RequestCancelled) throw error;
         throw serviceUnavailable(
           'The Senate.gov LIS feed is temporarily unavailable.',
-          { ...UPSTREAM_ERROR_RECOVERY },
+          {
+            ...UPSTREAM_ERROR_RECOVERY,
+            ...(error.data?.retryable === false ? { retryable: false } : {}),
+          },
           { cause: error },
         );
       }
@@ -247,13 +256,10 @@ export class SenateVoteService {
   }
 
   private isRetryableError(error: unknown): boolean {
-    if (error instanceof McpError) {
-      return (
-        error.code === JsonRpcErrorCode.ServiceUnavailable ||
-        error.code === JsonRpcErrorCode.Timeout
-      );
-    }
-    return true;
+    return (
+      !(error instanceof McpError && error.code === JsonRpcErrorCode.RateLimited) &&
+      defaultIsTransient(error)
+    );
   }
 
   /**

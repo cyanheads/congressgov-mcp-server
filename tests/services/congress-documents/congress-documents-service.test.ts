@@ -96,6 +96,40 @@ describe('CongressDocumentsService', () => {
   });
 
   describe('fetching', () => {
+    it('preserves in-flight caller cancellation without retrying', async () => {
+      const controller = new AbortController();
+      mockFetch.mockImplementation(
+        (_url, init: RequestInit) =>
+          new Promise((_resolve, reject) => {
+            init.signal?.addEventListener('abort', () =>
+              reject(new DOMException('Aborted', 'AbortError')),
+            );
+            queueMicrotask(() => controller.abort());
+          }),
+      );
+      await expect(
+        service.fetchDocument(
+          { url: URL_BILL, characterOffset: 0, characterLimit: 100 },
+          { ...createMockContext(), signal: controller.signal },
+        ),
+      ).rejects.toMatchObject({ code: JsonRpcErrorCode.RequestCancelled });
+      expect(mockFetch).toHaveBeenCalledOnce();
+    });
+
+    it('does not retry an upstream 501 declared non-retryable', async () => {
+      mockFetch.mockImplementation(() => errorResponse(501));
+      await expect(
+        service.fetchDocument(
+          { url: URL_BILL, characterOffset: 0, characterLimit: 100 },
+          createMockContext(),
+        ),
+      ).rejects.toMatchObject({
+        code: JsonRpcErrorCode.ServiceUnavailable,
+        data: { reason: 'document_fetch_failed', retryable: false },
+      });
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
     it('requests the resolved URL', async () => {
       mockFetch.mockResolvedValue(htmlResponse(preDoc('Hello.')));
       await service.fetchDocument(
