@@ -1,6 +1,6 @@
 # congressgov-mcp-server - Directory Structure
 
-Generated on: 2026-08-31 03:10:56
+Generated on: 2026-09-19 18:37:12
 
 ```text
 congressgov-mcp-server/
@@ -14,6 +14,8 @@ congressgov-mcp-server/
 │   │   ├── bug_report.yml
 │   │   ├── config.yml
 │   │   └── feature_request.yml
+│   ├── workflows/
+│   │   └── codeql.yml
 │   ├── CODE_OF_CONDUCT.md
 │   ├── CONTRIBUTING.md
 │   ├── FUNDING.yml
@@ -32,28 +34,7 @@ congressgov-mcp-server/
 │   └── template.md
 ├── docs/
 │   └── congress-gov-mcp-design.md
-├── scripts/
-│   ├── _mirror-context.ts
-│   ├── build-changelog.ts
-│   ├── build.ts
-│   ├── check-dependency-specifiers.ts
-│   ├── check-docs-sync.ts
-│   ├── check-framework-antipatterns.ts
-│   ├── check-skill-versions.ts
-│   ├── check-skills-sync.ts
-│   ├── clean-mcpb.ts
-│   ├── clean.ts
-│   ├── congress-mirror-init.ts
-│   ├── congress-mirror-refresh.ts
-│   ├── congress-mirror-verify.ts
-│   ├── devcheck.ts
-│   ├── lint-mcp.ts
-│   ├── lint-packaging.ts
-│   ├── list-skills.ts
-│   ├── release-github.ts
-│   ├── split-changelog.ts
-│   └── tree.ts
-├── skills/
+├── framework-skills/
 │   ├── add-app-tool/
 │   │   └── SKILL.md
 │   ├── add-prompt/
@@ -124,6 +105,8 @@ congressgov-mcp-server/
 │   │   └── SKILL.md
 │   ├── release-and-publish/
 │   │   └── SKILL.md
+│   ├── release-pr-review/
+│   │   └── SKILL.md
 │   ├── report-issue-framework/
 │   │   └── SKILL.md
 │   ├── report-issue-local/
@@ -138,6 +121,27 @@ congressgov-mcp-server/
 │   │   └── SKILL.md
 │   └── tool-defs-analysis/
 │       └── SKILL.md
+├── scripts/
+│   ├── _mirror-context.ts
+│   ├── build-changelog.ts
+│   ├── build.ts
+│   ├── check-dependency-specifiers.ts
+│   ├── check-docs-sync.ts
+│   ├── check-framework-antipatterns.ts
+│   ├── check-skill-versions.ts
+│   ├── check-skills-sync.ts
+│   ├── clean-mcpb.ts
+│   ├── clean.ts
+│   ├── congress-mirror-init.ts
+│   ├── congress-mirror-refresh.ts
+│   ├── congress-mirror-verify.ts
+│   ├── devcheck.ts
+│   ├── lint-mcp.ts
+│   ├── lint-packaging.ts
+│   ├── list-skills.ts
+│   ├── release-github.ts
+│   ├── split-changelog.ts
+│   └── tree.ts
 ├── src/
 │   ├── config/
 │   │   └── server-config.ts
@@ -190,6 +194,8 @@ congressgov-mcp-server/
 │   │       └── types.ts
 │   └── index.ts
 ├── tests/
+│   ├── config/
+│   │   └── server-config.test.ts
 │   ├── mcp-server/
 │   │   ├── prompts/
 │   │   │   └── definitions/
@@ -226,24 +232,25 @@ congressgov-mcp-server/
 │   │       ├── format-helpers.test.ts
 │   │       ├── senate-votes.format.test.ts
 │   │       └── tool-helpers.test.ts
-│   └── services/
-│       ├── congress-api/
-│       │   ├── congress-api-service.test.ts
-│       │   └── normalizers.test.ts
-│       ├── congress-documents/
-│       │   ├── congress-documents-service.test.ts
-│       │   ├── document-formats.test.ts
-│       │   ├── extract-text-stream.test.ts
-│       │   └── extract-text.test.ts
-│       ├── congress-mirror/
-│       │   └── congress-mirror-service.test.ts
-│       └── senate-lis/
-│           ├── fixtures/
-│           │   ├── menu.xml
-│           │   ├── vote-amendment.xml
-│           │   └── vote-cloture.xml
-│           ├── parse.test.ts
-│           └── senate-vote-service.test.ts
+│   ├── services/
+│   │   ├── congress-api/
+│   │   │   ├── congress-api-service.test.ts
+│   │   │   └── normalizers.test.ts
+│   │   ├── congress-documents/
+│   │   │   ├── congress-documents-service.test.ts
+│   │   │   ├── document-formats.test.ts
+│   │   │   ├── extract-text-stream.test.ts
+│   │   │   └── extract-text.test.ts
+│   │   ├── congress-mirror/
+│   │   │   └── congress-mirror-service.test.ts
+│   │   └── senate-lis/
+│   │       ├── fixtures/
+│   │       │   ├── menu.xml
+│   │       │   ├── vote-amendment.xml
+│   │       │   └── vote-cloture.xml
+│   │       ├── parse.test.ts
+│   │       └── senate-vote-service.test.ts
+│   └── index.test.ts
 ├── .dockerignore
 ├── .env.example
 ├── .gitattributes

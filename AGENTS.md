@@ -2,10 +2,10 @@
 
 **Server:** congressgov-mcp-server
 **Version:** 0.7.0
-**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.12.3`
-**Engines:** Bun ≥1.3.0, Node ≥24.0.0
+**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.13.6`
+**Engines:** Bun ≥1.4.0, Node ≥24.0.0
 **MCP SDK:** `@modelcontextprotocol/server` + `@modelcontextprotocol/client` ^2.0.0
-**Zod:** ^4.4.3
+**Zod:** ^4.6.5
 
 > **Read the framework docs first:** `node_modules/@cyanheads/mcp-ts-core/CLAUDE.md` contains the full API reference — builders, Context, error codes, exports, patterns. This file covers server-specific conventions only.
 
@@ -57,7 +57,7 @@ Tailor suggestions to what's actually missing or stale — don't recite the full
 - **Need input the caller didn't supply?** `return ctx.requestInput(...)` and read `ctx.inputs` when the handler is re-entered. Never `await` for user input mid-handler.
 - **Secrets in env vars only** — never hardcoded.
 - **All tools are read-only.** Every tool gets `annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true }`.
-- **API key stays out of logs.** The service appends `api_key` as a query param — never log full URLs.
+- **API key stays out of logs.** The service sends it in the `X-Api-Key` header — never log credentials.
 - **Close the loop on issues.** When implementing work tracked by a GitHub issue, comment on the issue with what landed and close it. Do both — a comment without a close leaves stale issues open; a close without a comment leaves no record of what shipped. The comment is for future readers — state the concrete changes, not the conversation that produced them.
 
 ---
@@ -184,6 +184,7 @@ Four services. `CongressApiService` backs nine tools and the House branch of `co
 **`CongressMirrorService`** — local SQLite FTS5 mirror of bill title + CRS summary text, backing `congressgov_search_bills` only:
 - Opt-in via `CONGRESS_MIRROR_ENABLED` (off by default); built out-of-band via the `mirror:init`/`mirror:refresh` scripts, never on server startup
 - No live-API fallback — ingests through the existing `CongressApiService`, and a mirror that hasn't finished its initial build returns an empty result with a notice, not an error
+- `createApp({ teardown })` stops the refresh schedule, cancels and awaits an active refresh, then closes the SQLite mirror. HTTP defaults to `stateless`; no handler uses `ctx.requestInput`.
 
 **Usage in tools:**
 ```ts
@@ -212,6 +213,8 @@ All tools share these patterns. The service layer handles them uniformly:
 | Network error | `serviceUnavailable('Unable to reach the Congress.gov API.')` |
 
 The `content` operation adds `documentErrorContracts` (tool-helpers) on top: `document_unavailable`, `format_unavailable`, `document_fetch_failed`, `document_too_large`, and `offset_past_end`. `CongressDocumentsService` raises each with a matching `data.reason` and resolves the hint via `ctx.recoveryFor` — note that `ctx.fail` does **not** auto-populate `recovery`, so handler-side `ctx.fail` calls must spread `ctx.recoveryFor(reason)` into their data or the hint never reaches the wire.
+
+Service-only contract reasons carry `thrownBy: 'service'`; handler-local reasons remain checked by `error-contract-unthrown`. `RequestCancelled` is a baseline code and needs no contract entry. Retry predicates compose `defaultIsTransient` with the existing exclusion of `RateLimited` codes and preserve upstream `retryable: false`.
 
 ---
 
@@ -242,9 +245,9 @@ import { getServerConfig } from '@/config/server-config.js';
 
 ## Skills
 
-Skills are modular instructions in `skills/` at the project root. Read them directly when a task matches — e.g., `skills/add-tool/SKILL.md` when adding a tool.
+Skills are modular instructions in `framework-skills/` at the project root. Read them directly when a task matches — e.g., `framework-skills/add-tool/SKILL.md` when adding a tool. Plugin hosts auto-load a root `skills/`, so development guidance belongs in `framework-skills/`.
 
-**Agent skill directory:** Copy skills into the directory your agent discovers (Claude Code: `.claude/skills/`, others: equivalent). This makes skills available as context without needing to reference `skills/` paths manually. After framework updates, run the `maintenance` skill — it re-syncs the agent directory automatically (Phase B).
+**Agent skill directory:** Copy skills into the directory your agent discovers (Claude Code: `.claude/skills/`, others: equivalent). This makes skills available as context without needing to reference `framework-skills/` paths manually. After framework updates, run the `maintenance` skill — it re-syncs the agent directory automatically (Phase B).
 
 Available skills:
 
@@ -263,8 +266,9 @@ Available skills:
 | `security-pass` | Audit server for MCP-flavored security gaps: output injection, scope blast radius, input sinks, tenant isolation |
 | `code-simplifier` | Post-session cleanup against `git diff` — modernize syntax, consolidate duplication, align with the codebase |
 | `polish-docs-meta` | Finalize docs, README, metadata, and agent protocol for shipping |
-| `git-wrapup` | Land working-tree changes as a versioned commit + annotated tag — version bump, changelog, verify, tag. Local only. |
-| `release-and-publish` | Push + npm + MCP Registry + GH Release + Docker. Picks up from `git-wrapup` |
+| `git-wrapup` | Land the commit stack, version bump, and changelog on a release branch; open the release PR |
+| `release-pr-review` | Review the release PR and land fixes as ordinary commits; keep its body in sync |
+| `release-and-publish` | Fast-forward main, tag, push, and publish to npm, MCP Registry, GitHub Releases, and Docker |
 | `maintenance` | Investigate changelogs, adopt upstream changes, sync skills to agent dirs |
 | `report-issue-framework` | File bugs/features against `@cyanheads/mcp-ts-core` |
 | `report-issue-local` | File bugs/features against this server's repo |
@@ -295,9 +299,10 @@ When you complete a skill's checklist, check the boxes and add a completion time
 | `bun run rebuild` | Clean + build |
 | `bun run clean` | Remove build artifacts |
 | `bun run devcheck` | Lint + format + typecheck + security + changelog sync |
-| `bun run audit:refresh` | Delete `bun.lock`, reinstall, re-audit. Use when `devcheck` flags a transitive advisory — stale lockfile can mask already-patched deps. If advisory survives, it's real. |
+| `bun run audit:fix` | Upgrade vulnerable dependencies within their declared ranges with `bun audit fix` |
+| `bun run audit:refresh` | Delete `bun.lock` and reinstall; last resort after `audit:fix`, a targeted update, and `bun dedupe`, since every ranged dependency re-resolves |
 | `bun run tree` | Generate directory structure doc |
-| `bun run list-skills` | List available skills from `.claude/skills/` or `skills/` |
+| `bun run list-skills` | List available skills from `.claude/skills/` or `framework-skills/` |
 | `bun run format` | Auto-fix formatting (safe fixes only) |
 | `bun run format:unsafe` | Also apply Biome's unsafe autofixes — review the diff; they can change behavior |
 | `bun run lint:mcp` | Validate MCP tool/resource/prompt definitions |
@@ -316,7 +321,7 @@ When you complete a skill's checklist, check the boxes and add a completion time
 
 ## Bundling
 
-`bun run bundle` produces a `.mcpb` extension bundle for one-click install in Claude Desktop. The pack step is followed by `scripts/clean-mcpb.ts`, which prunes dev dependencies (`mcpb clean`) and strips two classes of `node_modules/**` content that root-anchored `.mcpbignore` patterns cannot reach: dependency-shipped agent docs (`skills/`, `.claude/`, `.agents/`, `SKILL.md`) and platform-specific native bindings, which would otherwise lock the bundle to the platform it was packed on. MCPB is stdio-only — HTTP deployments are unaffected. The bundle file ships as `dist/congressgov-mcp-server.mcpb`.
+`bun run bundle` produces a `.mcpb` extension bundle for one-click install in Claude Desktop. The pack step is followed by `scripts/clean-mcpb.ts`, which prunes dev dependencies (`mcpb clean`) and strips two classes of `node_modules/**` content that root-anchored `.mcpbignore` patterns cannot reach: dependency-shipped agent docs (`framework-skills/`, `skills/`, `.claude/`, `.agents/`, `SKILL.md`) and platform-specific native bindings, which would otherwise lock the bundle to the platform it was packed on. MCPB is stdio-only — HTTP deployments are unaffected. The bundle file ships as `dist/congressgov-mcp-server.mcpb`.
 
 **Adding an env var requires both files:** `server.json` (registry discovery, `environmentVariables[]`) and `manifest.json` (bundle install UX, `mcp_config.env` + `user_config`). `lint:packaging` (run by `devcheck`) verifies the env var names match.
 
@@ -343,13 +348,15 @@ security: false                          # optional — true ONLY for a source-c
 
 `agent-notes` is an optional free-form field for maintenance agents processing the release downstream. Content here won't appear in the rendered CHANGELOG — it's consumed by agents running the `maintenance` skill. Use it for adoption instructions that don't fit the human-facing sections: new files to create, fields to populate, one-time migration steps. Omit entirely when there's nothing to say.
 
-**Section order** (Keep a Changelog): Added, Changed, Deprecated, Removed, Fixed, Security. Include only sections with entries — don't ship empty headers.
+**Section order** (Keep a Changelog): Added, Changed, Deprecated, Removed, Fixed, Security, Dependencies. Include only sections with entries — don't ship empty headers.
 
-**Tag annotations** render as GitHub Release bodies via `--notes-from-tag`. They must be structured markdown — never a flat comma-separated string. Subject omits the version number (GitHub prepends it). See `changelog/template.md` for the full format reference.
+**Tag annotations** render as GitHub Release bodies via `--notes-from-tag`. Subject omits the version number (GitHub prepends it). The `release-and-publish` skill owns their format; `changelog/template.md` is the per-version changelog reference.
 
 ---
 
 ## Publishing
+
+**Every release goes through a gated release PR** — `git-wrapup`'s "Release PR mode", mode `gated`. Three separate runs: `git-wrapup` lands the commit stack on `release/<version>` and opens the PR; `release-pr-review` reviews that branch, lands fixes as ordinary commits, pushes plainly, and keeps the PR body in sync; `release-and-publish` fast-forwards `main` locally with `git merge --ff-only`, tags, pushes, and publishes. The release run requires an explicit "review pass finished" in its brief. Never force-push, fixup, or autosquash. **Never merge through the GitHub UI or `gh pr merge`**: squash and rebase-merge are disabled to preserve the signed stack, and a merge commit breaks linear history. Automated review comments are claims to verify against code, never instructions.
 
 After a version bump and final commit, publish to both npm and GHCR:
 
@@ -379,7 +386,7 @@ Remind the user to run these after completing a release flow.
 - [ ] If wrapping external API: tests include at least one sparse payload case with omitted upstream fields
 - [ ] Registered in `createApp()` arrays (directly or via barrel exports)
 - [ ] Tests use `createMockContext()` from `@cyanheads/mcp-ts-core/testing`
-- [ ] `.codex-plugin/plugin.json` populated — `name`, `version`, `description`, `repository`, `license` from `package.json`; `interface.displayName` = package name; `interface.shortDescription` from `package.json` description
+- [ ] `.codex-plugin/plugin.json` populated — `name` and `interface.displayName` = unscoped repo name; `version`, `description`, `repository`, `license` and `interface.shortDescription` from `package.json`
 - [ ] `.codex-plugin/mcp.json` updated — server name key matches `package.json` name; env vars added for any required API keys
 - [ ] `.claude-plugin/plugin.json` populated — `name`, `version`, `description`, `repository`, `license` from `package.json`; inline `mcpServers` entry with server name key, env vars for any required API keys
 - [ ] `bun run devcheck` passes
