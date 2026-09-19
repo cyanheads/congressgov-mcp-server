@@ -21,7 +21,8 @@
       "env": {
         "MCP_TRANSPORT_TYPE": "stdio",
         "MCP_AUTH_MODE": "none",
-        "NODE_ENV": "production"
+        "NODE_ENV": "production",
+        "CONGRESS_API_KEY": "${user_config.CONGRESS_API_KEY}"
       }
     }
   },

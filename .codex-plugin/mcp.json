@@ -3,8 +3,8 @@
     "command": "npx",
     "args": ["-y", "@cyanheads/congressgov-mcp-server"],
     "env": {
-      "MCP_TRANSPORT_TYPE": "stdio",
-      "CONGRESS_API_KEY": ""
-    }
+      "MCP_TRANSPORT_TYPE": "stdio"
+    },
+    "env_vars": ["CONGRESS_API_KEY"]
   }
 }
