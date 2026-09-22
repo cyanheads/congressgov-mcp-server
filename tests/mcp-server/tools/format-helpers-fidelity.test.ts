@@ -21,6 +21,7 @@ import {
   formatSummaries,
   formatVotes,
 } from '@/mcp-server/tools/format-helpers.js';
+import { windowSummaryPage } from '@/mcp-server/tools/summary-window.js';
 
 /** Extract the single text block from a formatter result. */
 function textOf(blocks: Array<{ type: 'text'; text: string }>): string {
@@ -883,5 +884,223 @@ describe('boundaries — empty and past-the-end pages still read correctly', () 
     expect(text).toContain('# X000001');
     expect(text).not.toContain('**Terms');
     expect(text).not.toContain('**Leadership Roles');
+  });
+});
+
+// ── #73 — character references decode exactly once ──────────────────
+
+/**
+ * A CRS summary in the shape Congress.gov serves — bold title paragraph, `&nbsp;`
+ * padding inside paragraphs and list items — plus every entity the summaries
+ * corpus uses and an anchor whose `href` carries an escaped `&`.
+ */
+const ENTITY_SUMMARY_HTML =
+  '<p><strong>Further Continuing Appropriations and Disaster Relief Supplemental Appropriations Act, 2025</strong></p><p>This bill provides continuing FY2025 appropriations.&nbsp;&nbsp;</p><p>In addition, the bill extends provisions related to&nbsp;</p><ul><li>agriculture;</li><li>public health, Medicare, and Medicaid;&nbsp;</li><li>older Americans;&nbsp;and</li><li>workforce development.&nbsp;</li></ul><p>It honors Texas A&amp;M University&#039;s <em>de minimis </em>&quot;role&quot; &lt;per the record&gt;, see <a href="https://www.congress.gov/?a=1&amp;b=2">the <strong>record</strong></a>.</p>';
+
+/** The Markdown both summary renderers produce for {@link ENTITY_SUMMARY_HTML}. */
+const ENTITY_SUMMARY_MARKDOWN =
+  '**Further Continuing Appropriations and Disaster Relief Supplemental Appropriations Act, 2025**\n\nThis bill provides continuing FY2025 appropriations.\n\nIn addition, the bill extends provisions related to\n\nagriculture;\npublic health, Medicare, and Medicaid;\nolder Americans; and\nworkforce development.\n\nIt honors Texas A&M University\'s *de minimis* "role" <per the record>, see [the **record**](https://www.congress.gov/?a=1&b=2).';
+
+describe('#73 — characterization: ordinary summary markup renders byte-identically', () => {
+  it('pins the full bill_summaries row', () => {
+    const text = textOf(
+      formatSummaries({
+        data: [{ text: ENTITY_SUMMARY_HTML, bill: { congress: 118, type: 'HR', number: '10445' } }],
+        pagination: { count: 1, nextOffset: null },
+      }),
+    );
+    expect(text).toBe(
+      `**1 result**\n\n### 1. HR 10445, Congress 118\n**Bill Title:** Not available\n\n${ENTITY_SUMMARY_MARKDOWN}`,
+    );
+  });
+
+  it('pins the full bill_lookup summaries row', () => {
+    const text = textOf(
+      formatBills({
+        data: [{ actionDesc: 'Public Law', text: ENTITY_SUMMARY_HTML }],
+        pagination: { count: 1, nextOffset: null },
+      }),
+    );
+    expect(text).toBe(`**1 result**\n\n### 1. Public Law\n\n${ENTITY_SUMMARY_MARKDOWN}`);
+  });
+
+  it('pins a long field rendered through the stripHtml block path', () => {
+    const text = textOf(
+      formatCommittees({ committee: { name: 'Characterization', note: ENTITY_SUMMARY_HTML } }),
+    );
+    expect(text).toBe(
+      '# Characterization\n\n**name:** Characterization\n**note:**\nFurther Continuing Appropriations and Disaster Relief Supplemental Appropriations Act, 2025\n\nThis bill provides continuing FY2025 appropriations.\n\nIn addition, the bill extends provisions related to\n\nagriculture;\npublic health, Medicare, and Medicaid;\nolder Americans; and\nworkforce development.\n\nIt honors Texas A&M University\'s de minimis "role" <per the record>, see the record.',
+    );
+  });
+
+  it('pins a short field rendered through the stripHtml inline path', () => {
+    const text = textOf(
+      formatCommittees({
+        committee: {
+          name: 'Characterization',
+          note: '<p>Texas A&amp;M&nbsp;University&#039;s &quot;role&quot; &lt;per the record&gt;</p><ul><li>One</li><li>Two</li></ul>',
+        },
+      }),
+    );
+    expect(text).toBe(
+      '# Characterization\n\n**name:** Characterization\n**note:** Texas A&M University\'s "role" <per the record> One Two',
+    );
+  });
+});
+
+/** Text that literally says `&lt;b&gt;` — the escaped form of an escaped tag. */
+const ESCAPED_REFERENCE_HTML =
+  '<p>Literal &amp;lt;b&amp;gt; and &amp;quot;quoted&amp;quot; stay escaped.</p>';
+const ESCAPED_REFERENCE_TEXT = 'Literal &lt;b&gt; and &quot;quoted&quot; stay escaped.';
+
+describe('#73 — character references decode exactly once', () => {
+  const summaryText = (text: string) =>
+    textOf(
+      formatSummaries({
+        data: [{ text, bill: { congress: 119, type: 'HR', number: '73' } }],
+        pagination: { count: 1, nextOffset: null },
+      }),
+    );
+  const subresourceText = (text: string) =>
+    textOf(
+      formatBills({
+        data: [{ actionDesc: 'Introduced in House', text }],
+        pagination: { count: 1, nextOffset: null },
+      }),
+    );
+  const detailText = (note: string) =>
+    textOf(formatCommittees({ committee: { name: 'Entities', note } }));
+
+  it('keeps an escaped reference escaped in bill_summaries', () => {
+    const text = summaryText(ESCAPED_REFERENCE_HTML);
+    expect(text).toContain(ESCAPED_REFERENCE_TEXT);
+    expect(text).not.toContain('<b>');
+  });
+
+  it('keeps an escaped reference escaped in bill_lookup summaries', () => {
+    const text = subresourceText(ESCAPED_REFERENCE_HTML);
+    expect(text).toContain(ESCAPED_REFERENCE_TEXT);
+    expect(text).not.toContain('<b>');
+  });
+
+  it('keeps an escaped reference escaped through the stripHtml inline and block paths', () => {
+    expect(detailText(ESCAPED_REFERENCE_HTML)).toContain(`**note:** ${ESCAPED_REFERENCE_TEXT}`);
+    const block = detailText(`<p>${'Long narrative. '.repeat(24)}</p>${ESCAPED_REFERENCE_HTML}`);
+    expect(block).toContain(`\n\n${ESCAPED_REFERENCE_TEXT}`);
+    expect(block).not.toContain('<b>');
+  });
+
+  it('decodes decimal and hex numeric references in every summary path', () => {
+    const html = '<p>the agency&#39;s plan &#x26; more &#8212; done</p>';
+    const decoded = "the agency's plan & more — done";
+    expect(summaryText(html)).toContain(decoded);
+    expect(subresourceText(html)).toContain(decoded);
+    expect(detailText(html)).toContain(`**note:** ${decoded}`);
+  });
+
+  it('leaves an unrecognized reference verbatim rather than guessing', () => {
+    expect(summaryText('<p>a &notarealentity; b &#1114112; c</p>')).toContain(
+      'a &notarealentity; b &#1114112; c',
+    );
+  });
+});
+
+describe('#70 — a windowed summary row renders its window and its bounds', () => {
+  const FULL =
+    '<p>Exceptions include:</p><ul><li>First item &amp; more;</li>' +
+    '<li>Second item, <em>emphasized</em>;</li></ul><p>Afterward the rule applies.</p>';
+
+  const summaryBlocks = (row: Record<string, unknown>) =>
+    textOf(
+      formatSummaries({
+        data: [{ bill: { congress: 119, type: 'HR', number: '70' }, ...row }],
+        pagination: { count: 1, nextOffset: null },
+      }),
+    );
+  const subresourceBlocks = (row: Record<string, unknown>) =>
+    textOf(
+      formatBills({
+        data: [{ actionDesc: 'Introduced in House', versionCode: '00', ...row }],
+        pagination: { count: 1, nextOffset: null },
+      }),
+    );
+
+  /**
+   * Real windows from the windower rather than hand-cut slices: a requested end
+   * of 63 lands inside the second `<li>`, so the retraction decides where the
+   * first window really stops and where the second one opens.
+   */
+  const windowAt = (characterOffset: number, characterLimit: number) =>
+    windowSummaryPage(
+      { data: [{ text: FULL }], pagination: { count: 1, nextOffset: null } },
+      {
+        offset: 0,
+        characterOffset,
+        characterLimit,
+      },
+    ).page.data[0] as Record<string, unknown>;
+
+  const firstWindow = windowAt(0, 63);
+  /** The rest of the summary, which therefore opens inside the same `<ul>`. */
+  const secondWindow = windowAt(firstWindow.textNextOffset as number, 500);
+
+  it('retracts the first window off the tag the requested limit would have split', () => {
+    expect(firstWindow.textNextOffset).toBe(61);
+    expect(firstWindow.text).toBe(FULL.slice(0, 61));
+  });
+
+  it('reassembles from the rendered windows with no gap and no overlap', () => {
+    expect(`${firstWindow.text as string}${secondWindow.text as string}`).toBe(FULL);
+  });
+
+  it.each([
+    ['formatSummaries', summaryBlocks],
+    ['formatBills', subresourceBlocks],
+  ])('%s states the window bounds on a truncated row', (_name, render) => {
+    const text = render(firstWindow);
+    expect(text).toContain(`**Summary text:** characters 1–61 of ${FULL.length}`);
+    expect(text).toContain('**Truncated:** true');
+    expect(text).toContain('next characterOffset: 61');
+    expect(text).toContain('Exceptions include:');
+    expect(text).toContain('First item & more;');
+    expect(text).not.toMatch(/<\/?(?:p|ul|li|em)\b/);
+  });
+
+  it.each([
+    ['formatSummaries', summaryBlocks],
+    ['formatBills', subresourceBlocks],
+  ])('%s renders a window that opens mid-list without leaking tag text', (_name, render) => {
+    const text = render(secondWindow);
+    expect(text).toContain(`**Summary text:** characters 62–${FULL.length} of ${FULL.length}`);
+    expect(text).toContain('**Truncated:** false');
+    expect(text).toContain('_end of summary_');
+    expect(text).toContain('Second item, *emphasized*;');
+    expect(text).toContain('Afterward the rule applies.');
+    expect(text).not.toMatch(/<\/?(?:p|ul|li|em)\b/);
+    expect(text).not.toContain('li>');
+  });
+
+  it.each([
+    ['formatSummaries', summaryBlocks],
+    ['formatBills', subresourceBlocks],
+  ])('%s says so when the offset left the row with no text', (_name, render) => {
+    const text = render({
+      text: '',
+      textTotalCharacters: FULL.length,
+      textTruncated: false,
+      textNextOffset: null,
+    });
+    expect(text).toContain(
+      `**Summary text:** 0 of ${FULL.length} characters — characterOffset is past this summary's end`,
+    );
+  });
+
+  it.each([
+    ['formatSummaries', summaryBlocks],
+    ['formatBills', subresourceBlocks],
+  ])('%s adds no window line to an unwindowed row', (_name, render) => {
+    const text = render({ text: FULL });
+    expect(text).not.toContain('**Summary text:**');
+    expect(text).not.toContain('textTotalCharacters');
   });
 });

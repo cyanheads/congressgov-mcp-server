@@ -6,27 +6,24 @@
  * @module services/congress-mirror/normalize
  */
 
+import { decodeCharacterReferences } from '@/utils/character-references.js';
+
 /**
- * Strip HTML tags to plain text and decode the handful of entities Congress.gov
+ * Strip HTML tags to plain text and decode the character references Congress.gov
  * emits in summary bodies. Block-ish tags collapse to spaces so adjacent words
  * don't fuse (`</p><p>` → space), and whitespace is collapsed to single spaces —
  * a discovery/snippet surface doesn't need paragraph structure, and flat text
  * tokenizes more cleanly for FTS5.
+ *
+ * References decode in one pass, after the tags are gone, so text that literally
+ * says `&amp;lt;` indexes as `&lt;` rather than as a tag the source never had.
  */
 export function htmlToPlainText(html: string): string {
-  return html
+  const text = html
     .replace(/<\s*br\s*\/?\s*>/gi, ' ')
     .replace(/<\s*\/?(p|div|li|ul|ol|h[1-6]|tr|table)\b[^>]*>/gi, ' ')
-    .replace(/<[^>]*>/g, '')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&#039;/g, "'")
-    .replace(/&#39;/g, "'")
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/\s+/g, ' ')
-    .trim();
+    .replace(/<[^>]*>/g, '');
+  return decodeCharacterReferences(text).replace(/\s+/g, ' ').trim();
 }
 
 /**

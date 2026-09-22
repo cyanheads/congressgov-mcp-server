@@ -235,6 +235,21 @@ describe('extractDocumentText', () => {
       expect(extractDocumentText('&#;')).toBe('&#;');
     });
 
+    /**
+     * U+0000 is no XML character, and in a no-`<pre>` body it is also the
+     * sibling-boundary marker — decoding it let the marker pass swallow the
+     * reference and insert a space the document never had.
+     */
+    it('leaves a reference to U+0000 verbatim in both readings', () => {
+      expect(extractDocumentText('<root>x&#0;y</root>')).toBe('x&#0;y');
+      expect(extractDocumentText('<pre>x&#x0000;y</pre>')).toBe('x&#x0000;y');
+    });
+
+    /** A surrogate code point is not a character; decoding one emits an unpaired code unit. */
+    it('leaves a reference to a lone surrogate verbatim', () => {
+      expect(extractDocumentText('<pre>a&#xD800;b&#57343;c</pre>')).toBe('a&#xD800;b&#57343;c');
+    });
+
     it('keeps bare angle brackets that form no tag', () => {
       expect(extractDocumentText('a > b < c')).toBe('a > b < c');
     });

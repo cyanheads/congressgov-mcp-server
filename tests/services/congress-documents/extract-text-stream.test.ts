@@ -69,6 +69,8 @@ const CORPUS: Record<string, string> = {
   hexReferences: '&#x41;&#X42;',
   surrogateReference: '&#128512;x',
   unresolvableReferences: '&abcdefghij; &#99999999; &#; &#x; &notarealentity;',
+  nulReferenceXml: '<root>x&#0;y</root><b>&#x0000;z</b>',
+  loneSurrogateReferences: '<pre>a&#xD800;b&#57343;c&#x0DBFF;</pre>',
   paddedOverflowReference: `&#${'0'.repeat(40)}65; &#${'9'.repeat(40)};`,
   bareAngleBrackets: 'a > b < c',
   trailingWhitespace: '<pre>a   \n\n</pre>',

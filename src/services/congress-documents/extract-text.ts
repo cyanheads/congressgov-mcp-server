@@ -3,50 +3,16 @@
  * @module services/congress-documents/extract-text
  */
 
-/** Entities GPO emits by name. Numeric references are decoded generically. */
-const NAMED_ENTITIES: Record<string, string> = {
-  amp: '&',
-  apos: "'",
-  gt: '>',
-  lt: '<',
-  nbsp: ' ',
-  quot: '"',
-};
+import { decodeCharacterReferences } from '@/utils/character-references.js';
 
 const COMMENT_RE = /<!--[\s\S]*?-->/g;
 const TAG_RE = /<[^>]*>/g;
-const ENTITY_RE = /&(#[xX][0-9a-fA-F]+|#\d+|[a-zA-Z]+);/g;
 const XML_ELEMENT_BOUNDARY_RE =
   /(?<!<)((?:<\s*\/\s*[a-zA-Z][^>]*>)+)(?=<\s*([a-zA-Z][\w:.-]*)(?:\s|\/?>))/g;
 const XML_CLOSE_TAG_RE = /<\s*\/\s*([a-zA-Z][\w:.-]*)[^>]*>/g;
+/** U+0000 is no XML character, and the decoder resolves no reference to it. */
 const XML_BOUNDARY_MARKER = '\0';
 const INLINE_XML_TAGS = new Set(['a', 'b', 'em', 'i', 'span', 'strong', 'sub', 'sup']);
-
-/**
- * Resolve the body of one character reference — what sits between `&` and `;`.
- * Returns `undefined` for a reference this extractor does not recognize, which
- * the callers render verbatim rather than guessing at.
- */
-export function decodeCharacterReference(ref: string): string | undefined {
-  if (ref.startsWith('#')) {
-    const hex = ref[1] === 'x' || ref[1] === 'X';
-    const codePoint = Number.parseInt(hex ? ref.slice(2) : ref.slice(1), hex ? 16 : 10);
-    if (!Number.isInteger(codePoint) || codePoint < 0 || codePoint > 0x10ffff) return undefined;
-    return String.fromCodePoint(codePoint);
-  }
-  return NAMED_ENTITIES[ref.toLowerCase()];
-}
-
-/**
- * Decode HTML/XML character references in one pass.
- *
- * A single pass is the point: decoding `&amp;` in its own sweep would turn the
- * literal `&amp;lt;` into `<` instead of the `&lt;` the document actually says.
- * An unrecognized reference is left verbatim rather than guessed at.
- */
-function decodeEntities(text: string): string {
-  return text.replace(ENTITY_RE, (match, ref: string) => decodeCharacterReference(ref) ?? match);
-}
 
 /**
  * The tag name has to end at the `>` or at whitespace. A loose `<\s*pre[^>]*>`
@@ -125,7 +91,9 @@ export function extractDocumentText(body: string): string {
   const normalized = body.replace(/\r\n?/g, '\n');
   const stripped = normalized.replace(COMMENT_RE, '');
   const pre = unwrapPre(stripped);
-  if (pre !== undefined) return decodeEntities(pre.replace(TAG_RE, '')).trim();
-  const readable = decodeEntities(normalizeXmlSiblingBoundaries(stripped).replace(TAG_RE, ''));
+  if (pre !== undefined) return decodeCharacterReferences(pre.replace(TAG_RE, '')).trim();
+  const readable = decodeCharacterReferences(
+    normalizeXmlSiblingBoundaries(stripped).replace(TAG_RE, ''),
+  );
   return resolveXmlSiblingBoundaries(readable).trim();
 }

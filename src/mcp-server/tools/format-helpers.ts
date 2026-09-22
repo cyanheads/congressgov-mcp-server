@@ -27,8 +27,16 @@
  * @module mcp-server/tools/format-helpers
  */
 
+import { decodeCharacterReferences } from '@/utils/character-references.js';
+
 type TextBlock = { type: 'text'; text: string };
 type ItemRenderer = (item: Record<string, unknown>, index: number) => string;
+
+/**
+ * Horizontal whitespace at this surface: spaces, tabs, and the literal U+00A0 in
+ * the class — what a decoded `&nbsp;` leaves behind, and ordinary spacing here.
+ */
+const HORIZONTAL_WHITESPACE_RE = /[ \t ]+/g;
 
 // ── Primitives ──────────────────────────────────────────────────────
 
@@ -47,30 +55,36 @@ function preserveHtmlBlockBoundaries(html: string): string {
 }
 
 /**
- * Strip HTML to plain text while preserving paragraph and line breaks. Upstream
- * summary fields and other narrative bodies ship as HTML; we want the visible
- * structure (paragraph boundaries) to survive into the rendered Markdown.
- *
- * Inline contexts that need single-line output should pass `{ inline: true }`.
+ * Collapse horizontal whitespace and blank-line runs, keeping the paragraph and
+ * line structure a block rendering carries.
  */
-function stripHtml(html: string, { inline = false } = {}): string {
-  const text = preserveHtmlBlockBoundaries(html)
-    .replace(/<[^>]*>/g, '')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&#039;/g, "'")
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"');
-
-  if (inline) return text.replace(/\s+/g, ' ').trim();
-
+function normalizeBlockWhitespace(text: string): string {
   return text
-    .replace(/[ \t]+/g, ' ')
+    .replace(HORIZONTAL_WHITESPACE_RE, ' ')
     .replace(/\n[ \t]+/g, '\n')
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
+}
+
+/**
+ * Strip HTML to plain text while preserving paragraph and line breaks. Upstream
+ * summary fields and other narrative bodies ship as HTML; we want the visible
+ * structure (paragraph boundaries) to survive into the rendered Markdown.
+ *
+ * Character references decode in one pass once the tags are gone, so text that
+ * literally says `&amp;lt;` reads as `&lt;` and not as a tag it never contained.
+ * A decoded `&nbsp;` is ordinary spacing at this surface, so it collapses with
+ * the rest of the horizontal whitespace.
+ *
+ * Inline contexts that need single-line output should pass `{ inline: true }`.
+ */
+function stripHtml(html: string, { inline = false } = {}): string {
+  const text = decodeCharacterReferences(preserveHtmlBlockBoundaries(html).replace(/<[^>]*>/g, ''));
+
+  if (inline) return text.replace(/\s+/g, ' ').trim();
+
+  return normalizeBlockWhitespace(text);
 }
 
 /**
@@ -101,7 +115,7 @@ function wrapEmphasis(inner: string, marker: string): string {
  * through to the generic strip instead of leaving a stray marker.
  */
 function htmlToMarkdown(html: string): string {
-  return preserveHtmlBlockBoundaries(html)
+  const markup = preserveHtmlBlockBoundaries(html)
     .replace(/<\s*p[^>]*>/gi, '')
     .replace(/<\s*(?:strong|b)\s*>([\s\S]*?)<\s*\/\s*(?:strong|b)\s*>/gi, (_m, inner: string) =>
       wrapEmphasis(inner, '**'),
@@ -110,18 +124,9 @@ function htmlToMarkdown(html: string): string {
       wrapEmphasis(inner, '*'),
     )
     .replace(/<\s*a[^>]*href=["']([^"']*)["'][^>]*>([\s\S]*?)<\s*\/\s*a\s*>/gi, '[$2]($1)')
-    .replace(/<[^>]*>/g, '')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&#039;/g, "'")
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/[ \t]+/g, ' ')
-    .replace(/\n[ \t]+/g, '\n')
-    .replace(/[ \t]+\n/g, '\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
+    .replace(/<[^>]*>/g, '');
+
+  return normalizeBlockWhitespace(decodeCharacterReferences(markup));
 }
 
 /** Safe deep access for compact field display — collapses whitespace to a single line. */
@@ -573,6 +578,39 @@ const MEMBER_ROW_KEYS = new Set([
   'url',
 ]);
 
+/**
+ * Window metadata a bounded summary row carries. Both summary renderers show it
+ * as one curated line, so it stays out of their fall-through key sets.
+ */
+const SUMMARY_WINDOW_KEYS = ['textTotalCharacters', 'textTruncated', 'textNextOffset'];
+
+/**
+ * The window line a row gains once its `text` was bounded — absent on a row
+ * returned whole, which is what keeps an unbounded page's rendering unchanged.
+ *
+ * The row publishes the total and the next offset; this window's own start is
+ * derived from the text it returned, the same way the vote roster derives its
+ * range — `textNextOffset` is one past the last character returned.
+ */
+function summaryWindowLine(item: Record<string, unknown>): string | undefined {
+  const total = item.textTotalCharacters;
+  if (typeof total !== 'number') return;
+
+  const text = typeof item.text === 'string' ? item.text : '';
+  const nextOffset = typeof item.textNextOffset === 'number' ? item.textNextOffset : null;
+  if (text.length === 0) {
+    return `**Summary text:** 0 of ${total.toLocaleString('en-US')} characters — characterOffset is past this summary's end`;
+  }
+
+  const end = nextOffset ?? total;
+  const start = end - text.length;
+  return join([
+    `**Summary text:** characters ${(start + 1).toLocaleString('en-US')}–${end.toLocaleString('en-US')} of ${total.toLocaleString('en-US')}`,
+    `**Truncated:** ${item.textTruncated === true}`,
+    nextOffset != null ? `next characterOffset: ${nextOffset}` : '_end of summary_',
+  ]);
+}
+
 function renderSummaryItem(item: Record<string, unknown>, i: number): string {
   const named = new Set(SUMMARY_ROW_KEYS);
   const billType = s(item, 'bill', 'type')?.toUpperCase() ?? '';
@@ -605,6 +643,9 @@ function renderSummaryItem(item: Record<string, unknown>, i: number): string {
       : billLine,
   );
 
+  const window = summaryWindowLine(item);
+  if (window) lines.push(window);
+
   // The summary text is the critical data — the whole point of this tool
   lines.push('');
   lines.push(text || '_Summary text not available._');
@@ -614,7 +655,7 @@ function renderSummaryItem(item: Record<string, unknown>, i: number): string {
 }
 
 /** `actionDesc`/`versionCode` and the two update dates are resolved by `pick`. */
-const SUMMARY_ROW_KEYS = ['actionDate', 'text', 'url', 'bill'];
+const SUMMARY_ROW_KEYS = ['actionDate', 'text', 'url', 'bill', ...SUMMARY_WINDOW_KEYS];
 
 /** Fields of a summary row's nested bill reference the heading already renders. */
 const BILL_REF_KEYS = new Set(['congress', 'type', 'number', 'title', 'url']);
@@ -1312,7 +1353,7 @@ function renderSenateVoteItem(item: Record<string, unknown>, i: number): string 
   if (question) lines.push(`**Question:** ${measure ? `${question} (${measure})` : question}`);
 
   const meta = join([
-    f('Date', s(item, 'voteDate')),
+    f('Date', senateVoteDate(item)),
     f('Yeas', s(item, 'yeas')),
     f('Nays', s(item, 'nays')),
   ]);
@@ -1321,6 +1362,18 @@ function renderSenateVoteItem(item: Record<string, unknown>, i: number): string 
   const title = s(item, 'title');
   if (title) lines.push(title);
   return withRowRest(item, lines, SENATE_VOTE_ROW_KEYS);
+}
+
+/**
+ * The resolved calendar date leads, with the menu's own year-less short form
+ * beside it — a row carries both, and the short form is what the Senate's own
+ * vote pages show.
+ */
+function senateVoteDate(item: Record<string, unknown>): string | undefined {
+  const iso = s(item, 'voteDateIso');
+  const published = s(item, 'voteDate');
+  if (iso && published) return `${iso} (${published})`;
+  return iso ?? published;
 }
 
 /** `chamber` is the dispatch marker, implicit in the Senate heading. */
@@ -1332,6 +1385,7 @@ const SENATE_VOTE_ROW_KEYS = new Set([
   'question',
   'measure',
   'voteDate',
+  'voteDateIso',
   'yeas',
   'nays',
   'title',
@@ -1952,12 +2006,20 @@ function renderBillSubresourceSummaryItem(item: Record<string, unknown>, i: numb
   const meta = join([f('Action Date', actionDate), f('Summary Updated', updated)]);
   if (meta) lines.push(meta);
 
+  const window = summaryWindowLine(item);
+  if (window) lines.push(window);
+
   const text = typeof item.text === 'string' ? htmlToMarkdown(item.text) : '';
   if (text) lines.push('', text);
   return withRowRest(item, lines, named);
 }
 
-const BILL_SUMMARY_SUBRESOURCE_ROW_KEYS = ['actionDate', 'updateDate', 'text'];
+const BILL_SUMMARY_SUBRESOURCE_ROW_KEYS = [
+  'actionDate',
+  'updateDate',
+  'text',
+  ...SUMMARY_WINDOW_KEYS,
+];
 
 function pickBillListRenderer(first: Record<string, unknown>): ItemRenderer | undefined {
   if ('title' in first && 'number' in first) return renderBillItem;

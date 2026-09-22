@@ -31,7 +31,7 @@
  * @module services/congress-documents/extract-text-stream
  */
 
-import { decodeCharacterReference } from './extract-text.js';
+import { decodeCharacterReference } from '@/utils/character-references.js';
 
 /** The character window to retain while streaming. */
 export interface TextWindowRequest {
