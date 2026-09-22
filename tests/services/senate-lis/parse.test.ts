@@ -23,6 +23,18 @@ const fixture = (name: string) =>
 const MENU = fixture('menu.xml');
 const CLOTURE = fixture('vote-cloture.xml');
 const AMENDMENT = fixture('vote-amendment.xml');
+/**
+ * Session menus trimmed to the first vote of each month plus the session tail,
+ * so the year walk runs across a whole session. Two sessions ran past December 31
+ * (116/2 and 112/2); the 118/1 slice is the ordinary case that must not roll over.
+ */
+const ROLLOVER_116 = fixture('menu-116-2-rollover.xml');
+const ROLLOVER_112 = fixture('menu-112-2-rollover.xml');
+const DECEMBER_118 = fixture('menu-118-1-december.xml');
+
+/** `voteNumber` → `voteDateIso` for a whole menu. */
+const resolvedDates = (xml: string) =>
+  new Map(parseVoteMenu(xml).map((vote) => [vote.voteNumber, vote.voteDateIso]));
 
 describe('parseVoteMenu', () => {
   const votes = parseVoteMenu(MENU);
@@ -81,6 +93,96 @@ describe('parseVoteMenu', () => {
 
   it('throws when the root element is missing', () => {
     expect(() => parseVoteMenu('<not_a_vote_menu/>')).toThrow(/vote_summary/);
+  });
+});
+
+describe('parseVoteMenu — resolved calendar dates', () => {
+  it('resolves a session that stays inside its congress year', () => {
+    const dates = resolvedDates(DECEMBER_118);
+    expect(dates.get(352)).toBe('2023-12-19');
+    expect(dates.get(326)).toBe('2023-12-04');
+    expect(dates.get(1)).toBe('2023-01-23');
+    for (const iso of dates.values()) expect(iso).toMatch(/^2023-/);
+  });
+
+  it('advances the year at the December → January rollover', () => {
+    const dates = resolvedDates(ROLLOVER_116);
+    expect(dates.get(292)).toBe('2021-01-01');
+    expect(dates.get(291)).toBe('2021-01-01');
+    expect(dates.get(290)).toBe('2020-12-30');
+    expect(dates.get(289)).toBe('2020-12-21');
+    /** The session's own January votes stay in the congress year. */
+    expect(dates.get(1)).toBe('2020-01-06');
+    expect(dates.get(33)).toBe('2020-02-05');
+  });
+
+  it('resolves a second lame-duck rollover in a different congress', () => {
+    const dates = resolvedDates(ROLLOVER_112);
+    expect(dates.get(251)).toBe('2013-01-01');
+    expect(dates.get(250)).toBe('2012-12-30');
+    expect(dates.get(249)).toBe('2012-12-30');
+    expect(dates.get(1)).toBe('2012-01-23');
+  });
+
+  it('leaves the menu-published voteDate exactly as it arrived', () => {
+    const rolled = parseVoteMenu(ROLLOVER_116);
+    expect(rolled[0]).toMatchObject({ voteNumber: 292, voteDate: '01-Jan' });
+    expect(parseVoteMenu(MENU)[0]).toMatchObject({ voteNumber: 339, voteDate: '21-Dec' });
+  });
+
+  it('derives the same dates whether the feed lists newest or oldest first', () => {
+    const newestFirst = `<?xml version="1.0"?><vote_summary><congress>116</congress><session>2</session><congress_year>2020</congress_year><votes><vote><vote_number>00003</vote_number><vote_date>01-Jan</vote_date></vote><vote><vote_number>00002</vote_number><vote_date>30-Dec</vote_date></vote><vote><vote_number>00001</vote_number><vote_date>06-Jan</vote_date></vote></votes></vote_summary>`;
+    const oldestFirst = `<?xml version="1.0"?><vote_summary><congress>116</congress><session>2</session><congress_year>2020</congress_year><votes><vote><vote_number>00001</vote_number><vote_date>06-Jan</vote_date></vote><vote><vote_number>00002</vote_number><vote_date>30-Dec</vote_date></vote><vote><vote_number>00003</vote_number><vote_date>01-Jan</vote_date></vote></votes></vote_summary>`;
+    const expected = new Map([
+      [1, '2020-01-06'],
+      [2, '2020-12-30'],
+      [3, '2021-01-01'],
+    ]);
+    expect(resolvedDates(newestFirst)).toEqual(expected);
+    expect(resolvedDates(oldestFirst)).toEqual(expected);
+  });
+
+  it('falls back to the session nominal year when the menu names no congress year', () => {
+    const session = (number: number) =>
+      resolvedDates(
+        `<?xml version="1.0"?><vote_summary><congress>119</congress><session>${number}</session><votes><vote><vote_number>00001</vote_number><vote_date>09-Jan</vote_date></vote></votes></vote_summary>`,
+      ).get(1);
+    expect(session(1)).toBe('2025-01-09');
+    expect(session(2)).toBe('2026-01-09');
+  });
+
+  it('omits the resolved date when the menu names no year at all', () => {
+    const votes = parseVoteMenu(
+      `<?xml version="1.0"?><vote_summary><votes><vote><vote_number>00001</vote_number><vote_date>09-Jan</vote_date></vote></votes></vote_summary>`,
+    );
+    expect(votes[0]).toMatchObject({ voteNumber: 1, voteDate: '09-Jan' });
+    expect(votes[0]?.voteDateIso).toBeUndefined();
+  });
+
+  it('omits a date it cannot parse and keeps resolving the rows around it', () => {
+    const dates = resolvedDates(
+      `<?xml version="1.0"?><vote_summary><congress>118</congress><session>1</session><congress_year>2023</congress_year><votes>` +
+        `<vote><vote_number>00005</vote_number><vote_date>02-Feb</vote_date></vote>` +
+        `<vote><vote_number>00004</vote_number><vote_date>31-Feb</vote_date></vote>` +
+        `<vote><vote_number>00003</vote_number><vote_date>07-Foo</vote_date></vote>` +
+        `<vote><vote_number>00002</vote_number><vote_date/></vote>` +
+        `<vote><vote_number>00001</vote_number><vote_date>23-Jan</vote_date></vote>` +
+        `</votes></vote_summary>`,
+    );
+    expect(dates.get(1)).toBe('2023-01-23');
+    expect(dates.get(2)).toBeUndefined();
+    expect(dates.get(3)).toBeUndefined();
+    expect(dates.get(4)).toBeUndefined();
+    expect(dates.get(5)).toBe('2023-02-02');
+  });
+
+  it('resolves February 29 only in a leap year', () => {
+    const leapDay = (congressYear: number) =>
+      resolvedDates(
+        `<?xml version="1.0"?><vote_summary><congress>118</congress><session>2</session><congress_year>${congressYear}</congress_year><votes><vote><vote_number>00001</vote_number><vote_date>29-Feb</vote_date></vote></votes></vote_summary>`,
+      ).get(1);
+    expect(leapDay(2024)).toBe('2024-02-29');
+    expect(leapDay(2023)).toBeUndefined();
   });
 });
 

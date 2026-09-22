@@ -82,6 +82,81 @@ function defined<T extends XmlRecord>(
   return out as Partial<{ [K in keyof T]: Exclude<T[K], undefined> }>;
 }
 
+/** Menu rows publish `DD-Mon`; the year lives on the menu root, not the row. */
+const MENU_DATE_RE = /^(\d{1,2})-([A-Za-z]{3})$/;
+/** Indexed by calendar order — the index is the month the walk compares. */
+const MONTH_ABBREVIATIONS = 'jan feb mar apr may jun jul aug sep oct nov dec'.split(' ');
+
+/** The first Congress sat in 1789, and each one since has opened two years later. */
+const FIRST_CONGRESS_YEAR = 1789;
+
+/** Day and 0-based month of a `DD-Mon` menu date, or `undefined` when it is neither. */
+function parseMenuDate(value: string | undefined): { day: number; month: number } | undefined {
+  const match = value === undefined ? null : MENU_DATE_RE.exec(value);
+  if (!match) return;
+  const month = MONTH_ABBREVIATIONS.indexOf((match[2] as string).toLowerCase());
+  return month === -1 ? undefined : { day: Number(match[1]), month };
+}
+
+/** `YYYY-MM-DD`, or `undefined` when the day does not exist in that month. */
+function isoDate(year: number, month: number, day: number): string | undefined {
+  const date = new Date(Date.UTC(year, month, day));
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month || date.getUTCDate() !== day) {
+    return;
+  }
+  return `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+/** The calendar year a congress's session opens in — the 118th's first session opened in 2023. */
+function nominalSessionYear(congress: number, session: number): number | undefined {
+  if (!Number.isInteger(congress) || congress < 1) return;
+  if (session !== 1 && session !== 2) return;
+  return FIRST_CONGRESS_YEAR + 2 * (congress - 1) + (session - 1);
+}
+
+/** The year the menu's own dates start in: its `<congress_year>`, else the nominal one. */
+function menuBaseYear(root: XmlRecord): number | undefined {
+  const published = num(root.congress_year);
+  if (Number.isInteger(published) && published >= FIRST_CONGRESS_YEAR) return published;
+  return nominalSessionYear(num(root.congress), num(root.session));
+}
+
+/**
+ * Resolve each row's calendar date from the menu's year and the session's vote
+ * sequence.
+ *
+ * The rows publish `DD-Mon` and the root names only the year the session opened,
+ * but a session can sit past December 31 — the 116th Congress cast votes 291 and
+ * 292 of its second session on January 1, 2021, under a `<congress_year>` of
+ * 2020. Roll numbers are chronological within a session, so walking them in
+ * ascending order and advancing the year wherever the month decreases resolves
+ * that tail without guessing. A row whose date does not parse is left unresolved
+ * rather than pinned to a neighbouring year.
+ */
+function resolveSessionDates(
+  voteNumbers: number[],
+  voteDates: (string | undefined)[],
+  baseYear: number | undefined,
+): (string | undefined)[] {
+  const resolved = new Array<string | undefined>(voteNumbers.length);
+  if (baseYear === undefined) return resolved;
+
+  const ascending = voteNumbers
+    .map((_, index) => index)
+    .sort((a, b) => (voteNumbers[a] as number) - (voteNumbers[b] as number));
+
+  let year = baseYear;
+  let previousMonth: number | undefined;
+  for (const index of ascending) {
+    const date = parseMenuDate(voteDates[index]);
+    if (!date) continue;
+    if (previousMonth !== undefined && date.month < previousMonth) year++;
+    previousMonth = date.month;
+    resolved[index] = isoDate(year, date.month, date.day);
+  }
+  return resolved;
+}
+
 /**
  * Menu `<question>` is mixed content: plain text for most votes, but amendment
  * votes nest a `<measure>` ("On the Amendment <measure>S.Amdt. 3331</measure>").
@@ -106,8 +181,14 @@ export function parseVoteMenu(xml: string): SenateVoteSummary[] {
 
   const votesNode = root.votes as { vote?: unknown } | undefined;
   const votes = toArray(votesNode?.vote) as XmlRecord[];
+  const voteDates = votes.map((vote) => opt(vote.vote_date));
+  const resolvedDates = resolveSessionDates(
+    votes.map((vote) => num(vote.vote_number)),
+    voteDates,
+    menuBaseYear(root),
+  );
 
-  return votes.map((vote): SenateVoteSummary => {
+  return votes.map((vote, index): SenateVoteSummary => {
     const { question, measure } = questionParts(vote.question);
     const tally = (vote.vote_tally ?? {}) as XmlRecord;
     return {
@@ -116,7 +197,8 @@ export function parseVoteMenu(xml: string): SenateVoteSummary[] {
       yeas: num(tally.yeas),
       nays: num(tally.nays),
       ...defined({
-        voteDate: opt(vote.vote_date),
+        voteDate: voteDates[index],
+        voteDateIso: resolvedDates[index],
         issue: opt(vote.issue),
         question,
         measure,

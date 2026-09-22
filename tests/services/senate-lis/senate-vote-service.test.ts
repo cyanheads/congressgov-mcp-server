@@ -18,6 +18,8 @@ const fixture = (name: string) =>
   readFileSync(new URL(`./fixtures/${name}`, import.meta.url), 'utf8');
 const MENU = fixture('menu.xml');
 const CLOTURE = fixture('vote-cloture.xml');
+/** A session whose last two votes were cast on January 1 of the following year. */
+const ROLLOVER = fixture('menu-116-2-rollover.xml');
 
 /** A 200 HTML error page — what Senate.gov serves for an unknown congress/session/vote. */
 const HTML_404_PAGE =
@@ -91,6 +93,44 @@ describe('SenateVoteService', () => {
       );
       expect(page2.data.map((v) => v.voteNumber)).toEqual([336, 1]);
       expect(page2.pagination).toEqual({ count: 4, nextOffset: null });
+    });
+
+    it('resolves the same calendar date under either order and at any offset', async () => {
+      mockFetch.mockResolvedValue(xmlResponse(ROLLOVER));
+      const page = (order: 'recent' | 'oldest', offset: number, limit = 4) =>
+        service.listVotes({ congress: 116, session: 2, order, limit, offset }, createMockContext());
+
+      const newest = await page('recent', 0);
+      expect(newest.data.map((v) => [v.voteNumber, v.voteDateIso])).toEqual([
+        [292, '2021-01-01'],
+        [291, '2021-01-01'],
+        [290, '2020-12-30'],
+        [289, '2020-12-21'],
+      ]);
+
+      const oldest = await page('oldest', 0);
+      expect(oldest.data.map((v) => [v.voteNumber, v.voteDateIso])).toEqual([
+        [1, '2020-01-06'],
+        [33, '2020-02-05'],
+        [63, '2020-03-02'],
+        [81, '2020-05-04'],
+      ]);
+
+      /** The tail of the ascending pages is the head of the descending one, reversed. */
+      const lastAscending = await page('oldest', 11);
+      expect(lastAscending.data.map((v) => [v.voteNumber, v.voteDateIso])).toEqual([
+        [289, '2020-12-21'],
+        [290, '2020-12-30'],
+        [291, '2021-01-01'],
+        [292, '2021-01-01'],
+      ]);
+      expect(lastAscending.pagination).toEqual({ count: 15, nextOffset: null });
+
+      const middle = await page('recent', 5, 2);
+      expect(middle.data.map((v) => [v.voteNumber, v.voteDateIso])).toEqual([
+        [225, '2020-11-09'],
+        [200, '2020-10-01'],
+      ]);
     });
 
     it('treats a 200 HTML page as not found', async () => {

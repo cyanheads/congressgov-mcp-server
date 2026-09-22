@@ -53,6 +53,39 @@ describe('formatVotes — Senate list', () => {
   });
 });
 
+describe('formatVotes — Senate list dates', () => {
+  const listRow = (row: Record<string, unknown>) =>
+    render({
+      chamber: 'senate',
+      data: [{ chamber: 'senate', voteNumber: 292, yeas: 85, nays: 11, ...row }],
+      pagination: { count: 1, nextOffset: null },
+    });
+
+  it('leads with the resolved date and keeps the menu form beside it', () => {
+    expect(listRow({ voteDate: '01-Jan', voteDateIso: '2021-01-01' })).toContain(
+      '**Date:** 2021-01-01 (01-Jan) | **Yeas:** 85 | **Nays:** 11',
+    );
+  });
+
+  it('renders the menu date alone when no date could be resolved', () => {
+    expect(listRow({ voteDate: '01-Jan' })).toContain(
+      '**Date:** 01-Jan | **Yeas:** 85 | **Nays:** 11',
+    );
+  });
+
+  it('renders the resolved date alone when the menu published none', () => {
+    expect(listRow({ voteDateIso: '2021-01-01' })).toContain(
+      '**Date:** 2021-01-01 | **Yeas:** 85 | **Nays:** 11',
+    );
+  });
+
+  it('omits the date entirely when the row carries neither', () => {
+    const text = listRow({});
+    expect(text).toContain('**Yeas:** 85 | **Nays:** 11');
+    expect(text).not.toContain('**Date:**');
+  });
+});
+
 describe('formatVotes — Senate detail', () => {
   const text = render({
     chamber: 'senate',

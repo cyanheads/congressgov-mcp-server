@@ -1,0 +1,202 @@
+<?xml version="1.0" encoding="UTF-8"?><vote_summary>
+  <congress>116</congress>
+  <session>2</session>
+  <congress_year>2020</congress_year>
+  <votes>
+    <vote>
+      <vote_number>00292</vote_number>
+      <vote_date>01-Jan</vote_date>
+      <issue>H.R. 6395</issue>
+      <question>On Overriding the Veto
+         </question>
+      <result>Veto Overridden</result>
+      <vote_tally>
+        <yeas>81</yeas>
+        <nays>13</nays>
+      </vote_tally>
+      <title>Shall the Bill H.R. 6395 Pass, the Objections of the President of the United States to the Contrary Notwithstanding?; To authorize appropriations for fiscal year 2021 for military activities of the Department of Defense, for military construction, and for defense activities of the Department of Energy, to prescribe military personnel strengths for such fiscal year, and for other purposes.</title>
+    </vote>
+    <vote>
+      <vote_number>00291</vote_number>
+      <vote_date>01-Jan</vote_date>
+      <issue>H.R. 6395</issue>
+      <question>On the Cloture Motion
+         </question>
+      <result>Agreed to</result>
+      <vote_tally>
+        <yeas>80</yeas>
+        <nays>12</nays>
+      </vote_tally>
+      <title>Motion to Invoke Cloture on the Veto Message on H.R. 6395; To authorize appropriations for fiscal year 2021 for military activities of the Department of Defense, for military construction, and for defense activities of the Department of Energy, to prescribe military personnel strengths for such fiscal year, and for other purposes.</title>
+    </vote>
+    <vote>
+      <vote_number>00290</vote_number>
+      <vote_date>30-Dec</vote_date>
+      <issue>H.R. 6395</issue>
+      <question>On the Motion to Proceed
+         </question>
+      <result>Agreed to</result>
+      <vote_tally>
+        <yeas>80</yeas>
+        <nays>12</nays>
+      </vote_tally>
+      <title>Motion to Proceed to the Consideration of the Veto Message on H.R. 6395; To authorize appropriations for fiscal year 2021 for military activities of the Department of Defense, for military construction, and for defense activities of the Department of Energy, to prescribe military personnel strengths for such fiscal year, and for other purposes.</title>
+    </vote>
+    <vote>
+      <vote_number>00289</vote_number>
+      <vote_date>21-Dec</vote_date>
+      <issue>H.R. 133</issue>
+      <question>On the Motion
+         </question>
+      <result>Agreed to</result>
+      <vote_tally>
+        <yeas>92</yeas>
+        <nays>6</nays>
+      </vote_tally>
+      <title>Motion to Concur in the House Amendment to the Senate Amendment to H.R. 133; Making consolidated appropriations for the fiscal year ending September 30, 2021, providing coronavirus emergency response and relief, and for other purposes.</title>
+    </vote>
+    <vote>
+      <vote_number>00241</vote_number>
+      <vote_date>01-Dec</vote_date>
+      <issue>PN2094</issue>
+      <question>On the Nomination
+         </question>
+      <result>Confirmed</result>
+      <vote_tally>
+        <yeas>53</yeas>
+        <nays>39</nays>
+      </vote_tally>
+      <title>Confirmation: Taylor B. McNeel, of Mississippi, to be U.S. District Judge for the Southern District of Mississippi</title>
+    </vote>
+    <vote>
+      <vote_number>00225</vote_number>
+      <vote_date>09-Nov</vote_date>
+      <issue>PN1661</issue>
+      <question>On the Cloture Motion
+         </question>
+      <result>Agreed to</result>
+      <vote_tally>
+        <yeas>62</yeas>
+        <nays>23</nays>
+      </vote_tally>
+      <title>Motion to Invoke Cloture: James Ray Knepp II to be U.S. District Judge for the Northern District of Ohio</title>
+    </vote>
+    <vote>
+      <vote_number>00200</vote_number>
+      <vote_date>01-Oct</vote_date>
+      <issue>S. 4653</issue>
+      <question>On Cloture on the Motion to Proceed
+         </question>
+      <result>Rejected</result>
+      <vote_tally>
+        <yeas>51</yeas>
+        <nays>43</nays>
+      </vote_tally>
+      <title>Motion to Invoke Cloture: Motion to Proceed to S. 4653; A bill to protect the healthcare of hundreds of millions of people of the United States and prevent efforts of the Department of Justice to advocate courts to strike down the Patient Protection and Affordable Care Act.</title>
+    </vote>
+    <vote>
+      <vote_number>00158</vote_number>
+      <vote_date>08-Sep</vote_date>
+      <issue>PN1662</issue>
+      <question>On the Cloture Motion
+         </question>
+      <result>Agreed to</result>
+      <vote_tally>
+        <yeas>83</yeas>
+        <nays>6</nays>
+      </vote_tally>
+      <title>Motion to Invoke Cloture: Brett H. Ludwig to be U.S. District Judge for the Eastern District of Wisconsin</title>
+    </vote>
+    <vote>
+      <vote_number>00154</vote_number>
+      <vote_date>03-Aug</vote_date>
+      <issue>PN1683</issue>
+      <question>On the Cloture Motion
+         </question>
+      <result>Agreed to</result>
+      <vote_tally>
+        <yeas>78</yeas>
+        <nays>14</nays>
+      </vote_tally>
+      <title>Motion to Invoke Cloture: Mark Wesley Menezes to be Deputy Secretary of Energy</title>
+    </vote>
+    <vote>
+      <vote_number>00129</vote_number>
+      <vote_date>01-Jul</vote_date>
+      <issue>S. 4049</issue>
+      <question>On the Motion to Table
+        <measure>S.Amdt. 2011</measure></question>
+      <result>Agreed to</result>
+      <vote_tally>
+        <yeas>60</yeas>
+        <nays>33</nays>
+      </vote_tally>
+      <title>Motion to Table Paul Amdt. No. 2011; To withdraw all United States Armed Forces from Afghanistan.</title>
+    </vote>
+    <vote>
+      <vote_number>00103</vote_number>
+      <vote_date>01-Jun</vote_date>
+      <issue>PN1430</issue>
+      <question>On the Nomination
+         </question>
+      <result>Confirmed</result>
+      <vote_tally>
+        <yeas>55</yeas>
+        <nays>22</nays>
+      </vote_tally>
+      <title>Confirmation: John Leonard Badalamenti, of Florida, to be U.S. District Judge for the Middle District of Florida</title>
+    </vote>
+    <vote>
+      <vote_number>00081</vote_number>
+      <vote_date>04-May</vote_date>
+      <issue>PN1247</issue>
+      <question>On the Nomination
+         </question>
+      <result>Confirmed</result>
+      <vote_tally>
+        <yeas>87</yeas>
+        <nays>0</nays>
+      </vote_tally>
+      <title>Confirmation: Robert J. Feitel, of Maryland, to be Inspector General of Nuclear Regulatory Commission</title>
+    </vote>
+    <vote>
+      <vote_number>00063</vote_number>
+      <vote_date>02-Mar</vote_date>
+      <issue>S. 2657</issue>
+      <question>On Cloture on the Motion to Proceed
+         </question>
+      <result>Agreed to</result>
+      <vote_tally>
+        <yeas>84</yeas>
+        <nays>3</nays>
+      </vote_tally>
+      <title>Motion to Invoke Cloture: Motion to Proceed to S. 2657; A bill to support innovation in advanced geothermal research and development, and for other purposes.</title>
+    </vote>
+    <vote>
+      <vote_number>00033</vote_number>
+      <vote_date>05-Feb</vote_date>
+      <issue>H.Res. 755</issue>
+      <question>Guilty or Not Guilty
+         </question>
+      <result>Not Guilty</result>
+      <vote_tally>
+        <yeas>48</yeas>
+        <nays>52</nays>
+      </vote_tally>
+      <title>Article I, Articles of Impeachment Against President Donald John Trump; A resolution impeaching Donald John Trump, President of the United States, for high crimes and misdemeanors.</title>
+    </vote>
+    <vote>
+      <vote_number>00001</vote_number>
+      <vote_date>06-Jan</vote_date>
+      <issue>PN1039</issue>
+      <question>On the Cloture Motion
+         </question>
+      <result>Agreed to</result>
+      <vote_tally>
+        <yeas>86</yeas>
+        <nays>5</nays>
+      </vote_tally>
+      <title>Motion to Invoke Cloture on Jovita Carranza, of Illinois, to be Administrator of the Small Business Administration</title>
+    </vote>
+  </votes>
+</vote_summary>

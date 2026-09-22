@@ -18,8 +18,15 @@ export type SenateVoteSummary = {
   chamber: 'senate';
   /** Roll call number within the session (1-based, not zero-padded). */
   voteNumber: number;
-  /** Short date as published in the menu, e.g. "21-Dec" (no year — derive from session). */
+  /** Short date exactly as the menu publishes it, e.g. "21-Dec" — the feed carries no year. */
   voteDate?: string;
+  /**
+   * The row's calendar date as `YYYY-MM-DD`, derived from the menu's own
+   * `<congress_year>` and the session's vote sequence. A session can sit past
+   * December 31, so this is not the session's opening year for every row. Absent
+   * when the published short date does not parse or the menu names no year.
+   */
+  voteDateIso?: string;
   /** Associated measure label, e.g. "H.R. 10545", "PN373". */
   issue?: string;
   /** Vote question, e.g. "On Passage of the Bill", "On the Amendment". */
