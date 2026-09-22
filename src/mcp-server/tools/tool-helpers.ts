@@ -340,6 +340,25 @@ export const DEFAULT_CONTENT_CHARACTERS = 25_000;
 export const MAX_CONTENT_CHARACTERS = 100_000;
 
 /**
+ * Characters of serialized summary rows one page carries before it stops adding
+ * them. Measured against live pages: a full default page of the browse feed
+ * (`limit` 20) runs about 35,000 characters, so the budget clears an unfiltered
+ * call without firing, while a `limit: 250` page — 401,000 characters today —
+ * stops at roughly an eighth of that. Row pagination carries the remainder.
+ */
+export const SUMMARY_PAGE_CHARACTERS = 50_000;
+
+/**
+ * Characters of one summary row's `text` a response returns when the caller
+ * names no window. Matches `DEFAULT_CONTENT_CHARACTERS` deliberately — a
+ * response carries about this much body text whichever surface produced it —
+ * and sits above the largest row measured on a 250-row browse page (25,210), so
+ * the browse feed windows outliers only. A single bill's summaries are the
+ * reason it exists: one enacted omnibus summary runs past 200,000 characters.
+ */
+export const DEFAULT_SUMMARY_TEXT_CHARACTERS = 25_000;
+
+/**
  * Input fields shared by every `content` operation: which format to read, and
  * the character window to return.
  *
@@ -429,9 +448,9 @@ export const documentErrorContracts = [
     reason: 'offset_past_end',
     thrownBy: 'service',
     retryable: false,
-    when: 'characterOffset is at or beyond the last character of the document, so the window would be empty.',
+    when: "characterOffset is at or beyond the last character of every text the call would window — the document on 'content', or every returned row's summary text on 'summaries' — so the window would be empty.",
     recovery:
-      'Restart the walk at characterOffset 0 and follow nextOffset, which goes null once the document has been read to the end.',
+      "Restart the walk at characterOffset 0 and follow the response's nextOffset (or a summary row's textNextOffset), which goes null once the text has been read to the end.",
   },
 ] as const satisfies readonly ErrorContract[];
 

@@ -63,11 +63,16 @@ type JsonSchema = {
   required?: string[];
   items?: JsonSchema;
   additionalProperties?: unknown;
+  default?: unknown;
+  minimum?: number;
+  maximum?: number;
+  description?: string;
 };
 
 type AdvertisedTool = {
   name: string;
   title?: string;
+  inputSchema?: JsonSchema;
   outputSchema?: JsonSchema;
 };
 
@@ -235,6 +240,24 @@ describe('tool catalog contract', () => {
         }
       }
     }
+  });
+
+  it('advertises the summary version selector and its character window', () => {
+    const advertised = tools.find(({ name }) => name === billLookupTool.name);
+    const properties = advertised?.inputSchema?.properties ?? {};
+
+    expect(properties.versionCode).toMatchObject({ type: 'string' });
+    expect(properties.versionCode?.description).toContain('versionCode');
+    expect(advertised?.inputSchema?.required ?? []).not.toContain('versionCode');
+
+    /** Re-describing a defaulted field must not drop its default or its bounds. */
+    expect(properties.characterOffset).toMatchObject({ default: 0, minimum: 0 });
+    expect(properties.characterLimit).toMatchObject({
+      default: 25_000,
+      minimum: 1,
+      maximum: 100_000,
+    });
+    expect(properties.characterLimit?.description).toContain("'summaries'");
   });
 
   it('advertises the exact explicit title inventory', () => {

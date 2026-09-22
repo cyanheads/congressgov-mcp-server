@@ -8,12 +8,18 @@ import { validationError } from '@cyanheads/mcp-ts-core/errors';
 
 import { formatBills } from '@/mcp-server/tools/format-helpers.js';
 import {
+  summaryContinuationCall,
+  summaryWindowNotice,
+  windowSummaryPage,
+} from '@/mcp-server/tools/summary-window.js';
+import {
   buildEffectiveQuery,
   congressErrorContracts,
   documentErrorContracts,
   documentWindowInput,
   listEnrichment,
   listOrDetail,
+  MAX_CONTENT_CHARACTERS,
   normalizeOptionalString,
   notifyIfNoMatches,
   numericIdentifier,
@@ -52,7 +58,7 @@ const SUB_RESOURCE_MAP: Record<string, string> = {
 
 export const billLookupTool = tool('congressgov_bill_lookup', {
   title: 'Congress.gov Bill Lookup',
-  description: `Browse and retrieve U.S. legislative bill data from Congress.gov. Discover bills by filtering on congress, bill type, and date range — there is no keyword search. Use 'list' to browse (requires congress, defaults to most-recently-updated first), 'get' for full bill detail (sponsor, policy area, CBO estimates, law info), or drill into a specific bill with 'actions', 'amendments', 'cosponsors', 'committees', 'subjects', 'summaries', 'text', 'titles', or 'related' (each requires congress + billType + billNumber). 'text' lists the published versions and their format URLs; 'content' then reads one version's actual text, a bounded character window at a time.`,
+  description: `Browse and retrieve U.S. legislative bill data from Congress.gov. Discover bills by filtering on congress, bill type, and date range — there is no keyword search. Use 'list' to browse (requires congress, defaults to most-recently-updated first), 'get' for full bill detail (sponsor, policy area, CBO estimates, law info), or drill into a specific bill with 'actions', 'amendments', 'cosponsors', 'committees', 'subjects', 'summaries', 'text', 'titles', or 'related' (each requires congress + billType + billNumber). 'text' lists the published versions and their format URLs; 'content' then reads one version's actual text, a bounded character window at a time. 'summaries' takes an optional versionCode selector and returns each row's text a bounded character window at a time — a row past the window carries textTotalCharacters/textTruncated/textNextOffset, and characterOffset reads on from there.`,
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
   errors: [...congressErrorContracts, ...documentErrorContracts],
   input: z.object({
@@ -90,7 +96,19 @@ export const billLookupTool = tool('congressgov_bill_lookup', {
       .describe(
         "Which text version 'content' reads, 0-based against the same order 'text' returns — 0 is the most recent version. Ignored by other operations.",
       ),
+    versionCode: z
+      .string()
+      .optional()
+      .describe(
+        "Which summary version 'summaries' returns — the versionCode a summary row carries ('00' introduced, '49' public law). Selection runs over the bill's whole summary list, which Congress.gov publishes no filter for, and limit/offset then page the matching rows. Omit to return every version. Ignored by other operations.",
+      ),
     ...documentWindowInput,
+    characterOffset: documentWindowInput.characterOffset.describe(
+      "First character to return, 0-based — of the document on 'content', and of every returned row's summary text on 'summaries'. Offsets are exact and are never snapped to a section or paragraph break, so feeding back the response's nextOffset (or a summary row's textNextOffset) walks the whole text with every character returned exactly once.",
+    ),
+    characterLimit: documentWindowInput.characterLimit.describe(
+      `Maximum characters to return (1-${MAX_CONTENT_CHARACTERS}) — for the document window on 'content', and for each row's summary text on 'summaries'. Legislative documents run past a million characters and an enacted bill's summary past two hundred thousand, so either takes several windows.`,
+    ),
   }),
   output: listOrDetail(
     { bill: 'record', content: 'record' },
@@ -246,6 +264,118 @@ export const billLookupTool = tool('congressgov_bill_lookup', {
           documentTitle: `${input.billType.toUpperCase()} ${billNumber} — ${versionType}`,
         },
       };
+    }
+
+    if (input.operation === 'summaries') {
+      /** Narrowed above; a closure below reads it, where the narrowing is lost. */
+      const billType = input.billType;
+      const versionCode = normalizeOptionalString(input.versionCode);
+      /**
+       * Congress.gov publishes no version filter on the summaries sub-resource,
+       * so a selection reads the bill's whole list — the API's own page ceiling
+       * — and matches client-side. Without one the caller's own page is fetched
+       * unchanged.
+       */
+      const result = await api.getBillSubResource(
+        {
+          congress: input.congress,
+          billType: input.billType,
+          billNumber,
+          subResource: 'summaries',
+          limit: versionCode ? 250 : input.limit,
+          offset: versionCode ? 0 : input.offset,
+        },
+        ctx,
+      );
+
+      let page = result;
+      if (versionCode) {
+        const matched = result.data.filter((row) => row.versionCode === versionCode);
+        const selected = matched.slice(input.offset, input.offset + input.limit);
+        page = {
+          ...result,
+          data: selected,
+          pagination: {
+            count: matched.length,
+            nextOffset:
+              input.offset + selected.length < matched.length
+                ? input.offset + selected.length
+                : null,
+          },
+        };
+      }
+
+      const bounded = windowSummaryPage(page, {
+        offset: input.offset,
+        characterOffset: input.characterOffset,
+        characterLimit: input.characterLimit,
+      });
+
+      if (bounded.offsetPastEnd) {
+        throw ctx.fail(
+          'offset_past_end',
+          `characterOffset ${input.characterOffset} is at or past the end of every summary returned for ${input.billType.toUpperCase()} ${billNumber}.`,
+          {
+            ...ctx.recoveryFor('offset_past_end'),
+            characterOffset: input.characterOffset,
+            versionCode,
+          },
+        );
+      }
+
+      ctx.log.info('Bill summaries retrieved', {
+        congress: input.congress,
+        billType: input.billType,
+        billNumber,
+        versionCode,
+        count: bounded.page.data.length,
+        droppedRows: bounded.droppedRows,
+        windowedRows: bounded.windowed.length,
+      });
+      ctx.enrich.echo(
+        buildEffectiveQuery(
+          `summaries for ${input.billType.toUpperCase()} ${billNumber} in the ${input.congress}th Congress`,
+          { versionCode },
+        ),
+      );
+      ctx.enrich.total(bounded.page.pagination.count);
+
+      if (versionCode && bounded.page.data.length === 0) {
+        const available = [
+          ...new Set(
+            result.data
+              .map((row) => row.versionCode)
+              .filter((code): code is string => typeof code === 'string'),
+          ),
+        ];
+        ctx.enrich.notice(
+          `No summary with versionCode '${versionCode}' for ${input.billType.toUpperCase()} ${billNumber}.${
+            available.length > 0
+              ? ` Versions published: ${available.join(', ')}.`
+              : ' Congress.gov publishes no summaries for this bill.'
+          }`,
+        );
+        return bounded.page;
+      }
+
+      notifyIfNoMatches(
+        ctx,
+        bounded.page,
+        `No summaries found for ${input.billType.toUpperCase()} ${billNumber}.`,
+      );
+
+      const notice = summaryWindowNotice(bounded, input.limit, (row) =>
+        summaryContinuationCall({
+          congress: input.congress,
+          billType,
+          billNumber,
+          versionCode: typeof row.row.versionCode === 'string' ? row.row.versionCode : versionCode,
+          characterOffset: row.nextOffset ?? 0,
+        }),
+      );
+      if (notice) ctx.enrich.notice(notice);
+
+      return bounded.page;
     }
 
     const subResource = SUB_RESOURCE_MAP[input.operation] ?? input.operation;

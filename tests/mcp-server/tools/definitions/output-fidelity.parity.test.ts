@@ -5,13 +5,14 @@
  * structuredContent, Claude Desktop reads content[]), so a value present in one
  * and absent from the other is invisible to half the fleet.
  *
- * Resolves cyanheads/congressgov-mcp-server#45, #50, #51, #55.
+ * Resolves cyanheads/congressgov-mcp-server#45, #50, #51, #55, #58, #67, #73.
  *
  * @module tests/mcp-server/tools/definitions/output-fidelity.parity.test
  */
 
-import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/services/congress-api/congress-api-service.js', () => ({
   getCongressApi: vi.fn(),
@@ -25,7 +26,9 @@ import { crsReportsTool } from '@/mcp-server/tools/definitions/crs-reports.tool.
 import { dailyRecordTool } from '@/mcp-server/tools/definitions/daily-record.tool.js';
 import { enactedLawsTool } from '@/mcp-server/tools/definitions/enacted-laws.tool.js';
 import { memberLookupTool } from '@/mcp-server/tools/definitions/member-lookup.tool.js';
+import { rollVotesTool } from '@/mcp-server/tools/definitions/roll-votes.tool.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
+import { initSenateVoteService } from '@/services/senate-lis/senate-vote-service.js';
 
 const mockApi = {
   listLaws: vi.fn(),
@@ -286,6 +289,153 @@ describe('#58 — list boundaries reach content[] while structuredContent keeps 
     expect(joinText(billLookupTool.format!(result))).toContain(
       'First item;\nSecond item;\n\nAfterward.',
     );
+  });
+});
+
+describe('#73 — content[] decodes each character reference once; structuredContent keeps the source', () => {
+  const rawSummary = '<p>The text literally reads &amp;lt;b&amp;gt; &#8212; not a tag.</p>';
+  const rendered = 'The text literally reads &lt;b&gt; — not a tag.';
+
+  it('bill_summaries', async () => {
+    mockApi.listSummaries.mockResolvedValue({
+      data: [{ text: rawSummary, bill: { congress: 119, type: 'HR', number: '73' } }],
+      pagination: { count: 1, nextOffset: null },
+    });
+
+    const result = await runToolContract(billSummariesTool, { congress: 119, billType: 'hr' });
+
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toMatchObject({ data: [{ text: rawSummary }] });
+    const content = joinText(result.content as Array<{ type: string; text?: string }>);
+    expect(content).toContain(rendered);
+    expect(content).not.toContain('<b>');
+  });
+
+  it('bill_lookup summaries', async () => {
+    mockApi.getBillSubResource.mockResolvedValue({
+      data: [{ actionDesc: 'Introduced in House', text: rawSummary }],
+      pagination: { count: 1, nextOffset: null },
+    });
+
+    const result = await runToolContract(billLookupTool, {
+      operation: 'summaries',
+      congress: 119,
+      billType: 'hr',
+      billNumber: 73,
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toMatchObject({ data: [{ text: rawSummary }] });
+    const content = joinText(result.content as Array<{ type: string; text?: string }>);
+    expect(content).toContain(rendered);
+    expect(content).not.toContain('<b>');
+  });
+});
+
+describe('#70 — a windowed summary keeps its HTML in structuredContent and renders in content[]', () => {
+  /** Two paragraphs, past the default per-row window so both surfaces bound it. */
+  const rawSummary = `<p><strong>Widget Act</strong></p><p>${'The bill directs the Secretary to report. '.repeat(700)}</p>`;
+
+  it('bill_summaries', async () => {
+    mockApi.listSummaries.mockResolvedValue({
+      data: [
+        { versionCode: '00', text: rawSummary, bill: { congress: 119, type: 'HR', number: '70' } },
+      ],
+      pagination: { count: 1, nextOffset: null },
+    });
+
+    const result = await runToolContract(billSummariesTool, { congress: 119, billType: 'hr' });
+    const structured = billSummariesTool.output.parse(result.structuredContent) as {
+      data: Array<Record<string, unknown>>;
+    };
+    const row = structured.data[0] as Record<string, unknown>;
+
+    /** The window is the upstream HTML, unmodified — only shorter. */
+    expect(rawSummary.startsWith(row.text as string)).toBe(true);
+    expect(row.textTotalCharacters).toBe(rawSummary.length);
+
+    const content = joinText(result.content as Array<{ type: string; text?: string }>);
+    expect(content).toContain('**Widget Act**');
+    expect(content).not.toContain('<strong>');
+    expect(content).toContain(`of ${rawSummary.length.toLocaleString('en-US')}`);
+  });
+
+  it('bill_lookup summaries', async () => {
+    mockApi.getBillSubResource.mockResolvedValue({
+      data: [{ actionDesc: 'Introduced in House', versionCode: '00', text: rawSummary }],
+      pagination: { count: 1, nextOffset: null },
+    });
+
+    const result = await runToolContract(billLookupTool, {
+      operation: 'summaries',
+      congress: 119,
+      billType: 'hr',
+      billNumber: 70,
+      characterLimit: 300,
+    });
+    const structured = billLookupTool.output.parse(result.structuredContent) as {
+      data?: Array<Record<string, unknown>>;
+    };
+    const row = structured.data?.[0] as Record<string, unknown>;
+
+    expect(row.text).toBe(rawSummary.slice(0, row.textNextOffset as number));
+    expect(row.textTruncated).toBe(true);
+    expect((row.text as string).length).toBeLessThanOrEqual(300);
+
+    const content = joinText(result.content as Array<{ type: string; text?: string }>);
+    expect(content).toContain('**Widget Act**');
+    expect(content).not.toContain('<p>');
+    expect(content).toContain('next characterOffset:');
+  });
+});
+
+describe('#67 — Senate list rows carry a resolved vote date on both surfaces', () => {
+  const rolloverMenu = readFileSync(
+    new URL('../../../services/senate-lis/fixtures/menu-116-2-rollover.xml', import.meta.url),
+    'utf8',
+  );
+
+  beforeEach(() => {
+    initSenateVoteService();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        headers: new Headers(),
+        text: async () => rolloverMenu,
+      })),
+    );
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('survives the declared output schema and renders in content[]', async () => {
+    const result = await runToolContract(rollVotesTool, {
+      operation: 'list',
+      chamber: 'senate',
+      congress: 116,
+      session: 2,
+      limit: 3,
+      order: 'recent',
+    });
+
+    expect(result.isError).toBeFalsy();
+    const structured = rollVotesTool.output.parse(result.structuredContent) as {
+      data?: Array<Record<string, unknown>>;
+    };
+    expect(structured.data?.map((row) => [row.voteNumber, row.voteDate, row.voteDateIso])).toEqual([
+      [292, '01-Jan', '2021-01-01'],
+      [291, '01-Jan', '2021-01-01'],
+      [290, '30-Dec', '2020-12-30'],
+    ]);
+
+    const content = joinText(result.content as Array<{ type: string; text?: string }>);
+    expect(content).toContain('**Date:** 2021-01-01 (01-Jan)');
+    expect(content).toContain('**Date:** 2020-12-30 (30-Dec)');
   });
 });
 

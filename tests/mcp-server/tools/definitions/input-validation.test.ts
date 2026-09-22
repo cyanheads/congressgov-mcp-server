@@ -98,6 +98,42 @@ describe('billLookupTool — Zod schema validation', () => {
       billLookupTool.input.parse({ operation: 'list', congress: 118, offset: -1 }),
     ).toThrow();
   });
+
+  // ── #70: the summaries version selector and the shared character window ──
+
+  it('accepts a versionCode string on summaries', () => {
+    expect(
+      billLookupTool.input.parse({
+        operation: 'summaries',
+        congress: 118,
+        billType: 'hr',
+        billNumber: 2882,
+        versionCode: '49',
+      }).versionCode,
+    ).toBe('49');
+  });
+
+  it('leaves versionCode undefined when it is omitted', () => {
+    expect(
+      billLookupTool.input.parse({ operation: 'summaries', congress: 118 }).versionCode,
+    ).toBeUndefined();
+  });
+
+  it('rejects a non-string versionCode', () => {
+    expect(() =>
+      billLookupTool.input.parse({ operation: 'summaries', congress: 118, versionCode: 49 }),
+    ).toThrow();
+  });
+
+  it('keeps the character-window bounds after the summaries-aware descriptions', () => {
+    const base = { operation: 'summaries', congress: 118 };
+    expect(() => billLookupTool.input.parse({ ...base, characterOffset: -1 })).toThrow();
+    expect(() => billLookupTool.input.parse({ ...base, characterLimit: 0 })).toThrow();
+    expect(() => billLookupTool.input.parse({ ...base, characterLimit: 100_001 })).toThrow();
+    expect(billLookupTool.input.parse({ ...base, characterLimit: 100_000 }).characterLimit).toBe(
+      100_000,
+    );
+  });
 });
 
 describe('memberLookupTool — Zod schema validation', () => {
