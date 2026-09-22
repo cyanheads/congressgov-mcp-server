@@ -340,7 +340,12 @@ export const billLookupTool = tool('congressgov_bill_lookup', {
       );
       ctx.enrich.total(bounded.page.pagination.count);
 
-      if (versionCode && bounded.page.data.length === 0) {
+      /**
+       * `count` is the matched-row total, so gating on it says "no such version"
+       * only when there is none — a page whose own offset ran past the matching
+       * rows renders as past-the-end, the same split `notifyIfNoMatches` keeps.
+       */
+      if (versionCode && bounded.page.pagination.count === 0) {
         const available = [
           ...new Set(
             result.data

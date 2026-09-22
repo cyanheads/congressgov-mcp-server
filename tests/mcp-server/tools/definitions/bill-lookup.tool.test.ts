@@ -485,6 +485,23 @@ describe('billLookupTool', () => {
       expect(second.pagination).toEqual({ count: 2, nextOffset: null });
     });
 
+    it('does not claim the version is missing when the offset ran past its rows', async () => {
+      const ctx = createMockContext({ errors: billLookupTool.errors });
+      mockApi.getBillSubResource.mockResolvedValue({
+        data: [summaryRow('00', 'Introduced in House', 400), summaryRow('49', 'Public Law', 400)],
+        pagination: { count: 2, nextOffset: null },
+      });
+
+      const result = await billLookupTool.handler(
+        summariesInput({ versionCode: '49', offset: 5 }),
+        ctx,
+      );
+
+      expect(result.data).toEqual([]);
+      expect(result.pagination).toEqual({ count: 1, nextOffset: null });
+      expect(getEnrichment(ctx).notice).toBeUndefined();
+    });
+
     it('walks a long summary to the end and reassembles it exactly', async () => {
       const source = summaryRow('49', 'Public Law', 4_000);
       const windows: string[] = [];
