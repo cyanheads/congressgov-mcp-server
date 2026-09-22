@@ -10,15 +10,19 @@
  * Named references Congress.gov and GPO emit. Numeric references decode
  * generically. `&nbsp;` is the real U+00A0 — renderers that treat it as ordinary
  * spacing fold it into their own whitespace handling.
+ *
+ * A `Map` rather than an object literal: a plain object also answers for every
+ * name it inherits, so `&constructor;` resolves to `Object` and reaches the
+ * output as the text of a function.
  */
-const NAMED_REFERENCES: Record<string, string> = {
-  amp: '&',
-  apos: "'",
-  gt: '>',
-  lt: '<',
-  nbsp: ' ',
-  quot: '"',
-};
+const NAMED_REFERENCES = new Map([
+  ['amp', '&'],
+  ['apos', "'"],
+  ['gt', '>'],
+  ['lt', '<'],
+  ['nbsp', ' '],
+  ['quot', '"'],
+]);
 
 const CHARACTER_REFERENCE_RE = /&(#[xX][0-9a-fA-F]+|#\d+|[a-zA-Z]+);/g;
 
@@ -46,7 +50,7 @@ export function decodeCharacterReference(ref: string): string | undefined {
     }
     return String.fromCodePoint(codePoint);
   }
-  return NAMED_REFERENCES[ref.toLowerCase()];
+  return NAMED_REFERENCES.get(ref.toLowerCase());
 }
 
 /**

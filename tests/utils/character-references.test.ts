@@ -48,6 +48,11 @@ describe('decodeCharacterReferences', () => {
     expect(decodeCharacterReferences(verbatim)).toBe(verbatim);
   });
 
+  it('leaves a reference naming an inherited object member verbatim', () => {
+    const verbatim = '&constructor; &toString; &valueOf; &hasOwnProperty;';
+    expect(decodeCharacterReferences(verbatim)).toBe(verbatim);
+  });
+
   it('leaves references to code points no string can carry verbatim', () => {
     const verbatim = '&#0; &#x0000; &#xD800; &#xDFFF; &#56320; &#x110000; &#1114112;';
     expect(decodeCharacterReferences(verbatim)).toBe(verbatim);
@@ -68,6 +73,7 @@ describe('decodeCharacterReference', () => {
 
   it('returns undefined for a body it cannot resolve', () => {
     expect(decodeCharacterReference('bogus')).toBeUndefined();
+    expect(decodeCharacterReference('constructor')).toBeUndefined();
     expect(decodeCharacterReference('#0')).toBeUndefined();
     expect(decodeCharacterReference('#xD800')).toBeUndefined();
     expect(decodeCharacterReference('#x110000')).toBeUndefined();
