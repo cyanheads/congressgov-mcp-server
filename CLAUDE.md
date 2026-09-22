@@ -1,7 +1,7 @@
 # Agent Protocol
 
 **Server:** congressgov-mcp-server
-**Version:** 0.7.1
+**Version:** 0.7.2
 **Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.13.6`
 **Engines:** Bun ≥1.4.0, Node ≥24.0.0
 **MCP SDK:** `@modelcontextprotocol/server` + `@modelcontextprotocol/client` ^2.0.0
@@ -68,17 +68,19 @@ Tailor suggestions to what's actually missing or stale — don't recite the full
 
 | Name | Description |
 |:-----|:------------|
-| `congressgov_bill_lookup` | Browse, filter, and retrieve bill data (actions, sponsors, summaries, text, related bills) + bounded document text via `content` |
+| `congressgov_bill_lookup` | Browse, filter, and retrieve bill data (actions, sponsors, summaries, text, related bills) + bounded document text via `content`; `summaries` takes `versionCode` and the shared `characterOffset`/`characterLimit` window |
 | `congressgov_enacted_laws` | Browse enacted public and private laws by congress |
 | `congressgov_member_lookup` | Discover members by state/district/congress, retrieve legislative portfolios |
 | `congressgov_committee_lookup` | Browse committees and retrieve legislation, reports, nominations |
 | `congressgov_roll_votes` | Retrieve House and Senate roll call votes and member voting positions |
 | `congressgov_senate_nominations` | Browse presidential nominations, track Senate confirmation pipeline |
-| `congressgov_bill_summaries` | Browse recent CRS bill summaries — the "what's happening" feed |
+| `congressgov_bill_summaries` | Browse recent CRS bill summaries — the "what's happening" feed, bounded by the shared summary page budget and per-row text window |
 | `congressgov_crs_reports` | Browse and retrieve nonpartisan CRS policy analysis reports |
 | `congressgov_committee_reports` | Browse and retrieve committee reports accompanying legislation + bounded report text via `content` |
 | `congressgov_daily_record` | Browse daily Congressional Record — floor speeches, debates, proceedings + bounded article text via `content` |
 | `congressgov_search_bills` | Keyword-search bill titles/summaries via the opt-in local FTS mirror — off by default |
+
+**Summary bounding** (`src/mcp-server/tools/summary-window.ts`, constants in `tool-helpers.ts`). Both summary surfaces enforce two limits. `SUMMARY_PAGE_CHARACTERS` stops a page once its serialized rows reach the budget — the first row always returns, `pagination.nextOffset` counts the rows actually returned, and an enrichment notice discloses the stop. `DEFAULT_SUMMARY_TEXT_CHARACTERS` bounds one row's upstream `text`; a windowed row gains `textTotalCharacters` / `textTruncated` / `textNextOffset`, and its window end is retracted off any HTML tag or character reference it would otherwise split (unless the construct is wider than the whole window, where the requested limit wins). A row inside both limits is returned untouched, so an unbounded page stays byte-identical. `congressgov_bill_lookup` `summaries` overrides the row window with `characterOffset`/`characterLimit` and selects one version with `versionCode` — Congress.gov publishes no version filter, so selection reads the bill's whole summary list and matches client-side.
 
 ### Resources (5)
 
@@ -114,6 +116,7 @@ src/
       congress-documents-service.ts     # www.congress.gov document fetch — host allowlist, byte ceiling, character window
       document-formats.ts               # Format label → URL resolution over upstream format lists
       extract-text.ts                   # GPO `<pre>` / XML body → deterministic plain text
+      extract-text-stream.ts            # Incremental twin of extract-text.ts — one character window, constant memory
       types.ts                          # Document format + content window types
     congress-mirror/
       congress-mirror-service.ts        # Mirror read path — FTS5 search, ready(), sync accessor
@@ -147,6 +150,8 @@ src/
     prompts/definitions/
       bill-analysis.prompt.ts          # congressgov_bill_analysis
       legislative-research.prompt.ts   # congressgov_legislative_research
+  utils/
+    character-references.ts             # Single-pass HTML/XML character-reference decoding
 scripts/
   _mirror-context.ts                    # Shared bootstrap for the mirror lifecycle CLI scripts
   congress-mirror-init.ts               # mirror:init — full out-of-band mirror build
@@ -179,7 +184,7 @@ Four services. `CongressApiService` backs nine tools and the House branch of `co
 - The fetch is bounded: a 25 MB ceiling (refused on `Content-Length`, else mid-stream), a 30s deadline, and a content-type allowlist
 - The body is extracted as it streams and only the requested window is retained, so a read's live set is flat in the size of the document (transient allocation is not — peak RSS runs above a buffered read); the ceiling bounds how long a response may run, not how much of one fits in a buffer
 - The structured response is bounded by an exact character window — `structuredContent.content.text` and its offsets index the extracted plain text and are never snapped to section breaks, so feeding `nextOffset` back walks a document with no overlap and no gap; `content[]` wraps that unchanged window in a dynamically safe Markdown fence for presentation
-- `extract-text.ts` unwraps GPO's `<pre>` print output verbatim (whitespace is the document's structure), while no-`<pre>` XML gains one space only at an otherwise-unseparated sibling close→open element boundary; both readings decode entities in one pass, and `extract-text-stream.ts` is their incremental twin, pinned byte-for-byte against the whole-string extractor
+- `extract-text.ts` unwraps GPO's `<pre>` print output verbatim (whitespace is the document's structure), while no-`<pre>` XML gains one space only at an otherwise-unseparated sibling close→open element boundary; both readings decode character references through `src/utils/character-references.ts` — the one decoder every HTML/XML → text path in the server shares, single-pass so an escaped reference stays escaped — and `extract-text-stream.ts` is their incremental twin, pinned byte-for-byte against the whole-string extractor
 
 **`CongressMirrorService`** — local SQLite FTS5 mirror of bill title + CRS summary text, backing `congressgov_search_bills` only:
 - Opt-in via `CONGRESS_MIRROR_ENABLED` (off by default); built out-of-band via the `mirror:init`/`mirror:refresh` scripts, never on server startup
@@ -212,7 +217,7 @@ All tools share these patterns. The service layer handles them uniformly:
 | Invalid params | `validationError('...', { field })` |
 | Network error | `serviceUnavailable('Unable to reach the Congress.gov API.')` |
 
-The `content` operation adds `documentErrorContracts` (tool-helpers) on top: `document_unavailable`, `format_unavailable`, `document_fetch_failed`, `document_too_large`, and `offset_past_end`. `CongressDocumentsService` raises each with a matching `data.reason` and resolves the hint via `ctx.recoveryFor` — note that `ctx.fail` does **not** auto-populate `recovery`, so handler-side `ctx.fail` calls must spread `ctx.recoveryFor(reason)` into their data or the hint never reaches the wire.
+The `content` operation adds `documentErrorContracts` (tool-helpers) on top: `document_unavailable`, `format_unavailable`, `document_fetch_failed`, `document_too_large`, and `offset_past_end` — the last of which `congressgov_bill_lookup` also raises from its `summaries` branch when `characterOffset` is past the end of every returned row's text. `CongressDocumentsService` raises each with a matching `data.reason` and resolves the hint via `ctx.recoveryFor` — note that `ctx.fail` does **not** auto-populate `recovery`, so handler-side `ctx.fail` calls must spread `ctx.recoveryFor(reason)` into their data or the hint never reaches the wire.
 
 Service-only contract reasons carry `thrownBy: 'service'`; handler-local reasons remain checked by `error-contract-unthrown`. `RequestCancelled` is a baseline code and needs no contract entry. Retry predicates compose `defaultIsTransient` with the existing exclusion of `RateLimited` codes and preserve upstream `retryable: false`.
 

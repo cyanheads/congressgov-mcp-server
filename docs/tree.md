@@ -1,6 +1,6 @@
 # congressgov-mcp-server - Directory Structure
 
-Generated on: 2026-09-19 18:37:12
+Generated on: 2026-09-22 17:23:13
 
 ```text
 congressgov-mcp-server/
@@ -171,6 +171,7 @@ congressgov-mcp-server/
 │   │       │   ├── search-bills.tool.ts
 │   │       │   └── senate-nominations.tool.ts
 │   │       ├── format-helpers.ts
+│   │       ├── summary-window.ts
 │   │       └── tool-helpers.ts
 │   ├── services/
 │   │   ├── congress-api/
@@ -192,6 +193,8 @@ congressgov-mcp-server/
 │   │       ├── parse.ts
 │   │       ├── senate-vote-service.ts
 │   │       └── types.ts
+│   ├── utils/
+│   │   └── character-references.ts
 │   └── index.ts
 ├── tests/
 │   ├── config/
@@ -231,6 +234,7 @@ congressgov-mcp-server/
 │   │       ├── format-helpers-list-fidelity.test.ts
 │   │       ├── format-helpers.test.ts
 │   │       ├── senate-votes.format.test.ts
+│   │       ├── summary-window.test.ts
 │   │       └── tool-helpers.test.ts
 │   ├── services/
 │   │   ├── congress-api/
@@ -242,14 +246,20 @@ congressgov-mcp-server/
 │   │   │   ├── extract-text-stream.test.ts
 │   │   │   └── extract-text.test.ts
 │   │   ├── congress-mirror/
-│   │   │   └── congress-mirror-service.test.ts
+│   │   │   ├── congress-mirror-service.test.ts
+│   │   │   └── normalize.test.ts
 │   │   └── senate-lis/
 │   │       ├── fixtures/
+│   │       │   ├── menu-112-2-rollover.xml
+│   │       │   ├── menu-116-2-rollover.xml
+│   │       │   ├── menu-118-1-december.xml
 │   │       │   ├── menu.xml
 │   │       │   ├── vote-amendment.xml
 │   │       │   └── vote-cloture.xml
 │   │       ├── parse.test.ts
 │   │       └── senate-vote-service.test.ts
+│   ├── utils/
+│   │   └── character-references.test.ts
 │   └── index.test.ts
 ├── .dockerignore
 ├── .env.example

@@ -7,7 +7,7 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-0.7.1-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/congressgov-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.0.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/congressgov-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/congressgov-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.0-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-0.7.2-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/congressgov-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.0.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/congressgov-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/congressgov-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.0-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -73,7 +73,8 @@ Bill, member, and committee data is also reachable through `congressgov_bill_loo
 - Operations: `list` (browse by congress/billType/date range — no keyword search), `get` (full detail), or drill into `actions`, `amendments`, `cosponsors`, `committees`, `subjects`, `summaries`, `text`, `titles`, `related`
 - `list` defaults to `order='recent'` (newest update-date first); `limit` 1–250, `offset` pagination
 - `content` reads a text version's actual document text: select the version with `textVersionIndex` (0-based, against `text`'s order), the window with `characterOffset`/`characterLimit` (1–100,000 chars, default 25,000), and follow `nextOffset` to walk a full bill
-- Typed failures on `content`: `document_unavailable`, `format_unavailable`, `document_fetch_failed`, `document_too_large`, `offset_past_end`, alongside the shared `not_found` / `rate_limited` / `invalid_request` / `upstream_error` set
+- `summaries` selects one version with `versionCode` (the code a summary row carries — `00` introduced, `49` public law) and reads each row's text through the same `characterOffset`/`characterLimit` window; a row past the window carries `textTotalCharacters`, `textTruncated`, and `textNextOffset`, and a window end never splits an HTML tag or character reference, so following `textNextOffset` reassembles the upstream text exactly
+- Typed failures on `content`: `document_unavailable`, `format_unavailable`, `document_fetch_failed`, `document_too_large`, `offset_past_end`, alongside the shared `not_found` / `rate_limited` / `invalid_request` / `upstream_error` set — `offset_past_end` also covers a `summaries` call whose `characterOffset` is past the end of every returned row
 
 ---
 
@@ -108,6 +109,7 @@ Bill, member, and committee data is also reachable through `congressgov_bill_loo
 
 - `chamber` is `house` (default, Congress.gov API) or `senate` (the Senate's official LIS XML feed — the API exposes no Senate votes)
 - `list` browses by congress + session (1 or 2), newest-first by default (computed client-side for strict ordering); `get` returns tallies and party breakdown, `members` returns each member's recorded position
+- Senate `list` rows carry the feed's year-less `voteDate` ("19-Dec") alongside a derived `voteDateIso` (`2023-12-19`), resolved across the whole session — including the January votes of a session that sat past December 31
 - Roll call numbers reset each session and are specific to one chamber
 - `limit` 1–250, `offset` pagination for `list` and `members`
 
@@ -125,7 +127,9 @@ Bill, member, and committee data is also reachable through `congressgov_bill_loo
 
 - Filters by `congress` and `billType` (requires `congress`); date filters apply to the CRS summary's update time, not the bill's action date
 - Defaults to summaries updated in the last 7 days when neither date bound is supplied
-- For summaries of one specific bill, use `congressgov_bill_lookup` with `operation='summaries'` instead
+- A page stops adding rows once they reach a fixed response-character budget: at least one row always returns, `pagination.nextOffset` resumes at the first row not returned, and a notice discloses the stop
+- A summary past the per-row window arrives as an exact character window carrying `textTotalCharacters`, `textTruncated`, and `textNextOffset`; the notice names the `congressgov_bill_lookup` call that reads on from there
+- For summaries of one specific bill — and to read a windowed summary to the end — use `congressgov_bill_lookup` with `operation='summaries'` instead
 
 ---
 
@@ -407,6 +411,7 @@ The Dockerfile defaults to HTTP transport, stateless session mode, and logs to `
 | `src/services/congress-documents/` | Bounded document-text fetch — host allowlist, byte ceiling, character window. |
 | `src/services/congress-mirror/` | Local SQLite FTS5 bill-search mirror — ingest, normalize, schema. |
 | `src/services/senate-lis/` | Senate LIS XML client for Senate roll call votes. |
+| `src/utils/` | Shared pure helpers — single-pass HTML/XML character-reference decoding. |
 | `scripts/` | Mirror lifecycle CLI scripts (`mirror:init` / `mirror:refresh` / `mirror:verify`). |
 | `tests/` | Unit and integration tests, mirroring the `src/` structure. |
 

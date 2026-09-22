@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.7.2](changelog/0.7.x/0.7.2.md) — 2026-09-22 · 🛡️ Security
+
+Character references now decode in a single pass, closing three CodeQL double-escaping alerts. This release also resolves Senate roll-call vote dates and bounds summary text windows.
+
 ## [0.7.1](changelog/0.7.x/0.7.1.md) — 2026-09-19 · ⚠️ Breaking
 
 With MCP_SESSION_MODE unset, HTTP defaults to stateless; an explicit MCP_SESSION_MODE value still overrides it. This release also adopts mcp-ts-core 0.13.6 with typed argument recovery.
