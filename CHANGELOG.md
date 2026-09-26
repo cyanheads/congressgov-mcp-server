@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.7.3](changelog/0.7.x/0.7.3.md) — 2026-09-26 · ⚠️ Breaking
+
+Framework upkeep brings stricter HTTP validation, integer-to-string input repair, and optional telemetry logging.
+
 ## [0.7.2](changelog/0.7.x/0.7.2.md) — 2026-09-22 · 🛡️ Security
 
 Character references now decode in a single pass, closing three CodeQL double-escaping alerts. This release also resolves Senate roll-call vote dates and bounds summary text windows.
