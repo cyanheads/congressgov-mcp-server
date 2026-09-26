@@ -455,8 +455,8 @@ export const documentErrorContracts = [
 ] as const satisfies readonly ErrorContract[];
 
 /**
- * Shared `errors[]` contract for every Congress.gov tool. All ten tools reach
- * the same `CongressApiService` fetch path, so they surface the same four
+ * Shared `errors[]` contract for every Congress.gov API tool. Every tool except
+ * the mirror-backed `congressgov_search_bills` reaches the same `CongressApiService` fetch path, so they surface the same four
  * upstream failure modes. The service raises each with a matching `data.reason`
  * and `data.recovery.hint` (see `classifyUpstreamError`), making the failures
  * machine-readable; declaring them here advertises the contract in `tools/list`.

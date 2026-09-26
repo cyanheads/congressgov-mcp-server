@@ -2,9 +2,9 @@
 
 **Server:** congressgov-mcp-server
 **Version:** 0.7.2
-**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.13.6`
+**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.13.9`
 **Engines:** Bun ≥1.4.0, Node ≥24.0.0
-**MCP SDK:** `@modelcontextprotocol/server` + `@modelcontextprotocol/client` ^2.0.0
+**MCP SDK:** `@modelcontextprotocol/server` ^2.1.0
 **Zod:** ^4.6.5
 
 > **Read the framework docs first:** `node_modules/@cyanheads/mcp-ts-core/CLAUDE.md` contains the full API reference — builders, Context, error codes, exports, patterns. This file covers server-specific conventions only.
@@ -53,7 +53,7 @@ Tailor suggestions to what's actually missing or stale — don't recite the full
 
 - **Logic throws, framework catches.** Tool/resource handlers are pure — throw on failure, no `try/catch`. Plain `Error` is fine; the framework catches, classifies, and formats. Use error factories (`notFound()`, `validationError()`, etc.) when the error code matters.
 - **Use `ctx.log`** for request-scoped logging. No `console` calls.
-- **Use `ctx.state`** for tenant-scoped storage. Never access persistence directly.
+- **Use `ctx.state`** for tenant-scoped storage. Never access persistence directly. Values round-trip as JSON; a `Date` reads back as an ISO string.
 - **Need input the caller didn't supply?** `return ctx.requestInput(...)` and read `ctx.inputs` when the handler is re-entered. Never `await` for user input mid-handler.
 - **Secrets in env vars only** — never hardcoded.
 - **All tools are read-only.** Every tool gets `annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true }`.
@@ -272,7 +272,7 @@ Available skills:
 | `code-simplifier` | Post-session cleanup against `git diff` — modernize syntax, consolidate duplication, align with the codebase |
 | `polish-docs-meta` | Finalize docs, README, metadata, and agent protocol for shipping |
 | `git-wrapup` | Land the commit stack, version bump, and changelog on a release branch; open the release PR |
-| `release-pr-review` | Review the release PR and land fixes as ordinary commits; keep its body in sync |
+| `release-pr-review` | Review pass on an open release PR — simplifier + correctness review, fixes as ordinary commits on top of the stack, PR body kept in sync. Release PR mode only |
 | `release-and-publish` | Fast-forward main, tag, push, and publish to npm, MCP Registry, GitHub Releases, and Docker |
 | `maintenance` | Investigate changelogs, adopt upstream changes, sync skills to agent dirs |
 | `report-issue-framework` | File bugs/features against `@cyanheads/mcp-ts-core` |
@@ -281,9 +281,9 @@ Available skills:
 | `api-config` | AppConfig, parseConfig, env vars |
 | `api-context` | Context interface, RequestContext, logger, state, multi-round-trip input |
 | `api-errors` | McpError, JsonRpcErrorCode, error patterns |
-| `api-linter` | MCP definition linter rules reference — look up `format-parity`, `schema-*`, `name-*`, `server-json-*` diagnostics |
+| `api-linter` | Definition linter rule catalog — invoked by `bun run lint:mcp` and `devcheck` |
 | `api-canvas` | DataCanvas: register tabular data, run SQL, export, plus the `spillover()` helper — Tier 3 opt-in |
-| `api-mirror` | MirrorService: persistent local SQLite mirror of bulk upstream datasets — Tier 3 opt-in |
+| `api-mirror` | MirrorService: persistent self-refreshing local mirror (embedded SQLite + FTS5) of a bulk upstream dataset — Tier 3 opt-in |
 | `api-services` | LLM, Speech, Graph services |
 | `api-telemetry` | OTel catalog: spans, metrics, completion logs, env config, cardinality rules |
 | `api-testing` | createMockContext, test patterns |
@@ -315,8 +315,8 @@ When you complete a skill's checklist, check the boxes and add a completion time
 | `bun run bundle` | Build and pack as `.mcpb` for one-click Claude Desktop install |
 | `bun run changelog:build` | Regenerate `CHANGELOG.md` from `changelog/*.md` |
 | `bun run changelog:check` | Verify `CHANGELOG.md` is in sync (used by devcheck) |
-| `bun run release:github` | Create GitHub Release from the current annotated tag |
-| `bun run test` | Run tests |
+| `bun run release:github` | Validate the current annotated tag and create its GitHub Release; `-- --check` validates only |
+| `bun run test` | Run tests (Vitest — use `bun run test`, not `bun test`) |
 | `bun run dev:stdio` | Dev mode (stdio) |
 | `bun run dev:http` | Dev mode (HTTP) |
 | `bun run start:stdio` | Production mode (stdio) |
@@ -392,6 +392,6 @@ Remind the user to run these after completing a release flow.
 - [ ] Registered in `createApp()` arrays (directly or via barrel exports)
 - [ ] Tests use `createMockContext()` from `@cyanheads/mcp-ts-core/testing`
 - [ ] `.codex-plugin/plugin.json` populated — `name` and `interface.displayName` = unscoped repo name; `version`, `description`, `repository`, `license` and `interface.shortDescription` from `package.json`
-- [ ] `.codex-plugin/mcp.json` updated — server name key matches `package.json` name; env vars added for any required API keys
-- [ ] `.claude-plugin/plugin.json` populated — `name`, `version`, `description`, `repository`, `license` from `package.json`; inline `mcpServers` entry with server name key, env vars for any required API keys
+- [ ] `.codex-plugin/mcp.json` updated — server name key is the unscoped repo name; every user-supplied variable is listed in `env_vars`. Never write `"KEY": ""` into `env` — it overrides the user's exported key
+- [ ] `.claude-plugin/plugin.json` populated — unscoped `name`, `version`, `description`, `author`, `repository`, `license`, `keywords`; inline `mcpServers` entry keyed by the unscoped repo name. User-supplied variables use `userConfig` and `"KEY": "${user_config.<option>}"` env references, matching `manifest.json`
 - [ ] `bun run devcheck` passes
