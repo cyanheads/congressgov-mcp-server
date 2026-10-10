@@ -1,7 +1,7 @@
 {
   "name": "congressgov-mcp-server",
   "version": "0.7.3",
-  "description": "Access U.S. congressional data - bills, votes, members, committees - through MCP. STDIO & Streamable HTTP.",
+  "description": "Access U.S. congressional data (bills, votes, members, committees) via MCP. STDIO or Streamable HTTP.",
   "author": {
     "name": "cyanheads",
     "email": "casey@caseyjhand.com",
@@ -14,7 +14,7 @@
   "mcpServers": "./.codex-plugin/mcp.json",
   "interface": {
     "displayName": "congressgov-mcp-server",
-    "shortDescription": "Access U.S. congressional data - bills, votes, members, committees - through MCP.",
+    "shortDescription": "Access U.S. congressional data (bills, votes, members, committees) through MCP.",
     "longDescription": "MCP server wrapping the Congress.gov API v3 — the official machine-readable interface to U.S. legislative data. Provides tools for browsing bills, enacted laws, members, committees, roll call votes, nominations, CRS reports, committee reports, and the Congressional Record.",
     "developerName": "cyanheads",
     "category": "government",

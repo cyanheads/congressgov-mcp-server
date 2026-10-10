@@ -1,7 +1,7 @@
 cff-version: 1.2.0
 message: "If you use this software, please cite it as below."
 title: congressgov-mcp-server
-abstract: "Model Context Protocol (MCP) server for the Congress.gov REST API v3, providing access to U.S. legislative data — bills and enacted laws, members and committees, House roll call votes, presidential nominations, CRS reports, committee reports, bill summaries, and the daily Congressional Record."
+abstract: "Model Context Protocol (MCP) server for the Congress.gov REST API v3, providing access to U.S. legislative data: bills and enacted laws, members and committees, House roll call votes, presidential nominations, CRS reports, committee reports, bill summaries, and the daily Congressional Record."
 type: software
 authors:
   - family-names: Hand

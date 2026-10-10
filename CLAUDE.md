@@ -2,9 +2,9 @@
 
 **Server:** congressgov-mcp-server
 **Version:** 0.7.3
-**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.13.9`
+**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.13.14`
 **Engines:** Bun ≥1.4.0, Node ≥24.0.0
-**MCP SDK:** `@modelcontextprotocol/server` ^2.1.0
+**MCP SDK:** `@modelcontextprotocol/server` ^2.2.0
 **Zod:** ^4.6.5
 
 > **Read the framework docs first:** `node_modules/@cyanheads/mcp-ts-core/CLAUDE.md` contains the full API reference — builders, Context, error codes, exports, patterns. This file covers server-specific conventions only.
@@ -56,6 +56,7 @@ Tailor suggestions to what's actually missing or stale — don't recite the full
 - **Use `ctx.state`** for tenant-scoped storage. Never access persistence directly. Values round-trip as JSON; a `Date` reads back as an ISO string.
 - **Need input the caller didn't supply?** `return ctx.requestInput(...)` and read `ctx.inputs` when the handler is re-entered. Never `await` for user input mid-handler.
 - **Secrets in env vars only** — never hardcoded.
+- **Cut noise.** Add only what earns its place: no speculative generality, no guards for states the framework already prevents (Zod-validated params, classified errors), no abstraction until a third caller proves it, no option nothing sets.
 - **All tools are read-only.** Every tool gets `annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true }`.
 - **API key stays out of logs.** The service sends it in the `X-Api-Key` header — never log credentials.
 - **Close the loop on issues.** When implementing work tracked by a GitHub issue, comment on the issue with what landed and close it. Do both — a comment without a close leaves stale issues open; a close without a comment leaves no record of what shipped. The comment is for future readers — state the concrete changes, not the conversation that produced them.
@@ -217,9 +218,11 @@ All tools share these patterns. The service layer handles them uniformly:
 | Invalid params | `validationError('...', { field })` |
 | Network error | `serviceUnavailable('Unable to reach the Congress.gov API.')` |
 
-The `content` operation adds `documentErrorContracts` (tool-helpers) on top: `document_unavailable`, `format_unavailable`, `document_fetch_failed`, `document_too_large`, and `offset_past_end` — the last of which `congressgov_bill_lookup` also raises from its `summaries` branch when `characterOffset` is past the end of every returned row's text. `CongressDocumentsService` raises each with a matching `data.reason` and resolves the hint via `ctx.recoveryFor` — note that `ctx.fail` does **not** auto-populate `recovery`, so handler-side `ctx.fail` calls must spread `ctx.recoveryFor(reason)` into their data or the hint never reaches the wire.
+The `content` operation adds `documentErrorContracts` (tool-helpers) on top: `document_unavailable`, `format_unavailable`, `document_fetch_failed`, `document_too_large`, and `offset_past_end` — the last of which `congressgov_bill_lookup` also raises from its `summaries` branch when `characterOffset` is past the end of every returned row's text. `CongressDocumentsService` raises each with a matching `data.reason`; the framework fills the declared `recovery` hint when the throw carries none, service throws included. Explicit recovery overrides win. A direct `definition.handler(...)` test sees the throw unchanged; retain `ctx.recoveryFor` where such a test asserts the hint, or assert the filled hint through `runToolContract`.
 
 Service-only contract reasons carry `thrownBy: 'service'`; handler-local reasons remain checked by `error-contract-unthrown`. `RequestCancelled` is a baseline code and needs no contract entry. Retry predicates compose `defaultIsTransient` with the existing exclusion of `RateLimited` codes and preserve upstream `retryable: false`.
+
+Error envelopes carry `data.requestId`, matching that call's server log records; a tool's `content[]` closes with `request <id>`. `runToolContract` fills declared recovery hints but adds no request ID.
 
 ---
 
@@ -250,7 +253,7 @@ import { getServerConfig } from '@/config/server-config.js';
 
 ## Skills
 
-Skills are modular instructions in `framework-skills/` at the project root. Read them directly when a task matches — e.g., `framework-skills/add-tool/SKILL.md` when adding a tool. Plugin hosts auto-load a root `skills/`, so development guidance belongs in `framework-skills/`.
+Skills are modular instructions in `framework-skills/` at the project root. Read them directly when a task matches — e.g., `framework-skills/add-tool/SKILL.md` when adding a tool. `bun run list-skills` prints the full registry. The directory is deliberately not `skills/`: Claude Code and Codex auto-load a plugin's root `skills/`, so a server that ships `.claude-plugin/` or `.codex-plugin/` would hand these development skills to every agent that installs it. Keep `skills/` free for skills meant for those agents.
 
 **Agent skill directory:** Copy skills into the directory your agent discovers (Claude Code: `.claude/skills/`, others: equivalent). This makes skills available as context without needing to reference `framework-skills/` paths manually. After framework updates, run the `maintenance` skill — it re-syncs the agent directory automatically (Phase B).
 
@@ -271,18 +274,18 @@ Available skills:
 | `security-pass` | Audit server for MCP-flavored security gaps: output injection, scope blast radius, input sinks, tenant isolation |
 | `code-simplifier` | Post-session cleanup against `git diff` — modernize syntax, consolidate duplication, align with the codebase |
 | `polish-docs-meta` | Finalize docs, README, metadata, and agent protocol for shipping |
-| `git-wrapup` | Land the commit stack, version bump, and changelog on a release branch; open the release PR |
+| `git-wrapup` | Land working-tree changes as a commit stack — version bump, changelog, verify, commit by concern, release commit on top. No tag, no push to main; opens the release PR when the project declares release PR mode |
 | `release-pr-review` | Review pass on an open release PR — simplifier + correctness review, fixes as ordinary commits on top of the stack, PR body kept in sync. Release PR mode only |
-| `release-and-publish` | Fast-forward main, tag, push, and publish to npm, MCP Registry, GitHub Releases, and Docker |
+| `release-and-publish` | Fast-forward merge (release PR mode) + tag + push + npm + MCP Registry + GH Release + Docker. Picks up from `git-wrapup` |
 | `maintenance` | Investigate changelogs, adopt upstream changes, sync skills to agent dirs |
-| `report-issue-framework` | File bugs/features against `@cyanheads/mcp-ts-core` |
-| `report-issue-local` | File bugs/features against this server's repo |
+| `report-issue-framework` | File a bug or feature request against `@cyanheads/mcp-ts-core` via `gh` CLI |
+| `report-issue-local` | File a bug or feature request against this server's own repo via `gh` CLI |
 | `api-auth` | Auth modes, scopes, JWT/OAuth |
 | `api-config` | AppConfig, parseConfig, env vars |
 | `api-context` | Context interface, RequestContext, logger, state, multi-round-trip input |
 | `api-errors` | McpError, JsonRpcErrorCode, error patterns |
 | `api-linter` | Definition linter rule catalog — invoked by `bun run lint:mcp` and `devcheck` |
-| `api-canvas` | DataCanvas: register tabular data, run SQL, export, plus the `spillover()` helper — Tier 3 opt-in |
+| `api-canvas` | DataCanvas: register tabular data, run SQL, export, plus the `spillover()` helper for big result sets — Tier 3 opt-in |
 | `api-mirror` | MirrorService: persistent self-refreshing local mirror (embedded SQLite + FTS5) of a bulk upstream dataset — Tier 3 opt-in |
 | `api-services` | LLM, Speech, Graph services |
 | `api-telemetry` | OTel catalog: spans, metrics, completion logs, env config, cardinality rules |
