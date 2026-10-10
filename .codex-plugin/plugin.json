@@ -1,6 +1,6 @@
 {
   "name": "congressgov-mcp-server",
-  "version": "0.7.3",
+  "version": "0.7.4",
   "description": "Access U.S. congressional data (bills, votes, members, committees) via MCP. STDIO or Streamable HTTP.",
   "author": {
     "name": "cyanheads",

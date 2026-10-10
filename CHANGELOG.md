@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.7.4](changelog/0.7.x/0.7.4.md) — 2026-10-10
+
+Tool argument repair and native Docker dependency installs.
+
 ## [0.7.3](changelog/0.7.x/0.7.3.md) — 2026-09-26 · ⚠️ Breaking
 
 Framework upkeep brings stricter HTTP validation, integer-to-string input repair, and optional telemetry logging.

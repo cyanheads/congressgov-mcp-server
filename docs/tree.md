@@ -1,6 +1,6 @@
 # congressgov-mcp-server - Directory Structure
 
-Generated on: 2026-09-22 17:23:13
+Generated on: 2026-10-10 23:39:41
 
 ```text
 congressgov-mcp-server/
@@ -136,9 +136,11 @@ congressgov-mcp-server/
 │   ├── congress-mirror-refresh.ts
 │   ├── congress-mirror-verify.ts
 │   ├── devcheck.ts
+│   ├── install-otel.ts
 │   ├── lint-mcp.ts
 │   ├── lint-packaging.ts
 │   ├── list-skills.ts
+│   ├── prune-musl-packages.ts
 │   ├── release-github.ts
 │   ├── split-changelog.ts
 │   └── tree.ts
@@ -220,6 +222,7 @@ congressgov-mcp-server/
 │   │       │   ├── crs-reports.tool.test.ts
 │   │       │   ├── daily-record.tool.test.ts
 │   │       │   ├── document-content.test.ts
+│   │       │   ├── document-recovery-contract.test.ts
 │   │       │   ├── enacted-laws.tool.test.ts
 │   │       │   ├── exhausted-page-notice.test.ts
 │   │       │   ├── input-validation.test.ts
