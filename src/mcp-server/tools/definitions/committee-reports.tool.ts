@@ -125,7 +125,6 @@ export const committeeReportsTool = tool('congressgov_committee_reports', {
           'document_unavailable',
           `Committee report ${citation} publishes no document formats.`,
           {
-            ...ctx.recoveryFor('document_unavailable'),
             congress: input.congress,
             reportType: input.reportType,
             reportNumber: input.reportNumber,

@@ -63,9 +63,8 @@ const ALLOWED_CONTENT_TYPES = new Set(['application/xml', 'text/html', 'text/pla
 
 /**
  * Contract reasons this service raises. The matching `recovery` hints live once
- * in `documentErrorContracts` (tool-helpers) and reach the wire via
- * `ctx.recoveryFor` — services have no `ctx.fail`, but carrying `reason` in
- * `data` plus the resolved hint gives clients the same shape.
+ * in `documentErrorContracts` (tool-helpers). Carrying `reason` in `data` lets
+ * the framework fill that hint on both client surfaces.
  */
 const DOCUMENT_UNAVAILABLE = 'document_unavailable';
 const DOCUMENT_FETCH_FAILED = 'document_fetch_failed';
@@ -100,13 +99,13 @@ export class CongressDocumentsService {
    * general-purpose fetcher.
    */
   async fetchDocument(params: FetchDocumentParams, ctx: Context): Promise<DocumentContent> {
-    this.assertAllowedHost(params.url, ctx);
+    this.assertAllowedHost(params.url);
 
     const operation = 'CongressDocumentsService GET document';
     const requestContext = this.getRequestContext(ctx, operation);
     const signal = this.getAbortSignal(ctx);
 
-    const window = await withRetry(() => this.doFetch(params, requestContext, ctx, signal), {
+    const window = await withRetry(() => this.doFetch(params, requestContext, signal), {
       operation,
       context: requestContext,
       baseDelayMs: BASE_BACKOFF_MS,
@@ -115,15 +114,11 @@ export class CongressDocumentsService {
       ...(signal ? { signal } : {}),
     });
 
-    return this.describeWindow(window, params, ctx);
+    return this.describeWindow(window, params);
   }
 
   /** Describe the extracted `[offset, offset + limit)` window and what remains. */
-  private describeWindow(
-    window: ExtractedWindow,
-    params: FetchDocumentParams,
-    ctx: Context,
-  ): DocumentContent {
+  private describeWindow(window: ExtractedWindow, params: FetchDocumentParams): DocumentContent {
     const { text, totalCharacters } = window;
     const offset = params.characterOffset;
 
@@ -133,7 +128,6 @@ export class CongressDocumentsService {
         `characterOffset ${offset} is past the end of this document, which has ${totalCharacters} characters.`,
         {
           reason: OFFSET_PAST_END,
-          ...ctx.recoveryFor(OFFSET_PAST_END),
           totalCharacters,
           offset,
           retryable: false,
@@ -152,7 +146,7 @@ export class CongressDocumentsService {
     };
   }
 
-  private assertAllowedHost(url: string, ctx: Context): void {
+  private assertAllowedHost(url: string): void {
     let host: string | undefined;
     try {
       const parsed = new URL(url);
@@ -165,7 +159,6 @@ export class CongressDocumentsService {
         'The upstream metadata points at a document this server does not retrieve — only documents hosted on www.congress.gov are read.',
         {
           reason: DOCUMENT_UNAVAILABLE,
-          ...ctx.recoveryFor(DOCUMENT_UNAVAILABLE),
           retryable: false,
         },
       );
@@ -175,7 +168,6 @@ export class CongressDocumentsService {
   private async doFetch(
     params: FetchDocumentParams,
     requestContext: RequestContext,
-    ctx: Context,
     signal?: AbortSignal,
   ): Promise<ExtractedWindow> {
     let response: Response;
@@ -186,12 +178,12 @@ export class CongressDocumentsService {
         ...(signal ? { signal } : {}),
       });
     } catch (error) {
-      throw this.classifyFetchError(error, ctx);
+      throw this.classifyFetchError(error);
     }
 
-    this.assertContentType(response, ctx);
-    this.assertAdvertisedSize(response, ctx);
-    return this.readWindow(response, params, ctx);
+    this.assertContentType(response);
+    this.assertAdvertisedSize(response);
+    return this.readWindow(response, params);
   }
 
   /**
@@ -199,7 +191,7 @@ export class CongressDocumentsService {
    * not hold — a missing document, not a transport failure. Everything else
    * (5xx, timeout, socket error) is the transport, and stays retryable.
    */
-  private classifyFetchError(error: unknown, ctx: Context): unknown {
+  private classifyFetchError(error: unknown): unknown {
     if (!(error instanceof McpError)) return error;
     if (error.code === JsonRpcErrorCode.RequestCancelled) return error;
     if (error.code === JsonRpcErrorCode.NotFound) {
@@ -207,25 +199,23 @@ export class CongressDocumentsService {
         'Congress.gov does not hold the document its metadata pointed to.',
         {
           reason: DOCUMENT_UNAVAILABLE,
-          ...ctx.recoveryFor(DOCUMENT_UNAVAILABLE),
           retryable: false,
         },
         { cause: error },
       );
     }
-    /** The framework message embeds the request URL; re-message without echoing it. */
+    /** Keep the document-specific message; the framework redacts the cause's URL. */
     return serviceUnavailable(
       'Unable to retrieve the document from Congress.gov.',
       {
         reason: DOCUMENT_FETCH_FAILED,
-        ...ctx.recoveryFor(DOCUMENT_FETCH_FAILED),
         ...(error.data?.retryable === false ? { retryable: false } : {}),
       },
       { cause: error },
     );
   }
 
-  private assertContentType(response: Response, ctx: Context): void {
+  private assertContentType(response: Response): void {
     const raw = response.headers.get('content-type') ?? '';
     const mediaType = raw.split(';')[0]?.trim().toLowerCase() ?? '';
     if (ALLOWED_CONTENT_TYPES.has(mediaType)) return;
@@ -233,7 +223,6 @@ export class CongressDocumentsService {
       `Congress.gov returned content type '${mediaType || 'unknown'}', which this server cannot read as text.`,
       {
         reason: DOCUMENT_FETCH_FAILED,
-        ...ctx.recoveryFor(DOCUMENT_FETCH_FAILED),
         contentType: mediaType,
         /** A wrong media type is deterministic — retrying re-downloads the same bytes. */
         retryable: false,
@@ -242,12 +231,12 @@ export class CongressDocumentsService {
   }
 
   /** Refuse an oversized document on its advertised length, before reading a byte of it. */
-  private assertAdvertisedSize(response: Response, ctx: Context): void {
+  private assertAdvertisedSize(response: Response): void {
     const header = response.headers.get('content-length');
     if (header === null) return;
     const contentLength = Number(header);
     if (!Number.isFinite(contentLength) || contentLength <= this.maxDocumentBytes) return;
-    throw this.tooLarge(ctx, { contentLength });
+    throw this.tooLarge({ contentLength });
   }
 
   /**
@@ -264,7 +253,6 @@ export class CongressDocumentsService {
   private async readWindow(
     response: Response,
     params: FetchDocumentParams,
-    ctx: Context,
   ): Promise<ExtractedWindow> {
     const reader = response.body?.getReader();
     const decoder = new TextDecoder('utf-8');
@@ -276,13 +264,13 @@ export class CongressDocumentsService {
 
     if (reader) {
       for (;;) {
-        const { done, value } = await this.readChunk(reader, ctx);
+        const { done, value } = await this.readChunk(reader);
         if (done) break;
         if (!value) continue;
         bytes += value.byteLength;
         if (bytes > this.maxDocumentBytes) {
           await reader.cancel().catch(() => undefined);
-          throw this.tooLarge(ctx, { bytesRead: bytes });
+          throw this.tooLarge({ bytesRead: bytes });
         }
         extractor.push(decoder.decode(value, { stream: true }));
       }
@@ -291,7 +279,6 @@ export class CongressDocumentsService {
     if (bytes === 0) {
       throw serviceUnavailable('Congress.gov returned an empty document body.', {
         reason: DOCUMENT_FETCH_FAILED,
-        ...ctx.recoveryFor(DOCUMENT_FETCH_FAILED),
         retryable: false,
       });
     }
@@ -306,25 +293,23 @@ export class CongressDocumentsService {
    */
   private async readChunk(
     reader: ReadableStreamDefaultReader<Uint8Array>,
-    ctx: Context,
   ): Promise<Awaited<ReturnType<ReadableStreamDefaultReader<Uint8Array>['read']>>> {
     try {
       return await reader.read();
     } catch (error) {
       throw serviceUnavailable(
         'The document body from Congress.gov ended before it was complete.',
-        { reason: DOCUMENT_FETCH_FAILED, ...ctx.recoveryFor(DOCUMENT_FETCH_FAILED) },
+        { reason: DOCUMENT_FETCH_FAILED },
         { cause: error },
       );
     }
   }
 
-  private tooLarge(ctx: Context, data: Record<string, unknown>): McpError {
+  private tooLarge(data: Record<string, unknown>): McpError {
     return invalidParams(
       `This document exceeds the ${this.maxDocumentBytes.toLocaleString('en-US')}-byte ceiling this server retrieves.`,
       {
         reason: DOCUMENT_TOO_LARGE,
-        ...ctx.recoveryFor(DOCUMENT_TOO_LARGE),
         ...data,
         maxBytes: this.maxDocumentBytes,
         retryable: false,

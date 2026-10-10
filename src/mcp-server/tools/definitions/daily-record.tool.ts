@@ -131,7 +131,6 @@ export const dailyRecordTool = tool('congressgov_daily_record', {
           'format_unavailable',
           `This article publishes no '${input.format}' document (looked for ${describeFormat(input.format)}). The Congressional Record publishes Formatted Text and PDF only.`,
           {
-            ...ctx.recoveryFor('format_unavailable'),
             format: input.format,
             articleIndex: input.articleIndex,
           },

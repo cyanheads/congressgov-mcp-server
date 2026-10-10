@@ -404,8 +404,8 @@ export const documentWindowInput = {
  * reach it.
  *
  * `CongressDocumentsService` raises each with a matching `data.reason` and
- * resolves the `recovery` hint declared here via `ctx.recoveryFor`, so the hint
- * lives in exactly one place.
+ * the framework fills the `recovery` hint declared here, so the hint lives in
+ * exactly one place. Direct-handler tests retain explicit forwards where needed.
  * Resolves cyanheads/congressgov-mcp-server#53.
  */
 export const documentErrorContracts = [
