@@ -222,7 +222,7 @@ The `content` operation adds `documentErrorContracts` (tool-helpers) on top: `do
 
 Service-only contract reasons carry `thrownBy: 'service'`; handler-local reasons remain checked by `error-contract-unthrown`. `RequestCancelled` is a baseline code and needs no contract entry. Retry predicates compose `defaultIsTransient` with the existing exclusion of `RateLimited` codes and preserve upstream `retryable: false`.
 
-Error envelopes carry `data.requestId`, matching that call's server log records; a tool's `content[]` closes with `request <id>`. `runToolContract` fills declared recovery hints but adds no request ID.
+Framework-handled tool, resource, and prompt errors carry `data.requestId`, matching that call's server log records; a tool's `content[]` closes with `request <id>`. Protocol-level rejections and resource-parameter errors containing only `{ uri }` are excluded. `runToolContract` fills declared recovery hints but adds no request ID.
 
 ---
 

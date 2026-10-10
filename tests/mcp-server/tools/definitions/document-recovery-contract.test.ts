@@ -13,6 +13,7 @@ vi.mock('@/services/congress-api/congress-api-service.js', () => ({
 
 import { committeeReportsTool } from '@/mcp-server/tools/definitions/committee-reports.tool.js';
 import { dailyRecordTool } from '@/mcp-server/tools/definitions/daily-record.tool.js';
+import { documentErrorContracts } from '@/mcp-server/tools/tool-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 import {
   initCongressDocuments,
@@ -38,6 +39,11 @@ afterEach(() => vi.unstubAllGlobals());
 
 describe('document recovery contract', () => {
   it.each([
+    {
+      reason: 'document_unavailable',
+      code: JsonRpcErrorCode.NotFound,
+      response: () => new Response('', { status: 404 }),
+    },
     {
       reason: 'document_fetch_failed',
       code: JsonRpcErrorCode.ServiceUnavailable,
@@ -70,7 +76,10 @@ describe('document recovery contract', () => {
       const declared = committeeReportsTool.errors?.find((entry) => entry.reason === reason);
       expect(result.isError).toBe(true);
       expect(result.structuredContent).toMatchObject({
-        error: { code, data: { reason, recovery: { hint: declared?.recovery } } },
+        error: {
+          code,
+          data: { reason, retryable: false, recovery: { hint: declared?.recovery } },
+        },
       });
       expect(result.content).toContainEqual(
         expect.objectContaining({
@@ -85,11 +94,18 @@ describe('document recovery contract', () => {
   it('fills a handler hint when the report has no document', async () => {
     api.getCommitteeReportText.mockResolvedValue({ text: [] });
     const result = await runToolContract(committeeReportsTool, input);
+    const hint = documentErrorContracts.find(
+      (entry) => entry.reason === 'document_unavailable',
+    )?.recovery;
+    expect(result.isError).toBe(true);
     expect(result.structuredContent).toMatchObject({
-      error: { data: { reason: 'document_unavailable', recovery: { hint: expect.any(String) } } },
+      error: {
+        code: JsonRpcErrorCode.NotFound,
+        data: { reason: 'document_unavailable', retryable: false, recovery: { hint } },
+      },
     });
     expect(result.content).toContainEqual(
-      expect.objectContaining({ text: expect.stringContaining('Recovery:') }),
+      expect.objectContaining({ type: 'text', text: expect.stringContaining(`Recovery: ${hint}`) }),
     );
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -105,11 +121,18 @@ describe('document recovery contract', () => {
       issueNumber: 109,
       format: 'xml',
     });
+    const hint = documentErrorContracts.find(
+      (entry) => entry.reason === 'format_unavailable',
+    )?.recovery;
+    expect(result.isError).toBe(true);
     expect(result.structuredContent).toMatchObject({
-      error: { data: { reason: 'format_unavailable', recovery: { hint: expect.any(String) } } },
+      error: {
+        code: JsonRpcErrorCode.NotFound,
+        data: { reason: 'format_unavailable', retryable: false, recovery: { hint } },
+      },
     });
     expect(result.content).toContainEqual(
-      expect.objectContaining({ text: expect.stringContaining('Recovery:') }),
+      expect.objectContaining({ type: 'text', text: expect.stringContaining(`Recovery: ${hint}`) }),
     );
     expect(fetchMock).not.toHaveBeenCalled();
   });
