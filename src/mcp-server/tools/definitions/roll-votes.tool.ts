@@ -13,6 +13,7 @@ import { formatVotes } from '@/mcp-server/tools/format-helpers.js';
 import {
   buildEffectiveQuery,
   congressErrorContracts,
+  identityErrorContracts,
   listEnrichment,
   listOrDetail,
   notifyIfNoMatches,
@@ -24,7 +25,7 @@ export const rollVotesTool = tool('congressgov_roll_votes', {
   title: 'Congress.gov Roll Votes',
   description: `Retrieve U.S. congressional roll call votes and individual member voting positions for either chamber. Set 'chamber' to 'house' (default, from the Congress.gov API) or 'senate' (from the Senate's official LIS feed). Use 'list' to find votes by congress and session (newest first by default), 'get' for vote details (question, result, tallies, party breakdown, associated bill/nomination/amendment), or 'members' for how each member voted.`,
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
-  errors: congressErrorContracts,
+  errors: [...congressErrorContracts, ...identityErrorContracts],
   input: z.object({
     operation: z.enum(['list', 'get', 'members']).describe('Which data to retrieve.'),
     chamber: z
@@ -63,6 +64,13 @@ export const rollVotesTool = tool('congressgov_roll_votes', {
   format: formatVotes,
 
   async handler(input, ctx) {
+    if (input.operation === 'list' && input.voteNumber !== undefined) {
+      throw ctx.fail(
+        'incompatible_identity',
+        "'list' does not use voteNumber. Remove voteNumber to browse, or use 'get' or 'members' with congress, session, and voteNumber.",
+        { field: 'voteNumber', operation: input.operation },
+      );
+    }
     if (input.chamber === 'senate') {
       return handleSenateVotes(input, ctx);
     }

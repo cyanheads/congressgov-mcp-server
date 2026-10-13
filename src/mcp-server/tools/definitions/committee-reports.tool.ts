@@ -12,6 +12,7 @@ import {
   congressErrorContracts,
   documentErrorContracts,
   documentWindowInput,
+  identityErrorContracts,
   listEnrichment,
   listOrDetail,
   notifyIfNoMatches,
@@ -40,7 +41,7 @@ export const committeeReportsTool = tool('congressgov_committee_reports', {
   title: 'Congress.gov Committee Reports',
   description: `Browse and retrieve committee reports from Congress.gov — reports accompany legislation reported out of committee and explain the bill's purpose, committee amendments, dissenting views, and the committee vote. Report types are 'hrpt' (House), 'srpt' (Senate), and 'erpt' (Executive). 'text' lists the published format URLs; 'content' then reads the report's actual text, a bounded character window at a time.`,
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
-  errors: [...congressErrorContracts, ...documentErrorContracts],
+  errors: [...congressErrorContracts, ...documentErrorContracts, ...identityErrorContracts],
   input: z.object({
     operation: z.enum(['list', 'get', 'text', 'content']).describe('Which data to retrieve.'),
     congress: z.number().int().positive().describe('Congress number.'),
@@ -69,6 +70,13 @@ export const committeeReportsTool = tool('congressgov_committee_reports', {
     const api = getCongressApi();
 
     if (input.operation === 'list') {
+      if (input.reportNumber !== undefined) {
+        throw ctx.fail(
+          'incompatible_identity',
+          "'list' does not use reportNumber. Remove reportNumber to browse, or use 'get', 'text', or 'content' with congress, reportType, and reportNumber.",
+          { field: 'reportNumber', operation: input.operation },
+        );
+      }
       const result = await api.listCommitteeReports(
         {
           congress: input.congress,

@@ -55,10 +55,9 @@ type ApiRecord = Record<string, unknown>;
 /**
  * Filter a committee list by name using a two-pass strategy:
  * 1. Primary: every token in `filter` appears in the normalized committee name.
- * 2. Fuzzy fallback (only when primary is empty): rank by bigram-Dice similarity of
- *    the query against each name's best-matching token (full-name scoring lets long
- *    names accrue spurious overlap), keep the top few above the threshold, labeled
- *    `approximate: true`.
+ * 2. Fuzzy fallback (only when primary is empty): each query token must meet the
+ *    bigram-Dice floor against a name token. Rank by mean token similarity, then
+ *    normalized name and system code, keeping at most five approximate matches.
  *
  * Never throws — no match returns an empty array.
  */
@@ -74,24 +73,23 @@ function filterCommittees(items: ApiRecord[], filter: string): ApiRecord[] {
   });
   if (primary.length > 0) return primary;
 
-  // Fuzzy fallback: score the query against each name's best-matching token, not
-  // the whole name — long committee names share common bigrams with the query and
-  // would otherwise rank as spurious "approximate" matches. Keep the top few.
-  const filterBigrams = bigrams(normFilter);
+  const queryBigrams = tokens.map(bigrams);
   const scored = items
     .map((item) => {
       const name = typeof item.name === 'string' ? normalizeForMatch(item.name) : '';
-      const score = Math.max(
-        0,
-        ...name
-          .split(' ')
-          .filter(Boolean)
-          .map((tok) => diceCoeff(filterBigrams, bigrams(tok))),
+      const nameBigrams = name.split(' ').filter(Boolean).map(bigrams);
+      const tokenScores = queryBigrams.map((query) =>
+        Math.max(0, ...nameBigrams.map((candidate) => diceCoeff(query, candidate))),
       );
-      return { item, score };
+      const qualifies = tokenScores.every((score) => score >= FUZZY_THRESHOLD);
+      const score = tokenScores.reduce((sum, value) => sum + value, 0) / tokenScores.length;
+      const code = typeof item.systemCode === 'string' ? item.systemCode : '';
+      return { item, name, code, score, qualifies };
     })
-    .filter(({ score }) => score >= FUZZY_THRESHOLD)
-    .sort((a, b) => b.score - a.score)
+    .filter(({ qualifies }) => qualifies)
+    .sort(
+      (a, b) => b.score - a.score || a.name.localeCompare(b.name) || a.code.localeCompare(b.code),
+    )
     .slice(0, FUZZY_MAX_RESULTS);
 
   return scored.map(({ item }) => ({ ...item, approximate: true }));

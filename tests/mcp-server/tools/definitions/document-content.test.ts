@@ -330,11 +330,11 @@ describe('congressgov_bill_lookup — content', () => {
   });
 
   it('recovers from document_too_large without pointing at another format', async () => {
-    const { invalidParams } = await import('@cyanheads/mcp-ts-core/errors');
+    const { validationError } = await import('@cyanheads/mcp-ts-core/errors');
     mockDocuments.fetchDocument = vi
       .fn()
       .mockImplementation((_params: unknown, ctx: { recoveryFor: (r: string) => object }) => {
-        throw invalidParams('This document exceeds the byte ceiling this server retrieves.', {
+        throw validationError('This document exceeds the byte ceiling this server retrieves.', {
           reason: 'document_too_large',
           ...ctx.recoveryFor('document_too_large'),
         });
@@ -347,7 +347,7 @@ describe('congressgov_bill_lookup — content', () => {
       billNumber: 1,
     });
     const error = await failureOf(billLookupTool.handler(input, ctx));
-    expect(error.code).toBe(JsonRpcErrorCode.InvalidParams);
+    expect(error.code).toBe(JsonRpcErrorCode.ValidationError);
     expect(error.data?.reason).toBe('document_too_large');
     /**
      * Every published format of an oversized document is oversized, so a hint

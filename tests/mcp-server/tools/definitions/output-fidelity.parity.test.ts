@@ -109,7 +109,13 @@ describe('#45 — law citation reaches structuredContent and content[]', () => {
 
   it('declares the upstream failure modes with machine-readable reasons and recovery', () => {
     const reasons = enactedLawsTool.errors?.map((e) => e.reason);
-    expect(reasons).toEqual(['not_found', 'rate_limited', 'invalid_request', 'upstream_error']);
+    expect(reasons).toEqual([
+      'not_found',
+      'rate_limited',
+      'invalid_request',
+      'upstream_error',
+      'upstream_timeout',
+    ]);
     for (const contract of enactedLawsTool.errors ?? []) {
       expect(contract.recovery).toBeTruthy();
       expect(contract.when).toBeTruthy();

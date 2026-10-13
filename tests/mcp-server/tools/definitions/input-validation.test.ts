@@ -622,7 +622,13 @@ describe('committeeReportsTool — enrichment', () => {
 // ── Error contract advertisement (#32/#34) ───────────────────────────────────
 
 describe('error contracts', () => {
-  const REQUIRED_REASONS = ['not_found', 'rate_limited', 'invalid_request', 'upstream_error'];
+  const REQUIRED_REASONS = [
+    'not_found',
+    'rate_limited',
+    'invalid_request',
+    'upstream_error',
+    'upstream_timeout',
+  ];
   const contractTools = {
     bill_lookup: billLookupTool,
     crs_reports: crsReportsTool,

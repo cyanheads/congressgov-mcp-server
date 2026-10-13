@@ -541,7 +541,7 @@ describe('billLookupTool', () => {
       await expect(
         billLookupTool.handler(summariesInput({ versionCode: '49', characterOffset: 400 }), ctx),
       ).rejects.toMatchObject({
-        code: JsonRpcErrorCode.InvalidParams,
+        code: JsonRpcErrorCode.ValidationError,
         data: {
           reason: 'offset_past_end',
           characterOffset: 400,

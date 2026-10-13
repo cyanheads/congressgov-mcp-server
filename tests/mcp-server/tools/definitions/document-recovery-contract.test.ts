@@ -11,6 +11,7 @@ vi.mock('@/services/congress-api/congress-api-service.js', () => ({
   getCongressApi: vi.fn(),
 }));
 
+import { billLookupTool } from '@/mcp-server/tools/definitions/bill-lookup.tool.js';
 import { committeeReportsTool } from '@/mcp-server/tools/definitions/committee-reports.tool.js';
 import { dailyRecordTool } from '@/mcp-server/tools/definitions/daily-record.tool.js';
 import { documentErrorContracts } from '@/mcp-server/tools/tool-helpers.js';
@@ -22,7 +23,11 @@ import {
 
 const URL = 'https://www.congress.gov/118/crpt/hrpt1/generated/CRPT-118hrpt1.htm';
 const input = { operation: 'content', congress: 118, reportType: 'hrpt', reportNumber: 1 } as const;
-const api = { getCommitteeReportText: vi.fn(), getDailyArticles: vi.fn() };
+const api = {
+  getCommitteeReportText: vi.fn(),
+  getDailyArticles: vi.fn(),
+  getBillSubResource: vi.fn(),
+};
 const fetchMock = vi.fn<typeof fetch>();
 
 beforeEach(() => {
@@ -38,6 +43,36 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('document recovery contract', () => {
+  it('keeps malformed window input at protocol InvalidParams', async () => {
+    const result = await runToolContract(committeeReportsTool, { ...input, characterOffset: -1 });
+    expect(result.structuredContent).toMatchObject({
+      error: { code: JsonRpcErrorCode.InvalidParams },
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('migrates exhausted summary text through both surfaces', async () => {
+    api.getBillSubResource.mockResolvedValue({
+      data: [{ text: 'abc', versionCode: '49' }],
+      pagination: { count: 1, nextOffset: null },
+    });
+    const result = await runToolContract(billLookupTool, {
+      operation: 'summaries',
+      congress: 118,
+      billType: 'hr',
+      billNumber: 1,
+      characterOffset: 3,
+    });
+    expect(result.structuredContent).toMatchObject({
+      error: {
+        code: JsonRpcErrorCode.ValidationError,
+        data: { reason: 'offset_past_end', retryable: false },
+      },
+    });
+    expect(result.content).toContainEqual(
+      expect.objectContaining({ type: 'text', text: expect.stringContaining('textNextOffset') }),
+    );
+  });
   it.each([
     {
       reason: 'document_unavailable',
@@ -51,7 +86,7 @@ describe('document recovery contract', () => {
     },
     {
       reason: 'document_too_large',
-      code: JsonRpcErrorCode.InvalidParams,
+      code: JsonRpcErrorCode.ValidationError,
       response: () =>
         new Response('body', {
           headers: {
@@ -62,7 +97,7 @@ describe('document recovery contract', () => {
     },
     {
       reason: 'offset_past_end',
-      code: JsonRpcErrorCode.InvalidParams,
+      code: JsonRpcErrorCode.ValidationError,
       response: () => new Response('body', { headers: { 'content-type': 'text/plain' } }),
     },
   ])(

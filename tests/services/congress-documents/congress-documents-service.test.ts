@@ -276,7 +276,7 @@ describe('CongressDocumentsService', () => {
           createMockContext(),
         )
         .catch((e: unknown) => e)) as McpError;
-      expect(error.code).toBe(JsonRpcErrorCode.InvalidParams);
+      expect(error.code).toBe(JsonRpcErrorCode.ValidationError);
       expect(error.data?.reason).toBe('document_too_large');
       expect(error.data?.maxBytes).toBe(CEILING);
     });
@@ -396,7 +396,7 @@ describe('CongressDocumentsService', () => {
           createMockContext(),
         )
         .catch((e: unknown) => e)) as McpError;
-      expect(error.code).toBe(JsonRpcErrorCode.InvalidParams);
+      expect(error.code).toBe(JsonRpcErrorCode.ValidationError);
       expect(error.data?.reason).toBe('offset_past_end');
       expect(error.data?.totalCharacters).toBe(LONG_TEXT.length);
     });

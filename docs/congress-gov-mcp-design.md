@@ -116,6 +116,8 @@ operation: z.enum([
 | `limit` | list, sub-resources | Results per page (1-250, default 20). |
 | `offset` | list, sub-resources | Pagination offset. |
 
+`type` and `number` normalize to `billType` and `billNumber`; bill types are case-insensitive, and any-case `relatedbills` normalizes to `related`. Canonical and alias keys together are rejected. The advertised canonical input schema remains unchanged.
+
 **Description:**
 ```
 Browse and retrieve U.S. legislative bill data from Congress.gov.
@@ -736,6 +738,12 @@ The Congress.gov API does not expose full-text search. Every tool description gu
 - **Find a member by name:** List members by state/congress, scan results
 
 ### Domain-specific tools with operation enums
+
+Explicit operations are preserved. `list` rejects identities it would discard with `incompatible_identity` (`ValidationError`, -32007): bill `billNumber`, vote `voteNumber`, nomination `nominationNumber`, CRS/committee `reportNumber`, and Record `volumeNumber`. The error names a compatible operation and the remove-field option. Browse scoping, pagination, defaulted selectors, and optional blank strings keep their existing behavior.
+
+CRS `id`, `reportId`, and `report_id` normalize to `reportNumber` before operation validation. Canonical plus alias keys, or multiple aliases for one target, are rejected without overwriting the canonical value.
+
+Committee name filtering first requires every normalized query token to occur in the name. With no exact matches, every query token must reach the existing 0.5 bigram-Dice floor against a name token; qualifying names rank by mean similarity, then normalized name and system code, capped at five and labeled approximate. This retains typo forgiveness without accepting a partly unrelated query. Matching precedes pagination over the complete roster; name resolution uses the same rule restricted to parent committees.
 
 The existing [MCP Congress server](https://github.com/bsmi021/mcp-congress_gov_server) uses 2 generic tools — forcing the LLM to construct URIs. This design uses 10 domain-specific tools grouped by noun, each with operations that share parameter patterns.
 

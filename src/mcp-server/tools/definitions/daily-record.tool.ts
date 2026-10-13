@@ -11,6 +11,7 @@ import {
   congressErrorContracts,
   documentErrorContracts,
   documentWindowInput,
+  identityErrorContracts,
   listEnrichment,
   listOrDetail,
   notifyIfNoMatches,
@@ -28,7 +29,7 @@ export const dailyRecordTool = tool('congressgov_daily_record', {
   title: 'Congress.gov Daily Record',
   description: `Browse the daily Congressional Record — floor speeches, debates, and legislative text published each day Congress is in session. Navigation is hierarchical: volumes (via 'list') → issues (via 'issues') → articles (via 'articles'). Use 'list' to find recent volumes, 'issues' to see what's in a volume, and 'articles' to access individual speeches and debate sections. 'articles' lists each article and its format URLs; 'content' then reads one article's actual text, a bounded character window at a time.`,
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
-  errors: [...congressErrorContracts, ...documentErrorContracts],
+  errors: [...congressErrorContracts, ...documentErrorContracts, ...identityErrorContracts],
   input: z.object({
     operation: z
       .enum(['list', 'issues', 'articles', 'content'])
@@ -62,6 +63,13 @@ export const dailyRecordTool = tool('congressgov_daily_record', {
     const api = getCongressApi();
 
     if (input.operation === 'list') {
+      if (input.volumeNumber !== undefined) {
+        throw ctx.fail(
+          'incompatible_identity',
+          "'list' does not use volumeNumber. Remove volumeNumber to browse, or use 'issues' with volumeNumber (then 'articles' or 'content' with issueNumber).",
+          { field: 'volumeNumber', operation: input.operation },
+        );
+      }
       const result = await api.listDailyRecord({ limit: input.limit, offset: input.offset }, ctx);
       ctx.log.info('Daily record listed');
       ctx.enrich.echo('Congressional Record volumes');

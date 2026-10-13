@@ -2,9 +2,9 @@
 
 **Server:** congressgov-mcp-server
 **Version:** 0.7.4
-**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.13.14`
+**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.13.15`
 **Engines:** Bun ≥1.4.0, Node ≥24.0.0
-**MCP SDK:** `@modelcontextprotocol/server` ^2.2.0
+**MCP SDK:** `@modelcontextprotocol/server` ^2.3.1
 **Zod:** ^4.6.5
 
 > **Read the framework docs first:** `node_modules/@cyanheads/mcp-ts-core/CLAUDE.md` contains the full API reference — builders, Context, error codes, exports, patterns. This file covers server-specific conventions only.
@@ -40,7 +40,7 @@ Tailor suggestions to what's actually missing or stale — don't recite the full
 
 | Env Var | Required | Description |
 |:--------|:---------|:------------|
-| `CONGRESS_API_KEY` | No | Optional. Defaults to `DEMO_KEY` (30 req/hr). Own key from [api.data.gov](https://api.data.gov/signup/): 5,000 req/hr. |
+| `CONGRESS_API_KEY` | No | Optional. Fallbacks: `DEMO_KEY` 30/hour and 50/day per IP; registered key from [api.data.gov](https://api.data.gov/signup/) 5,000/hour. Valid upstream hourly quota headers take precedence. |
 | `CONGRESS_API_BASE_URL` | No | Defaults to `https://api.congress.gov/v3` |
 | `CONGRESS_MIRROR_ENABLED` | No | Enable the local bill search mirror and `congressgov_search_bills`. Defaults to `false`. |
 | `CONGRESS_MIRROR_PATH` | No | Filesystem path to the SQLite mirror index. Defaults to `.mirror/bills.sqlite3`. |
@@ -169,7 +169,7 @@ Four services. `CongressApiService` backs nine tools and the House branch of `co
 **`CongressApiService`** — wraps the Congress.gov REST API v3:
 - API key via `X-Api-Key` header (never logged; kept out of the URL so it can't leak in upstream error messages)
 - Pagination: `offset` + `limit` query params, max 250 per request
-- Rate limiting: 5,000 requests/hour per key
+- Rate limiting: rolling process-local attempt budgets, reserved before every dispatch (failures, retries, concurrent calls included). Credential fallbacks are demo 30/hour + 50/day and registered 5,000/hour; valid upstream hourly headers override the fallback. Observed remaining is a conservative shared-quota bound, expires one local hour after observation, and never claims an upstream reset time. Other clients are outside local accounting
 - Response normalization: request `format=json`, return typed data
 - Native `fetch` — no SDK dependency
 
@@ -208,11 +208,14 @@ async handler(input, ctx) {
 
 ## Error Patterns
 
+`identityErrorContracts` declares `incompatible_identity` (`ValidationError`, -32007) only on bill lookup, roll votes, nominations, CRS reports, committee reports, and daily record. Their `list` handlers reject meaningful entity identifiers before any service call, preserving the explicit operation and harmless pagination/defaulted selectors. Optional blank string identities remain unset. Bill `type`/`number` and CRS `id`/`reportId`/`report_id` aliases normalize before that check; collisions retain the framework's rejection policy. Bill types and `relatedbills` values normalize through schema-preserving preprocessors.
+
 All tools share these patterns. The service layer handles them uniformly:
 
 | Condition | Error |
 |:----------|:------|
-| Rate limit hit | `rateLimited('Congress.gov API rate limit reached (5,000 requests/hour).')` |
+| Rate limit hit | `rateLimited(...)` with `rate_limited`, credential/shared-quota guidance and upstream `Retry-After` when supplied |
+| Deadline or HTTP timeout | `Timeout` (-32004), `upstream_timeout`; HTTP responses retain status |
 | API unavailable (5xx) | `serviceUnavailable('Congress.gov API returned HTTP {status}.')` |
 | Entity not found (404) | `notFound('{entity} not found', { ...identifiers })` |
 | Invalid params | `validationError('...', { field })` |
@@ -377,7 +380,7 @@ docker buildx build --platform linux/amd64,linux/arm64 \
   --push .
 ```
 
-Remind the user to run these after completing a release flow.
+The `release-and-publish` run handles npm, MCP Registry, bundle, GitHub Release, and GHCR publishing.
 
 ---
 

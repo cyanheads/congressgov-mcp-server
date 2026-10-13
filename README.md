@@ -7,7 +7,7 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-0.7.4-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/congressgov-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.2.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/congressgov-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/congressgov-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.2-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-0.7.4-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/congressgov-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.3.1-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/congressgov-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/congressgov-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.3-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -71,6 +71,7 @@ Bill, member, and committee data is also reachable through `congressgov_bill_loo
 ### `congressgov_bill_lookup` <sub>tool</sub>
 
 - `list` browses one `congress`, narrowed by `billType` and a `fromDateTime`/`toDateTime` range on the record's update date, newest first unless `order: 'oldest'`; `get`, `actions`, `amendments`, `cosponsors`, `committees`, `subjects`, `summaries`, `text`, `titles`, `related`, and `content` need `congress` + `billType` + `billNumber`
+- Copied bill-row keys `type` and `number` are accepted as `billType` and `billNumber`; bill type codes are case-insensitive, and `relatedbills` (any case) selects `related`. Send one name per field: canonical and alias keys together are rejected.
 - `content` reads the text version at `textVersionIndex` (0-based in `text` order, 0 is the most recent) and returns one character window in `content.text` with `totalCharacters`, `truncated`, and `nextOffset`
 - `summaries` takes an optional `versionCode` (`00` introduced, `49` public law) and applies the same page budget and row window as `congressgov_bill_summaries`, steered by `characterOffset`/`characterLimit`; a cut row carries `textTotalCharacters`, `textTruncated`, and `textNextOffset`
 
@@ -94,6 +95,7 @@ Bill, member, and committee data is also reachable through `congressgov_bill_loo
 
 - `committeeCode` is a chamber prefix (`h`/`s`/`j`), letters, and a 2-digit suffix (e.g. `hsju00`); `get`, `bills`, `reports`, and the Senate-only `nominations` infer `chamber` from the prefix
 - A committee name in `committeeCode` resolves when exactly one committee matches, and otherwise returns the candidate rows with a notice; `list` with `filter` name-matches every committee in scope, past the 250-row page cap, and fuzzy hits carry `approximate: true`
+- Exact matches require every query token; typo matches require each token to match a name token at the similarity floor. Blank filters browse normally; unrelated tokens return no matches.
 - `bills` is newest first by default (`order`), and its rows carry no titles, so chain `congressgov_bill_lookup` `get` per row
 
 ---
@@ -124,6 +126,7 @@ Bill, member, and committee data is also reachable through `congressgov_bill_loo
 ### `congressgov_crs_reports` <sub>tool</sub>
 
 - `list` browses the catalog; `get` takes a `reportNumber` such as `R40097`, `RL33612`, or `IF12345`
+- `id`, `reportId`, and `report_id` are accepted as `reportNumber`. Send only one identifier key; canonical and alias keys together, or multiple aliases, are rejected.
 - `get` returns authors, topics, summary, and download formats
 
 ---
@@ -206,14 +209,15 @@ Congress.gov-specific:
 - Type-safe client for the Congress.gov REST API v3, plus a client for the Senate's LIS XML feed that backs Senate roll votes
 - The Congress.gov API has no keyword search, so tools browse by congress, type, date range, chamber, state, and district, and address bills by `congress` + `billType` + `billNumber`, members by `bioguideId`, and committees by system code; list operations page with `limit` 1–250 (default 20) and `offset`
 - `content` on bill text, committee reports, and Record articles reads `format` `text` (default) or `xml` through a `characterOffset`/`characterLimit` window (1–100,000 characters, default 25,000), fetched only from `www.congress.gov` under a 25 MB ceiling and a 30s deadline
-- Optional API key from [api.data.gov](https://api.data.gov/signup/): `DEMO_KEY` allows 30 req/hr, your own key 5,000 req/hr
+- Optional API key from [api.data.gov](https://api.data.gov/signup/): documented fallbacks are `DEMO_KEY` 30 requests/hour and 50/day per IP, registered keys 5,000/hour. Valid upstream hourly quota headers override the fallback; actual quotas vary
 - Opt-in local SQLite FTS5 mirror (`CONGRESS_MIRROR_ENABLED`) adds keyword search over bill titles and CRS summaries
 
 Agent-friendly output:
 
 - Every list response carries `effectiveQuery` and `totalCount`; a `notice` fires when nothing matched, and a page past the end says so in the rendered output
+- `list` rejects entity identities it would discard: bill `billNumber`, vote `voteNumber`, nomination `nominationNumber`, CRS/committee `reportNumber`, and Record `volumeNumber`. The `incompatible_identity` domain error names the detail operation to select or the field to remove; pagination and defaulted selectors remain accepted.
 - Exact character windows: `content` returns `offset`, `truncated`, and `nextOffset`, so walking a multi-megabyte bill never skips or repeats a character
-- Typed `content` failures (`document_unavailable`, `format_unavailable`, `document_fetch_failed`, `document_too_large`, `offset_past_end`) alongside the shared `not_found`, `rate_limited`, `invalid_request`, and `upstream_error` reasons, each with a recovery hint
+- Typed `content` failures (`document_unavailable`, `format_unavailable`, `document_fetch_failed`, `document_too_large`, `offset_past_end`) alongside the shared `not_found`, `rate_limited`, `invalid_request`, `upstream_error`, and `upstream_timeout` reasons, each with a recovery hint. Document byte ceilings and exhausted document/summary offsets use domain validation (-32007); malformed arguments remain protocol invalid parameters (-32602)
 
 ## Getting started
 
@@ -301,7 +305,7 @@ MCP_TRANSPORT_TYPE=http MCP_HTTP_PORT=3010 CONGRESS_API_KEY=your-api-key bun run
 ### Prerequisites
 
 - [Bun v1.4.0](https://bun.sh/) or higher (or Node.js v24+).
-- Optional: a free [api.data.gov key](https://api.data.gov/signup/) raises the limit from 30 to 5,000 requests per hour.
+- Optional: a free [api.data.gov key](https://api.data.gov/signup/) uses a documented fallback of 5,000 requests/hour instead of the demo fallback of 30/hour and 50/day per IP. Upstream hourly headers may advertise a different quota.
 
 ### Installation
 
@@ -334,7 +338,7 @@ cp .env.example .env
 
 | Variable | Description | Default |
 |:---|:---|:---|
-| `CONGRESS_API_KEY` | API key from [api.data.gov](https://api.data.gov/signup/). `DEMO_KEY` allows 30 req/hr; your own key 5,000 req/hr. | `DEMO_KEY` |
+| `CONGRESS_API_KEY` | API key from [api.data.gov](https://api.data.gov/signup/). Fallbacks: `DEMO_KEY` 30/hour and 50/day per IP; registered key 5,000/hour. Upstream hourly quota headers take precedence. | `DEMO_KEY` |
 | `CONGRESS_API_BASE_URL` | Congress.gov API base URL. | `https://api.congress.gov/v3` |
 | `CONGRESS_MIRROR_ENABLED` | Enable the local bill search mirror and the `congressgov_search_bills` tool. | `false` |
 | `CONGRESS_MIRROR_PATH` | Filesystem path to the SQLite mirror index. | `.mirror/bills.sqlite3` |

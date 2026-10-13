@@ -4,7 +4,7 @@
  */
 
 import { JsonRpcErrorCode, type McpError } from '@cyanheads/mcp-ts-core/errors';
-import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/config/server-config.js', () => ({
@@ -14,6 +14,8 @@ vi.mock('@/config/server-config.js', () => ({
   }),
 }));
 
+import { getServerConfig } from '@/config/server-config.js';
+import { billLookupTool } from '@/mcp-server/tools/definitions/bill-lookup.tool.js';
 import { formatBills } from '@/mcp-server/tools/format-helpers.js';
 import {
   CongressApiService,
@@ -45,6 +47,10 @@ describe('CongressApiService', () => {
   const mockFetch = vi.fn();
 
   beforeEach(() => {
+    vi.mocked(getServerConfig).mockReturnValue({
+      apiKey: 'test-api-key',
+      baseUrl: 'https://api.congress.gov/v3',
+    } as ReturnType<typeof getServerConfig>);
     mockFetch.mockReset();
     mockFetch.mockResolvedValue(okJson({}));
     vi.stubGlobal('fetch', mockFetch);
@@ -52,6 +58,8 @@ describe('CongressApiService', () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
@@ -91,6 +99,59 @@ describe('CongressApiService', () => {
   });
 
   describe('error handling', () => {
+    it('runs the real fetch deadline and retries through both tool error surfaces (#78)', async () => {
+      vi.useFakeTimers();
+      initCongressApi();
+      mockFetch.mockImplementation(
+        (_url, init: RequestInit) =>
+          new Promise((_resolve, reject) => {
+            init.signal?.addEventListener('abort', () => reject(init.signal?.reason), {
+              once: true,
+            });
+          }),
+      );
+      const pending = runToolContract(billLookupTool, { operation: 'list', congress: 118 });
+      await vi.runAllTimersAsync();
+      const result = await pending;
+      expect(result.structuredContent).toMatchObject({
+        error: {
+          code: JsonRpcErrorCode.Timeout,
+          data: { reason: 'upstream_timeout', retryable: true },
+        },
+      });
+      const rendered = result.content
+        .map((block) => ('text' in block ? block.text : ''))
+        .join('\n');
+      expect(rendered).toContain('10000-millisecond deadline');
+      expect(rendered).toContain('Recovery:');
+      expect(rendered).not.toContain('api.congress.gov');
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+    });
+
+    it('renders a dynamic upstream quota error and recovery on both surfaces (#71)', async () => {
+      initCongressApi();
+      mockFetch.mockResolvedValue({
+        ...errorResponse(429, 'Too Many Requests'),
+        headers: new Headers({
+          'retry-after': '42',
+          'x-ratelimit-limit': '20000',
+          'x-ratelimit-remaining': '0',
+        }),
+      });
+      const result = await runToolContract(billLookupTool, { operation: 'list', congress: 118 });
+      expect(result.structuredContent).toMatchObject({
+        error: {
+          code: JsonRpcErrorCode.RateLimited,
+          data: { reason: 'rate_limited', retryAfter: '42' },
+        },
+      });
+      const rendered = result.content
+        .map((block) => ('text' in block ? block.text : ''))
+        .join('\n');
+      expect(rendered).toContain('shared');
+      expect(rendered).toContain('Retry-After');
+      expect(rendered).not.toContain('5,000');
+    });
     it('preserves in-flight caller cancellation without retrying', async () => {
       const controller = new AbortController();
       mockFetch.mockImplementation(
@@ -243,17 +304,155 @@ describe('CongressApiService', () => {
   });
 
   describe('rate limiting', () => {
-    it('rejects when local rate limit is reached', () => {
-      (service as any).requestCount = 5000;
-      (service as any).windowStart = Date.now();
-      expect(() => (service as any).checkRateLimit()).toThrow(/rate limit/i);
+    it('honors the demo hourly fallback at the actual fetch boundary (#71)', async () => {
+      vi.mocked(getServerConfig).mockReturnValue({
+        apiKey: 'DEMO_KEY',
+        baseUrl: 'https://api.congress.gov/v3',
+      } as ReturnType<typeof getServerConfig>);
+      const demo = new CongressApiService();
+      for (let i = 0; i < 30; i++) await demo.getCurrentCongress();
+      await expect(demo.getCurrentCongress()).rejects.toMatchObject({
+        code: JsonRpcErrorCode.RateLimited,
+      });
+      expect(mockFetch).toHaveBeenCalledTimes(30);
+      vi.mocked(getServerConfig).mockReturnValue({
+        apiKey: 'test-api-key',
+        baseUrl: 'https://api.congress.gov/v3',
+      } as ReturnType<typeof getServerConfig>);
     });
 
-    it('resets counter after window expires', () => {
-      (service as any).requestCount = 5000;
-      (service as any).windowStart = Date.now() - 61 * 60 * 1000;
-      expect(() => (service as any).checkRateLimit()).not.toThrow();
-      expect((service as any).requestCount).toBe(0);
+    it('classifies HTTP timeout responses separately (#78)', async () => {
+      vi.useFakeTimers();
+      mockFetch.mockResolvedValue(errorResponse(504, 'Gateway Timeout'));
+      const pending = service.getCurrentCongress().catch((error: unknown) => error);
+      await vi.runAllTimersAsync();
+      expect(await pending).toMatchObject({
+        code: JsonRpcErrorCode.Timeout,
+        data: { reason: 'upstream_timeout', status: 504 },
+      });
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+    });
+    it('rejects when the registered fallback reaches 5000 attempts', async () => {
+      for (let i = 0; i < 5000; i++) await service.getCurrentCongress();
+      await expect(service.getCurrentCongress()).rejects.toMatchObject({
+        code: JsonRpcErrorCode.RateLimited,
+      });
+      expect(mockFetch).toHaveBeenCalledTimes(5000);
+    });
+
+    it('expires hourly attempts at the rolling boundary and keeps demo daily attempts', async () => {
+      let now = 100000;
+      vi.spyOn(Date, 'now').mockImplementation(() => now);
+      vi.mocked(getServerConfig).mockReturnValue({
+        apiKey: 'DEMO_KEY',
+        baseUrl: 'https://api.congress.gov/v3',
+      } as ReturnType<typeof getServerConfig>);
+      const demo = new CongressApiService();
+      for (let i = 0; i < 30; i++) await demo.getCurrentCongress();
+      now += 3600000;
+      for (let i = 0; i < 20; i++) await demo.getCurrentCongress();
+      await expect(demo.getCurrentCongress()).rejects.toMatchObject({
+        code: JsonRpcErrorCode.RateLimited,
+        data: { dailyLimit: 50 },
+      });
+      now += 23 * 3600000;
+      await demo.getCurrentCongress();
+      expect(mockFetch).toHaveBeenCalledTimes(51);
+    });
+
+    it.each(['bad', '-1', '0', 'Infinity', '9007199254740992'])(
+      'ignores invalid hourly limit %s',
+      async (limit) => {
+        mockFetch.mockResolvedValue({
+          ...okJson({ congress: {} }),
+          headers: new Headers({ 'x-ratelimit-limit': limit, 'x-ratelimit-remaining': '0' }),
+        });
+        await service.getCurrentCongress();
+        await service.getCurrentCongress();
+        expect(mockFetch).toHaveBeenCalledTimes(2);
+      },
+    );
+
+    it('uses upstream bounds and never replenishes from a late concurrent response', async () => {
+      let resolveFirst!: (value: ReturnType<typeof okJson>) => void;
+      mockFetch.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = resolve;
+          }),
+      );
+      mockFetch.mockResolvedValueOnce({
+        ...okJson({ congress: {} }),
+        headers: new Headers({ 'x-ratelimit-limit': '20000', 'x-ratelimit-remaining': '0' }),
+      });
+      const first = service.getCurrentCongress();
+      await service.getCurrentCongress();
+      resolveFirst({
+        ...okJson({ congress: {} }),
+        headers: new Headers({ 'x-ratelimit-limit': '20000', 'x-ratelimit-remaining': '19999' }),
+      });
+      await first;
+      await expect(service.getCurrentCongress()).rejects.toMatchObject({
+        code: JsonRpcErrorCode.RateLimited,
+        data: { hourlyLimit: 20000 },
+      });
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+    });
+
+    it('reserves concurrent requests before either finishes', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ...okJson({}),
+        headers: new Headers({ 'x-ratelimit-limit': '2', 'x-ratelimit-remaining': '1' }),
+      });
+      await service.getCurrentCongress();
+      const next = service.getCurrentCongress();
+      await expect(service.getCurrentCongress()).rejects.toMatchObject({
+        code: JsonRpcErrorCode.RateLimited,
+      });
+      await next;
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+    });
+
+    it('counts retry and failed attempts before dispatch', async () => {
+      vi.useFakeTimers();
+      mockFetch.mockResolvedValueOnce({
+        ...okJson({}),
+        headers: new Headers({ 'x-ratelimit-limit': '3', 'x-ratelimit-remaining': '2' }),
+      });
+      await service.getCurrentCongress();
+      mockFetch.mockResolvedValue(errorResponse(503, 'Unavailable'));
+      const result = service.getCurrentCongress().catch((error: unknown) => error);
+      await vi.runAllTimersAsync();
+      expect(await result).toMatchObject({ code: JsonRpcErrorCode.RateLimited });
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+    });
+
+    it('retains Retry-After and quota headers on a non-retried 429', async () => {
+      let now = 100000;
+      vi.spyOn(Date, 'now').mockImplementation(() => now);
+      mockFetch.mockResolvedValue({
+        ...errorResponse(429, 'Too Many Requests'),
+        headers: new Headers({
+          'retry-after': '42',
+          'x-ratelimit-limit': '10',
+          'x-ratelimit-remaining': '0',
+        }),
+      });
+      await expect(service.getCurrentCongress()).rejects.toMatchObject({
+        data: { reason: 'rate_limited', retryAfter: '42' },
+      });
+      await expect(service.getCurrentCongress()).rejects.toMatchObject({
+        data: { hourlyLimit: 10 },
+      });
+      expect(mockFetch).toHaveBeenCalledOnce();
+      mockFetch.mockResolvedValue(okJson({ congress: {} }));
+      now += 3_600_000 - 1;
+      await expect(service.getCurrentCongress()).rejects.toMatchObject({
+        code: JsonRpcErrorCode.RateLimited,
+      });
+      now++;
+      await service.getCurrentCongress();
+      expect(mockFetch).toHaveBeenCalledTimes(2);
     });
   });
 

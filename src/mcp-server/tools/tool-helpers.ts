@@ -435,7 +435,7 @@ export const documentErrorContracts = [
       'Retry after a short delay; if the failure persists, request a different format or read the document at the sourceUrl the text operation returns.',
   },
   {
-    code: JsonRpcErrorCode.InvalidParams,
+    code: JsonRpcErrorCode.ValidationError,
     reason: 'document_too_large',
     thrownBy: 'service',
     retryable: false,
@@ -444,7 +444,7 @@ export const documentErrorContracts = [
       'Read the document at the sourceUrl the text operation returns. A document this size clears the ceiling in every format it publishes, so switching format reaches the same limit.',
   },
   {
-    code: JsonRpcErrorCode.InvalidParams,
+    code: JsonRpcErrorCode.ValidationError,
     reason: 'offset_past_end',
     thrownBy: 'service',
     retryable: false,
@@ -456,7 +456,7 @@ export const documentErrorContracts = [
 
 /**
  * Shared `errors[]` contract for every Congress.gov API tool. Every tool except
- * the mirror-backed `congressgov_search_bills` reaches the same `CongressApiService` fetch path, so they surface the same four
+ * the mirror-backed `congressgov_search_bills` reaches the same `CongressApiService` fetch path, so they surface the same five
  * upstream failure modes. The service raises each with a matching `data.reason`
  * and `data.recovery.hint` (see `classifyUpstreamError`), making the failures
  * machine-readable; declaring them here advertises the contract in `tools/list`.
@@ -477,9 +477,9 @@ export const congressErrorContracts = [
     reason: 'rate_limited',
     thrownBy: 'service',
     retryable: true,
-    when: 'The Congress.gov API rate limit (5,000 requests/hour per key) was exceeded.',
+    when: 'A process-local attempt budget or the shared upstream credential/IP quota was reached; upstream hourly limits vary and DEMO_KEY also has a daily quota.',
     recovery:
-      'Wait for the hourly rate-limit window to reset before retrying, or reduce the request frequency.',
+      'Follow Retry-After when supplied; otherwise wait and reduce request frequency. This process cannot account for other clients sharing the key or demo IP.',
   },
   {
     code: JsonRpcErrorCode.InvalidParams,
@@ -498,5 +498,26 @@ export const congressErrorContracts = [
     when: 'Congress.gov returned an unexpected error (5xx or another non-2xx status).',
     recovery:
       'Retry after a short delay; if the failure persists the Congress.gov service may be temporarily degraded.',
+  },
+  {
+    code: JsonRpcErrorCode.Timeout,
+    reason: 'upstream_timeout',
+    thrownBy: 'service',
+    retryable: true,
+    when: 'The Congress.gov request deadline expired or the upstream returned an HTTP timeout response.',
+    recovery:
+      'Retry after a short delay; if the failure persists the Congress.gov service may be temporarily degraded.',
+  },
+] as const satisfies readonly ErrorContract[];
+
+/** Domain refusal when a list operation would discard an entity identifier. */
+export const identityErrorContracts = [
+  {
+    code: JsonRpcErrorCode.ValidationError,
+    reason: 'incompatible_identity',
+    retryable: false,
+    when: 'A list operation carries an entity identifier that only a detail operation uses.',
+    recovery:
+      'Remove the named identity field to browse, or select the compatible operation named in the error and supply its required identifiers.',
   },
 ] as const satisfies readonly ErrorContract[];

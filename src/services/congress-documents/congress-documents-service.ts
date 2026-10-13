@@ -23,11 +23,11 @@
 
 import type { Context } from '@cyanheads/mcp-ts-core';
 import {
-  invalidParams,
   JsonRpcErrorCode,
   McpError,
   notFound,
   serviceUnavailable,
+  validationError,
 } from '@cyanheads/mcp-ts-core/errors';
 import type { RequestContext } from '@cyanheads/mcp-ts-core/utils';
 import {
@@ -124,7 +124,7 @@ export class CongressDocumentsService {
 
     /** An empty document is a real (if unusual) answer at offset 0 — not a bad offset. */
     if (totalCharacters > 0 && offset >= totalCharacters) {
-      throw invalidParams(
+      throw validationError(
         `characterOffset ${offset} is past the end of this document, which has ${totalCharacters} characters.`,
         {
           reason: OFFSET_PAST_END,
@@ -306,7 +306,7 @@ export class CongressDocumentsService {
   }
 
   private tooLarge(data: Record<string, unknown>): McpError {
-    return invalidParams(
+    return validationError(
       `This document exceeds the ${this.maxDocumentBytes.toLocaleString('en-US')}-byte ceiling this server retrieves.`,
       {
         reason: DOCUMENT_TOO_LARGE,

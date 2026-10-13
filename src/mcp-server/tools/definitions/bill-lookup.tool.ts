@@ -17,6 +17,7 @@ import {
   congressErrorContracts,
   documentErrorContracts,
   documentWindowInput,
+  identityErrorContracts,
   listEnrichment,
   listOrDetail,
   MAX_CONTENT_CHARACTERS,
@@ -35,22 +36,29 @@ import {
   selectDocumentUrl,
 } from '@/services/congress-documents/document-formats.js';
 
-const BillTypeEnum = z.enum(BILL_TYPE_CODES);
+const BillTypeEnum = z.preprocess(
+  (value) => (typeof value === 'string' ? value.toLowerCase() : value),
+  z.enum(BILL_TYPE_CODES),
+);
 
-const OperationEnum = z.enum([
-  'list',
-  'get',
-  'actions',
-  'amendments',
-  'cosponsors',
-  'committees',
-  'subjects',
-  'summaries',
-  'text',
-  'titles',
-  'related',
-  'content',
-]);
+const OperationEnum = z.preprocess(
+  (value) =>
+    typeof value === 'string' && value.toLowerCase() === 'relatedbills' ? 'related' : value,
+  z.enum([
+    'list',
+    'get',
+    'actions',
+    'amendments',
+    'cosponsors',
+    'committees',
+    'subjects',
+    'summaries',
+    'text',
+    'titles',
+    'related',
+    'content',
+  ]),
+);
 
 const SUB_RESOURCE_MAP: Record<string, string> = {
   related: 'relatedbills',
@@ -60,7 +68,8 @@ export const billLookupTool = tool('congressgov_bill_lookup', {
   title: 'Congress.gov Bill Lookup',
   description: `Browse and retrieve U.S. legislative bill data from Congress.gov. Discover bills by filtering on congress, bill type, and date range — there is no keyword search. Use 'list' to browse (requires congress, defaults to most-recently-updated first), 'get' for full bill detail (sponsor, policy area, CBO estimates, law info), or drill into a specific bill with 'actions', 'amendments', 'cosponsors', 'committees', 'subjects', 'summaries', 'text', 'titles', or 'related' (each requires congress + billType + billNumber). 'text' lists the published versions and their format URLs; 'content' then reads one version's actual text, a bounded character window at a time. 'summaries' takes an optional versionCode selector and returns each row's text a bounded character window at a time — a row past the window carries textTotalCharacters/textTruncated/textNextOffset, and characterOffset reads on from there.`,
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
-  errors: [...congressErrorContracts, ...documentErrorContracts],
+  errors: [...congressErrorContracts, ...documentErrorContracts, ...identityErrorContracts],
+  inputAliases: { type: 'billType', number: 'billNumber' },
   input: z.object({
     operation: OperationEnum.describe('Which data to retrieve.'),
     congress: z.number().int().positive().describe('Congress number (e.g., 118, 119).'),
@@ -127,6 +136,13 @@ export const billLookupTool = tool('congressgov_bill_lookup', {
     validateDateTimeRange(fromDateTime, toDateTime);
 
     if (input.operation === 'list') {
+      if (input.billNumber !== undefined) {
+        throw ctx.fail(
+          'incompatible_identity',
+          "'list' does not use billNumber. Remove billNumber to browse, or use 'get' with congress, billType, and billNumber.",
+          { field: 'billNumber', operation: input.operation },
+        );
+      }
       const result = await api.listBills(
         {
           congress: input.congress,

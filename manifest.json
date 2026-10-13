@@ -37,7 +37,7 @@
     "CONGRESS_API_KEY": {
       "type": "string",
       "title": "Congress.gov API Key",
-      "description": "Optional. Defaults to DEMO_KEY (30 req/hr). Get your own key at api.data.gov for 5,000 req/hr.",
+      "description": "Optional. Fallbacks: DEMO_KEY 30/hour and 50/day per IP; registered key from api.data.gov 5,000/hour. Upstream hourly quota headers take precedence.",
       "required": false,
       "default": ""
     }

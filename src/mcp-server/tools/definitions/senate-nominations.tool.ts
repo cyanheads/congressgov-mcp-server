@@ -10,8 +10,10 @@ import { formatNominations } from '@/mcp-server/tools/format-helpers.js';
 import {
   buildEffectiveQuery,
   congressErrorContracts,
+  identityErrorContracts,
   listEnrichment,
   listOrDetail,
+  normalizeOptionalString,
   notifyIfNoMatches,
 } from '@/mcp-server/tools/tool-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
@@ -20,7 +22,7 @@ export const senateNominationsTool = tool('congressgov_senate_nominations', {
   title: 'Congress.gov Senate Nominations',
   description: `Browse presidential nominations to federal positions and track the Senate confirmation process. Use 'list' to browse, 'get' for nomination detail, 'actions'/'committees'/'hearings' for confirmation pipeline data, or 'nominees' to retrieve individual appointees in a multi-nominee batch. Nominations use 'PN' (Presidential Nomination) numbering. Most nominations carry confirmation activity on the parent (e.g., PN1000); multi-part parents (e.g., PN851) carry no activity of their own — their actions, committees, hearings, and nominees live on partitioned children (PN851-1, PN851-2, …). 'get' on a parent that has no \`nominees\` array signals the partitioned form is needed for everything below it.`,
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
-  errors: congressErrorContracts,
+  errors: [...congressErrorContracts, ...identityErrorContracts],
   input: z.object({
     operation: z
       .enum(['list', 'get', 'nominees', 'actions', 'committees', 'hearings'])
@@ -54,6 +56,13 @@ export const senateNominationsTool = tool('congressgov_senate_nominations', {
     const api = getCongressApi();
 
     if (input.operation === 'list') {
+      if (normalizeOptionalString(input.nominationNumber)) {
+        throw ctx.fail(
+          'incompatible_identity',
+          "'list' does not use nominationNumber. Remove nominationNumber to browse, or use 'get' with congress and nominationNumber.",
+          { field: 'nominationNumber', operation: input.operation },
+        );
+      }
       const result = await api.listNominations(
         {
           congress: input.congress,

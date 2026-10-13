@@ -215,12 +215,12 @@ function isNativeAbortSignal(value: unknown): value is AbortSignal {
 const MAX_ATTEMPTS = 3;
 const BASE_BACKOFF_MS = 1000;
 const RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000;
-const RATE_LIMIT_MAX = 5000;
+const DEMO_DAILY_WINDOW_MS = 24 * RATE_LIMIT_WINDOW_MS;
 const REQUEST_TIMEOUT_MS = 10_000;
 const HTML_RESPONSE_RE = /^\s*<(!DOCTYPE\s+html|html[\s>])/i;
 
 const RATE_LIMIT_MESSAGE =
-  'Congress.gov API rate limit reached (5,000 requests/hour). Wait before retrying — the limit resets hourly.';
+  'Congress.gov API quota reached. Quotas are shared across clients using the same key or demo IP; this server only tracks its own attempts.';
 
 /**
  * `data.reason` + `data.recovery.hint` payloads matching the `errors[]` contract
@@ -233,7 +233,9 @@ const NOT_FOUND_RECOVERY = {
 } as const;
 const RATE_LIMITED_RECOVERY = {
   reason: 'rate_limited',
-  recovery: { hint: 'Wait for the hourly rate limit to reset before retrying.' },
+  recovery: {
+    hint: 'Follow Retry-After when supplied; otherwise wait and reduce request frequency. Hourly quotas vary by credential, and DEMO_KEY also has a shared 50-request daily quota.',
+  },
 } as const;
 const INVALID_REQUEST_RECOVERY = {
   reason: 'invalid_request',
@@ -281,10 +283,27 @@ function classifyUpstreamError(error: McpError, path: string): McpError {
   if (status !== undefined) meta.status = status;
   if (body !== undefined) meta.body = body;
   if (error.data?.retryable === false) meta.retryable = false;
+  if (typeof error.data?.retryAfter === 'string') meta.retryAfter = error.data.retryAfter;
   const opts = { cause: error };
   const suffix = status !== undefined ? ` (HTTP ${status})` : '';
 
   switch (error.code) {
+    case JsonRpcErrorCode.RequestCancelled:
+      return error;
+    case JsonRpcErrorCode.Timeout:
+      return new McpError(
+        error.code,
+        status === undefined
+          ? `Congress.gov did not complete the request within the ${REQUEST_TIMEOUT_MS}-millisecond deadline.`
+          : `Congress.gov returned a timeout response${suffix}.`,
+        {
+          retryable: true,
+          ...meta,
+          reason: 'upstream_timeout',
+          recovery: UPSTREAM_ERROR_RECOVERY.recovery,
+        },
+        opts,
+      );
     case JsonRpcErrorCode.RateLimited:
       return rateLimited(RATE_LIMIT_MESSAGE, { ...meta, ...RATE_LIMITED_RECOVERY }, opts);
     case JsonRpcErrorCode.NotFound:
@@ -316,12 +335,16 @@ function classifyUpstreamError(error: McpError, path: string): McpError {
 export class CongressApiService {
   private readonly apiKey: string;
   private readonly baseUrl: string;
-  private requestCount = 0;
-  private windowStart = Date.now();
+  private attempts: number[] = [];
+  private hourlyLimit: number;
+  private observedRemaining: number | undefined;
+  private observedAt = 0;
+  private requestSequence = 0;
 
   constructor() {
     const config = getServerConfig();
     this.apiKey = config.apiKey;
+    this.hourlyLimit = this.apiKey === 'DEMO_KEY' ? 30 : 5000;
     this.baseUrl = config.baseUrl.replace(/\/$/, '');
   }
 
@@ -741,8 +764,6 @@ export class CongressApiService {
 
   // biome-ignore lint/suspicious/noExplicitAny: API responses are dynamic JSON
   private get(path: string, ctx?: Context, query?: Record<string, string>): Promise<any> {
-    this.checkRateLimit();
-
     const url = this.buildUrl(path, query);
     const operation = `CongressApiService GET ${path}`;
     const requestContext = this.getRequestContext(ctx, operation);
@@ -757,21 +778,57 @@ export class CongressApiService {
     };
 
     return withRetry(async () => {
-      const response = await this.fetchResponse(url, path, requestContext, signal);
-      const data = this.parseJsonResponse(await response.text(), path);
-      this.requestCount++;
-      return data;
+      this.reserveAttempt();
+      const sequence = ++this.requestSequence;
+      const response = await this.fetchResponse(url, path, requestContext, signal, sequence);
+      let text: string;
+      try {
+        text = await response.text();
+      } catch (error) {
+        if (error instanceof McpError) throw classifyUpstreamError(error, path);
+        throw error;
+      }
+      return this.parseJsonResponse(text, path);
     }, retryOptions);
   }
 
-  private checkRateLimit(): void {
+  private reserveAttempt(): void {
     const now = Date.now();
-    if (now - this.windowStart > RATE_LIMIT_WINDOW_MS) {
-      this.windowStart = now;
-      this.requestCount = 0;
+    const retention = this.apiKey === 'DEMO_KEY' ? DEMO_DAILY_WINDOW_MS : RATE_LIMIT_WINDOW_MS;
+    this.attempts = this.attempts.filter((time) => now - time < retention);
+    if (now - this.observedAt >= RATE_LIMIT_WINDOW_MS) this.observedRemaining = undefined;
+    const hourlyAttempts = this.attempts.filter((time) => now - time < RATE_LIMIT_WINDOW_MS).length;
+    if (
+      (this.apiKey === 'DEMO_KEY' && this.attempts.length >= 50) ||
+      hourlyAttempts >= this.hourlyLimit ||
+      this.observedRemaining === 0
+    ) {
+      throw rateLimited(RATE_LIMIT_MESSAGE, {
+        ...RATE_LIMITED_RECOVERY,
+        scope: 'process-local',
+        hourlyLimit: this.hourlyLimit,
+        ...(this.apiKey === 'DEMO_KEY' ? { dailyLimit: 50 } : {}),
+      });
     }
-    if (this.requestCount >= RATE_LIMIT_MAX) {
-      throw rateLimited(RATE_LIMIT_MESSAGE, { ...RATE_LIMITED_RECOVERY });
+    this.attempts.push(now);
+    if (this.observedRemaining !== undefined) this.observedRemaining--;
+  }
+
+  /** Observed shared hourly remaining is a conservative bound, never a claimed reset time. */
+  private observeQuota(headers: Headers, sequence: number): void {
+    const limit = headers.get('x-ratelimit-limit');
+    const remaining = headers.get('x-ratelimit-remaining');
+    if (limit === null || !/^\d+$/.test(limit)) return;
+    const parsedLimit = Number(limit);
+    if (!Number.isSafeInteger(parsedLimit) || parsedLimit <= 0) return;
+    this.hourlyLimit = parsedLimit;
+    if (remaining === null || !/^\d+$/.test(remaining)) return;
+    const parsedRemaining = Number(remaining);
+    if (!Number.isSafeInteger(parsedRemaining) || parsedRemaining > parsedLimit) return;
+    const bound = Math.max(0, parsedRemaining - (this.requestSequence - sequence));
+    if (this.observedRemaining === undefined || bound <= this.observedRemaining) {
+      this.observedRemaining = bound;
+      this.observedAt = Date.now();
     }
   }
 
@@ -854,11 +911,13 @@ export class CongressApiService {
     url: URL,
     path: string,
     requestContext: RequestContext,
-    signal?: AbortSignal,
+    signal: AbortSignal | undefined,
+    sequence: number,
   ): Promise<Response> {
     try {
-      return await fetchWithTimeout(url, REQUEST_TIMEOUT_MS, requestContext, {
+      const response = await fetchWithTimeout(url, REQUEST_TIMEOUT_MS, requestContext, {
         headers: { Accept: 'application/json', 'X-Api-Key': this.apiKey },
+        errorHeaders: ['x-ratelimit-limit', 'x-ratelimit-remaining'],
         /** Congress.gov answers 404 for any identifier it does not hold, which is an
          *  expected outcome on every route here — classifyUpstreamError and
          *  tryNotFound turn it into an actionable domain notFound. Listing it drops
@@ -866,6 +925,8 @@ export class CongressApiService {
         expectedStatuses: [404],
         ...(signal ? { signal } : {}),
       });
+      this.observeQuota(response.headers, sequence);
+      return response;
     } catch (error) {
       /** fetchWithTimeout throws a status-mapped McpError whose message embeds the
        *  full upstream URL and which carries no reason/recovery. Rewrap every
@@ -873,6 +934,9 @@ export class CongressApiService {
        *  500 DoesNotExist cases are rewrapped again with identifier-rich data at
        *  call sites via tryNotFound(). */
       if (error instanceof McpError) {
+        if (error.data?.headers && typeof error.data.headers === 'object') {
+          this.observeQuota(new Headers(error.data.headers as Record<string, string>), sequence);
+        }
         throw classifyUpstreamError(error, path);
       }
       throw error;

@@ -23,7 +23,7 @@
       "environmentVariables": [
         {
           "name": "CONGRESS_API_KEY",
-          "description": "API key from api.data.gov \u2014 optional (falls back to DEMO_KEY: 30 req/hr). Own key: 5000 req/hr. Free signup at api.data.gov.",
+          "description": "Optional API key from api.data.gov. Fallbacks: DEMO_KEY 30/hour and 50/day per IP; registered key 5000/hour. Upstream hourly quota headers take precedence.",
           "format": "string",
           "isRequired": false
         },
@@ -54,7 +54,7 @@
         },
         {
           "name": "CONGRESS_API_KEY",
-          "description": "API key from api.data.gov \u2014 optional (falls back to DEMO_KEY: 30 req/hr). Own key: 5000 req/hr. Free signup at api.data.gov.",
+          "description": "Optional API key from api.data.gov. Fallbacks: DEMO_KEY 30/hour and 50/day per IP; registered key 5000/hour. Upstream hourly quota headers take precedence.",
           "format": "string",
           "isRequired": false
         },

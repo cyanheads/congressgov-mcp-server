@@ -451,6 +451,130 @@ describe('committeeLookupTool', () => {
       expect(codes.length).toBeLessThanOrEqual(5);
     });
 
+    it.each(['zzzz-no-such-committee-zzzz', 'armed zzznomatch'])(
+      'requires every fuzzy token to match: %s',
+      async (filter) => {
+        const ctx = createMockContext({ errors: committeeLookupTool.errors });
+        const result = await committeeLookupTool.handler(
+          committeeLookupTool.input.parse({ operation: 'list', filter }),
+          ctx,
+        );
+        expect(result.data).toEqual([]);
+        expect(getEnrichment(ctx).notice).toContain('No committees matched');
+        const text = committeeLookupTool.format!(result)
+          .filter((block) => block.type === 'text')
+          .map((block) => block.text)
+          .join('\n');
+        expect(text).not.toContain('Armed Services');
+      },
+    );
+
+    it('keeps multi-token typo matches and excludes incidental name tokens', async () => {
+      mockApi.listCommittees.mockResolvedValue({
+        data: [...HOUSE_COMMITTEES, { name: 'Public Lands Committee', systemCode: 'hspl00' }],
+        pagination: { count: 8, nextOffset: null },
+      });
+      const ctx = createMockContext({ errors: committeeLookupTool.errors });
+      const result = await committeeLookupTool.handler(
+        committeeLookupTool.input.parse({ operation: 'list', filter: 'armed servcies' }),
+        ctx,
+      );
+      expect(result.data).toEqual([{ ...HOUSE_COMMITTEES[2], approximate: true }]);
+      expect(committeeLookupTool.format!(result)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ text: expect.stringContaining('Armed Services') }),
+        ]),
+      );
+    });
+
+    it('ranks equal fuzzy matches independently of upstream row order before paging', async () => {
+      const committees = Array.from({ length: 7 }, (_, index) => ({
+        name: `Armed Services ${String.fromCharCode(65 + index)}`,
+        systemCode: `hs${index}00`,
+      }));
+      for (const data of [committees.toReversed(), committees]) {
+        mockApi.listCommittees.mockResolvedValue({
+          data,
+          pagination: { count: 7, nextOffset: null },
+        });
+        const ctx = createMockContext({ errors: committeeLookupTool.errors });
+        const result = await committeeLookupTool.handler(
+          committeeLookupTool.input.parse({
+            operation: 'list',
+            filter: 'armed servcies',
+            limit: 2,
+            offset: 2,
+          }),
+          ctx,
+        );
+        expect(result.data).toEqual(
+          committees.slice(2, 4).map((row) => ({ ...row, approximate: true })),
+        );
+        expect(result.pagination).toEqual({ count: 5, nextOffset: 4 });
+        const pastEnd = await committeeLookupTool.handler(
+          committeeLookupTool.input.parse({
+            operation: 'list',
+            filter: 'armed servcies',
+            limit: 2,
+            offset: 5,
+          }),
+          createMockContext({ errors: committeeLookupTool.errors }),
+        );
+        expect(pastEnd.data).toEqual([]);
+        expect(pastEnd.pagination).toEqual({ count: 5, nextOffset: null });
+      }
+    });
+
+    it('matches multi-token typos after the first roster page', async () => {
+      mockApi.listCommittees
+        .mockResolvedValueOnce({
+          data: [{ name: 'Public Lands Committee' }],
+          pagination: { count: 251, nextOffset: 250 },
+        })
+        .mockResolvedValueOnce({
+          data: [HOUSE_COMMITTEES[2]],
+          pagination: { count: 251, nextOffset: null },
+        });
+      const result = await committeeLookupTool.handler(
+        committeeLookupTool.input.parse({ operation: 'list', filter: 'armed servcies' }),
+        createMockContext({ errors: committeeLookupTool.errors }),
+      );
+      expect(result.data).toEqual([{ ...HOUSE_COMMITTEES[2], approximate: true }]);
+      expect(mockApi.listCommittees).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({ offset: 250 }),
+        expect.anything(),
+      );
+    });
+
+    it('resolves a multi-token parent typo and excludes matching subcommittees', async () => {
+      mockApi.listCommittees.mockResolvedValue({
+        data: [HOUSE_COMMITTEES[2], { name: 'Armed Services Subcommittee', systemCode: 'hsas01' }],
+        pagination: { count: 2, nextOffset: null },
+      });
+      mockApi.getCommittee.mockResolvedValue({ committee: HOUSE_COMMITTEES[2] });
+      const result = await committeeLookupTool.handler(
+        committeeLookupTool.input.parse({ operation: 'get', committeeCode: 'armed servcies' }),
+        createMockContext({ errors: committeeLookupTool.errors }),
+      );
+      expect(result.committee).toEqual(HOUSE_COMMITTEES[2]);
+      expect(mockApi.getCommittee).toHaveBeenCalledWith('house', 'hsas00', expect.anything());
+    });
+
+    it('blank and whitespace filters retain ordinary upstream paging', async () => {
+      for (const filter of ['', '   ']) {
+        const result = await committeeLookupTool.handler(
+          committeeLookupTool.input.parse({ operation: 'list', filter, limit: 2, offset: 9 }),
+          createMockContext({ errors: committeeLookupTool.errors }),
+        );
+        expect(result.data).toEqual(HOUSE_COMMITTEES);
+        expect(mockApi.listCommittees).toHaveBeenLastCalledWith(
+          expect.objectContaining({ limit: 2, offset: 9 }),
+          expect.anything(),
+        );
+      }
+    });
+
     it('no-match returns empty data and a notice', async () => {
       const ctx = createMockContext({ errors: committeeLookupTool.errors });
       const input = committeeLookupTool.input.parse({
