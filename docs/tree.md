@@ -1,6 +1,6 @@
 # congressgov-mcp-server - Directory Structure
 
-Generated on: 2026-10-10 23:39:41
+Generated on: 2026-10-13 12:41:59
 
 ```text
 congressgov-mcp-server/
@@ -31,6 +31,7 @@ congressgov-mcp-server/
 │   ├── 0.5.x/
 │   ├── 0.6.x/
 │   ├── 0.7.x/
+│   ├── 0.8.x/
 │   └── template.md
 ├── docs/
 │   └── congress-gov-mcp-design.md
@@ -227,6 +228,7 @@ congressgov-mcp-server/
 │   │       │   ├── exhausted-page-notice.test.ts
 │   │       │   ├── input-validation.test.ts
 │   │       │   ├── member-lookup.tool.test.ts
+│   │       │   ├── operation-input.contract.test.ts
 │   │       │   ├── output-fidelity.parity.test.ts
 │   │       │   ├── roll-votes.tool.test.ts
 │   │       │   ├── search-bills.tool.test.ts
