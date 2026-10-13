@@ -9,7 +9,7 @@
 # multi-arch buildx run on an arm64 host. This stage only runs tsc and emits
 # architecture-independent JavaScript; the native deps stage cross-installs the
 # production tree, so both build-time Bun stages run on the host architecture.
-FROM --platform=$BUILDPLATFORM oven/bun:1.4.2 AS build
+FROM --platform=$BUILDPLATFORM oven/bun:1.4.3 AS build
 
 WORKDIR /usr/src/app
 
@@ -45,7 +45,7 @@ RUN bun run build
 # A clean image rather than `FROM build`: the build stage's node_modules holds
 # devDependencies.
 # ==============================================================================
-FROM --platform=$BUILDPLATFORM oven/bun:1.4.2 AS deps
+FROM --platform=$BUILDPLATFORM oven/bun:1.4.3 AS deps
 
 WORKDIR /usr/src/app
 
@@ -112,7 +112,7 @@ RUN rm -rf node_modules/@socketsecurity/bun-security-scanner
 # application. It uses a slim base image and only includes production
 # dependencies and build artifacts.
 # ==============================================================================
-FROM oven/bun:1.4.2-slim AS production
+FROM oven/bun:1.4.3-slim AS production
 
 WORKDIR /usr/src/app
 
