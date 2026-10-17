@@ -29,7 +29,7 @@
 
 ## Overview
 
-U.S. congressional data from the Congress.gov API v3 and the Senate's official vote feed: bills, enacted laws, members, committees, roll call votes, nominations, CRS and committee reports, and the Congressional Record. Browse legislative activity, read bill and report text, and follow the Senate confirmation pipeline from any MCP client. Runs as a stdio process, a local Streamable HTTP server, or the public hosted endpoint above.
+US congressional data from Congress.gov and the Senate's official vote feed: bills, enacted laws, members, committees, roll call votes, nominations, CRS and committee reports, and the Congressional Record. Browse legislative activity, read bill and report text, and follow nominations through Senate confirmation.
 
 ### Tools
 
@@ -71,9 +71,9 @@ Bill, member, and committee data is also reachable through `congressgov_bill_loo
 ### `congressgov_bill_lookup` <sub>tool</sub>
 
 - `list` browses one `congress`, narrowed by `billType` and a `fromDateTime`/`toDateTime` range on the record's update date, newest first unless `order: 'oldest'`; `get`, `actions`, `amendments`, `cosponsors`, `committees`, `subjects`, `summaries`, `text`, `titles`, `related`, and `content` need `congress` + `billType` + `billNumber`
-- Copied bill-row keys `type` and `number` are accepted as `billType` and `billNumber`; bill type codes are case-insensitive, and `relatedbills` (any case) selects `related`. Send one name per field: canonical and alias keys together are rejected.
-- `content` reads the text version at `textVersionIndex` (0-based in `text` order, 0 is the most recent) and returns one character window in `content.text` with `totalCharacters`, `truncated`, and `nextOffset`
-- `summaries` takes an optional `versionCode` (`00` introduced, `49` public law) and applies the same page budget and row window as `congressgov_bill_summaries`, steered by `characterOffset`/`characterLimit`; a cut row carries `textTotalCharacters`, `textTruncated`, and `textNextOffset`
+- `type` and `number` from a bill row are accepted as `billType` and `billNumber`; bill type codes are case-insensitive. Send one name per field, since canonical and alias keys together are rejected
+- `content` reads the text version at `textVersionIndex` (0 is the most recent) and returns one character window in `content.text` with `totalCharacters`, `truncated`, and `nextOffset`
+- `summaries` takes an optional `versionCode` (`00` introduced, `49` public law) and pages like `congressgov_bill_summaries`, using `characterOffset`/`characterLimit`
 
 ---
 
@@ -94,8 +94,7 @@ Bill, member, and committee data is also reachable through `congressgov_bill_loo
 ### `congressgov_committee_lookup` <sub>tool</sub>
 
 - `committeeCode` is a chamber prefix (`h`/`s`/`j`), letters, and a 2-digit suffix (e.g. `hsju00`); `get`, `bills`, `reports`, and the Senate-only `nominations` infer `chamber` from the prefix
-- A committee name in `committeeCode` resolves when exactly one committee matches, and otherwise returns the candidate rows with a notice; `list` with `filter` name-matches every committee in scope, past the 250-row page cap, and fuzzy hits carry `approximate: true`
-- Exact matches require every query token; typo matches require each token to match a name token at the similarity floor. Blank filters browse normally; unrelated tokens return no matches.
+- A committee name in `committeeCode` resolves when exactly one committee matches, and otherwise returns candidate rows with a notice; `list` with `filter` name-matches every committee in scope, and fuzzy hits carry `approximate: true`
 - `bills` is newest first by default (`order`), and its rows carry no titles, so chain `congressgov_bill_lookup` `get` per row
 
 ---
@@ -126,7 +125,7 @@ Bill, member, and committee data is also reachable through `congressgov_bill_loo
 ### `congressgov_crs_reports` <sub>tool</sub>
 
 - `list` browses the catalog; `get` takes a `reportNumber` such as `R40097`, `RL33612`, or `IF12345`
-- `id`, `reportId`, and `report_id` are accepted as `reportNumber`. Send only one identifier key; canonical and alias keys together, or multiple aliases, are rejected.
+- `id`, `reportId`, and `report_id` are accepted as `reportNumber`; send only one identifier key
 - `get` returns authors, topics, summary, and download formats
 
 ---
@@ -207,17 +206,17 @@ Built on [`@cyanheads/mcp-ts-core`](https://github.com/cyanheads/mcp-ts-core): s
 Congress.gov-specific:
 
 - Type-safe client for the Congress.gov REST API v3, plus a client for the Senate's LIS XML feed that backs Senate roll votes
-- The Congress.gov API has no keyword search, so tools browse by congress, type, date range, chamber, state, and district, and address bills by `congress` + `billType` + `billNumber`, members by `bioguideId`, and committees by system code; list operations page with `limit` 1–250 (default 20) and `offset`
-- `content` on bill text, committee reports, and Record articles reads `format` `text` (default) or `xml` through a `characterOffset`/`characterLimit` window (1–100,000 characters, default 25,000), fetched only from `www.congress.gov` under a 25 MB ceiling and a 30s deadline
-- Optional API key from [api.data.gov](https://api.data.gov/signup/): documented fallbacks are `DEMO_KEY` 30 requests/hour and 50/day per IP, registered keys 5,000/hour. Valid upstream hourly quota headers override the fallback; actual quotas vary
+- The Congress.gov API has no keyword search, so tools browse by congress, type, date range, chamber, state, and district; list operations page with `limit` 1–250 (default 20) and `offset`
+- `content` on bill text, committee reports, and Record articles reads `format` `text` (default) or `xml` in a `characterOffset`/`characterLimit` window (1–100,000 characters, default 25,000), fetched only from `www.congress.gov` under a 25 MB ceiling and a 30s deadline
+- Optional API key from [api.data.gov](https://api.data.gov/signup/): `DEMO_KEY` allows 30 requests/hour and 50/day per IP, registered keys 5,000/hour
 - Opt-in local SQLite FTS5 mirror (`CONGRESS_MIRROR_ENABLED`) adds keyword search over bill titles and CRS summaries
 
 Agent-friendly output:
 
-- Every list response carries `effectiveQuery` and `totalCount`; a `notice` fires when nothing matched, and a page past the end says so in the rendered output
-- `list` rejects entity identities it would discard: bill `billNumber`, vote `voteNumber`, nomination `nominationNumber`, CRS/committee `reportNumber`, and Record `volumeNumber`. The `incompatible_identity` domain error names the detail operation to select or the field to remove; pagination and defaulted selectors remain accepted.
-- Exact character windows: `content` returns `offset`, `truncated`, and `nextOffset`, so walking a multi-megabyte bill never skips or repeats a character
-- Typed `content` failures (`document_unavailable`, `format_unavailable`, `document_fetch_failed`, `document_too_large`, `offset_past_end`) alongside the shared `not_found`, `rate_limited`, `invalid_request`, `upstream_error`, and `upstream_timeout` reasons, each with a recovery hint. Document byte ceilings and exhausted document/summary offsets use domain validation (-32007); malformed arguments remain protocol invalid parameters (-32602)
+- Every list response carries `effectiveQuery` and `totalCount`, with a `notice` when nothing matched
+- `list` rejects detail-only identifiers (`billNumber`, `voteNumber`, `nominationNumber`, `reportNumber`, `volumeNumber`) with an `incompatible_identity` error that names the operation to use instead
+- `content` returns `offset`, `truncated`, and `nextOffset`, so walking a multi-megabyte bill never skips or repeats a character
+- Typed failures (`document_unavailable`, `format_unavailable`, `document_fetch_failed`, `document_too_large`, `offset_past_end`, `not_found`, `rate_limited`, `invalid_request`, `upstream_error`, `upstream_timeout`), each with a recovery hint
 
 ## Getting started
 
@@ -305,7 +304,7 @@ MCP_TRANSPORT_TYPE=http MCP_HTTP_PORT=3010 CONGRESS_API_KEY=your-api-key bun run
 ### Prerequisites
 
 - [Bun v1.4.0](https://bun.sh/) or higher (or Node.js v24+).
-- Optional: a free [api.data.gov key](https://api.data.gov/signup/) uses a documented fallback of 5,000 requests/hour instead of the demo fallback of 30/hour and 50/day per IP. Upstream hourly headers may advertise a different quota.
+- Optional: a free [api.data.gov key](https://api.data.gov/signup/) raises the limit to 5,000 requests/hour from the demo key's 30/hour and 50/day per IP.
 
 ### Installation
 
@@ -338,7 +337,7 @@ cp .env.example .env
 
 | Variable | Description | Default |
 |:---|:---|:---|
-| `CONGRESS_API_KEY` | API key from [api.data.gov](https://api.data.gov/signup/). Fallbacks: `DEMO_KEY` 30/hour and 50/day per IP; registered key 5,000/hour. Upstream hourly quota headers take precedence. | `DEMO_KEY` |
+| `CONGRESS_API_KEY` | API key from [api.data.gov](https://api.data.gov/signup/). | `DEMO_KEY` |
 | `CONGRESS_API_BASE_URL` | Congress.gov API base URL. | `https://api.congress.gov/v3` |
 | `CONGRESS_MIRROR_ENABLED` | Enable the local bill search mirror and the `congressgov_search_bills` tool. | `false` |
 | `CONGRESS_MIRROR_PATH` | Filesystem path to the SQLite mirror index. | `.mirror/bills.sqlite3` |
