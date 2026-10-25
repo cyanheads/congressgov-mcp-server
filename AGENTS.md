@@ -2,10 +2,10 @@
 
 **Server:** congressgov-mcp-server
 **Version:** 0.8.0
-**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.13.15`
+**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.13.16`
 **Engines:** Bun ≥1.4.0, Node ≥24.0.0
 **MCP SDK:** `@modelcontextprotocol/server` ^2.3.1
-**Zod:** ^4.6.5
+**Zod:** ^4.6.7
 
 > **Read the framework docs first:** `node_modules/@cyanheads/mcp-ts-core/CLAUDE.md` contains the full API reference — builders, Context, error codes, exports, patterns. This file covers server-specific conventions only.
 
@@ -330,11 +330,13 @@ When you complete a skill's checklist, check the boxes and add a completion time
 
 ---
 
+**CI is one file.** `.github/workflows/codeql.yml` is the only GitHub Actions workflow. Verification — `devcheck`, tests, and release gates — runs locally; don't add a workflow that re-runs it.
+
 ## Bundling
 
 `bun run bundle` produces a `.mcpb` extension bundle for one-click install in Claude Desktop. The pack step is followed by `scripts/clean-mcpb.ts`, which prunes dev dependencies (`mcpb clean`) and strips two classes of `node_modules/**` content that root-anchored `.mcpbignore` patterns cannot reach: dependency-shipped agent docs (`framework-skills/`, `skills/`, `.claude/`, `.agents/`, `SKILL.md`) and platform-specific native bindings, which would otherwise lock the bundle to the platform it was packed on. MCPB is stdio-only — HTTP deployments are unaffected. The bundle file ships as `dist/congressgov-mcp-server.mcpb`.
 
-**Adding an env var requires both files:** `server.json` (registry discovery, `environmentVariables[]`) and `manifest.json` (bundle install UX, `mcp_config.env` + `user_config`). `lint:packaging` (run by `devcheck`) verifies the env var names match.
+**Adding an env var requires both files:** `server.json` (registry discovery, `environmentVariables[]`) and `manifest.json` (bundle install UX, `mcp_config.env` + `user_config`). `lint:packaging` (run by `devcheck`) verifies the env var names match, every `user_config` option is wired into `mcp_config.env` as `"X": "${user_config.X}"`, and an optional string option carries `"default": ""`. The host substitutes only the `user_config` reference; `"${X}"` reaches the server literally.
 
 ---
 
@@ -375,6 +377,7 @@ After a version bump and final commit, publish to both npm and GHCR:
 bun publish --access public
 
 docker buildx build --platform linux/amd64,linux/arm64 \
+  --build-arg APP_VERSION=<version> \
   -t ghcr.io/cyanheads/congressgov-mcp-server:<version> \
   -t ghcr.io/cyanheads/congressgov-mcp-server:latest \
   --push .
