@@ -276,28 +276,13 @@ describe('createStreamingExtractor', () => {
       MULTI_MB_TIMEOUT_MS,
     );
 
-    it(
-      'reassembles exactly when walked window by window',
-      () => {
-        const limit = 100_000;
-        const chunks: string[] = [];
-        let offset = 0;
-        while (offset < reference.length) {
-          const extractor = createStreamingExtractor({
-            characterOffset: offset,
-            characterLimit: limit,
-          });
-          for (let i = 0; i < body.length; i += 262_144) extractor.push(body.slice(i, i + 262_144));
-          const page = extractor.finish();
-          expect(page.totalCharacters).toBe(reference.length);
-          expect(page.text.length).toBeGreaterThan(0);
-          chunks.push(page.text);
-          offset += page.text.length;
-        }
-        expect(chunks.join('')).toBe(reference);
-        expect(chunks.length).toBeGreaterThan(1);
+    it.each(Array.from({ length: Math.ceil(reference.length / 100_000) }, (_, i) => i * 100_000))(
+      'matches the complete document window at %i',
+      (offset) => {
+        const page = runIncremental(body, 262_144, offset, 100_000);
+        expect(page.totalCharacters).toBe(reference.length);
+        expect(page.text).toBe(reference.slice(offset, offset + 100_000));
       },
-      MULTI_MB_TIMEOUT_MS,
     );
   });
 });

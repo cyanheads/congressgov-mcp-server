@@ -499,29 +499,25 @@ describe('CongressDocumentsService', () => {
       }
     });
 
-    it('walks the whole document via nextOffset and reassembles it exactly', async () => {
-      const chunks: string[] = [];
-      let offset: number | null = 0;
-      let running = 0;
+    /** Each page scans the full document; give each independent window its own test. */
+    it.each(Array.from({ length: Math.ceil(reference.length / 250_000) }, (_, i) => i * 250_000))(
+      'returns exact text and continuation for window at %i',
+      async (offset) => {
+        const end = Math.min(offset + 250_000, reference.length);
+        const page = await service.fetchDocument(
+          { url: URL_BILL, characterOffset: offset, characterLimit: 250_000 },
+          createMockContext(),
+        );
 
-      while (offset !== null) {
-        const page: Awaited<ReturnType<CongressDocumentsService['fetchDocument']>> =
-          await service.fetchDocument(
-            { url: URL_BILL, characterOffset: offset, characterLimit: 250_000 },
-            createMockContext(),
-          );
-        expect(page.offset).toBe(offset);
-        expect(page.offset).toBe(running);
-        expect(page.totalCharacters).toBe(reference.length);
-        chunks.push(page.text);
-        running += page.text.length;
-        offset = page.nextOffset;
-      }
-
-      expect(chunks.join('')).toBe(reference);
-      expect(running).toBe(reference.length);
-      expect(chunks.length).toBeGreaterThan(1);
-    });
+        expect(page).toEqual({
+          text: reference.slice(offset, end),
+          totalCharacters: reference.length,
+          offset,
+          truncated: end < reference.length,
+          nextOffset: end < reference.length ? end : null,
+        });
+      },
+    );
 
     it('rejects an offset past the end rather than serving an empty window', async () => {
       const error = (await service
