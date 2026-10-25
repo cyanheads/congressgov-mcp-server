@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.8.1](changelog/0.8.x/0.8.1.md) — 2026-10-25
+
+Framework errors preserve Markdown-bearing text, startup failures identify invalid configuration, and dependencies and maintenance tooling are refreshed.
+
 ## [0.8.0](changelog/0.8.x/0.8.0.md) — 2026-10-13 · ⚠️ Breaking
 
 Congress.gov identifier aliases, meaningful committee matches, and quota-aware errors.
