@@ -85,6 +85,7 @@ await createApp({
   name: 'congressgov-mcp-server',
   title: 'congressgov-mcp-server',
   sessionMode: 'stateless',
+  skills: 'skills',
   cacheHints,
   tools: [
     withSource(billLookupTool, 'tools', 'bill-lookup.tool.ts'),

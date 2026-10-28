@@ -4,9 +4,9 @@
   "version": "0.8.1",
   "description": "Access U.S. congressional data (bills, votes, members, committees) via MCP. STDIO or Streamable HTTP.",
   "author": {
-    "name": "cyanheads",
+    "name": "Casey Hand",
     "email": "casey@caseyjhand.com",
-    "url": "https://github.com/cyanheads"
+    "url": "https://caseyjhand.com"
   },
   "homepage": "https://github.com/cyanheads/congressgov-mcp-server#readme",
   "repository": "https://github.com/cyanheads/congressgov-mcp-server",

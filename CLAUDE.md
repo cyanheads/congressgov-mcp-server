@@ -2,9 +2,9 @@
 
 **Server:** congressgov-mcp-server
 **Version:** 0.8.1
-**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.13.16`
+**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.13.18`
 **Engines:** Bun ≥1.4.0, Node ≥24.0.0
-**MCP SDK:** `@modelcontextprotocol/server` ^2.3.1
+**MCP SDK:** `@modelcontextprotocol/server` ^2.4.0
 **Zod:** ^4.6.7
 
 > **Read the framework docs first:** `node_modules/@cyanheads/mcp-ts-core/CLAUDE.md` contains the full API reference — builders, Context, error codes, exports, patterns. This file covers server-specific conventions only.
@@ -83,7 +83,7 @@ Tailor suggestions to what's actually missing or stale — don't recite the full
 
 **Summary bounding** (`src/mcp-server/tools/summary-window.ts`, constants in `tool-helpers.ts`). Both summary surfaces enforce two limits. `SUMMARY_PAGE_CHARACTERS` stops a page once its serialized rows reach the budget — the first row always returns, `pagination.nextOffset` counts the rows actually returned, and an enrichment notice discloses the stop. `DEFAULT_SUMMARY_TEXT_CHARACTERS` bounds one row's upstream `text`; a windowed row gains `textTotalCharacters` / `textTruncated` / `textNextOffset`, and its window end is retracted off any HTML tag or character reference it would otherwise split (unless the construct is wider than the whole window, where the requested limit wins). A row inside both limits is returned untouched, so an unbounded page stays byte-identical. `congressgov_bill_lookup` `summaries` overrides the row window with `characterOffset`/`characterLimit` and selects one version with `versionCode` — Congress.gov publishes no version filter, so selection reads the bill's whole summary list and matches client-side.
 
-### Resources (5)
+### Resources (6)
 
 | URI Template | Description |
 |:-------------|:------------|
@@ -92,6 +92,7 @@ Tailor suggestions to what's actually missing or stale — don't recite the full
 | `congress://member/{bioguideId}` | Member profile |
 | `congress://bill/{congress}/{billType}/{billNumber}` | Bill detail |
 | `congress://committee/{committeeCode}` | Committee detail |
+| `skill://congressgov-guide/SKILL.md` | Published legislative research guide |
 
 ### Prompts (2)
 
@@ -256,9 +257,18 @@ import { getServerConfig } from '@/config/server-config.js';
 
 ## Skills
 
-Skills are modular instructions in `framework-skills/` at the project root. Read them directly when a task matches — e.g., `framework-skills/add-tool/SKILL.md` when adding a tool. `bun run list-skills` prints the full registry. The directory is deliberately not `skills/`: Claude Code and Codex auto-load a plugin's root `skills/`, so a server that ships `.claude-plugin/` or `.codex-plugin/` would hand these development skills to every agent that installs it. Keep `skills/` free for skills meant for those agents.
+Two skill trees live at the project root, written for different readers:
 
-**Agent skill directory:** Copy skills into the directory your agent discovers (Claude Code: `.claude/skills/`, others: equivalent). This makes skills available as context without needing to reference `framework-skills/` paths manually. After framework updates, run the `maintenance` skill — it re-syncs the agent directory automatically (Phase B).
+| Tree | For | Written by |
+|:-----|:----|:-----------|
+| `framework-skills/` | The agent developing this server — framework skills (`metadata.audience: external`) plus any development-time skills of the server's own | `init` and the `maintenance` sync (framework skills); you (your own) |
+| `skills/` | The agents that install the server and call its tools — tool chains, identifier sources, gates | `congressgov-guide/SKILL.md`, maintained with the `add-skill` skill |
+
+Development skills are modular instructions. Read them directly when a task matches — e.g., `framework-skills/add-tool/SKILL.md` when adding a tool. `bun run list-skills` prints the full registry. Their directory is deliberately not `skills/`: Claude Code and Codex auto-load a plugin's root `skills/`, so a server that ships `.claude-plugin/` or `.codex-plugin/` would hand them to every agent that installs it.
+
+`skills/congressgov-guide/SKILL.md` reaches plugin installs and the `.mcpb` bundle as-is and ships in the npm package and Docker image. `createApp({ skills: 'skills' })` serves it through the MCP Skills extension and the `skill://congressgov-guide/SKILL.md` resource. `lint:packaging` validates the tree.
+
+**Agent skill directory:** Copy `framework-skills/` into the directory your agent discovers (Claude Code: `.claude/skills/`, others: equivalent). Skills then load as context without referencing `framework-skills/` paths. After framework updates, run the `maintenance` skill — Phase B re-syncs the agent directory.
 
 Available skills:
 
@@ -270,6 +280,7 @@ Available skills:
 | `add-app-tool` | Scaffold an MCP App tool + paired UI resource |
 | `add-resource` | Scaffold a new resource definition |
 | `add-prompt` | Scaffold a new prompt definition |
+| `add-skill` | Author a skill the server publishes in root `skills/` for the agents that use it — when one earns its place, structure, validation, delivery |
 | `add-service` | Scaffold a new service integration |
 | `add-test` | Scaffold test file for a tool, resource, or service |
 | `field-test` | Exercise tools/resources/prompts with real inputs, verify behavior, report issues |
@@ -317,7 +328,7 @@ When you complete a skill's checklist, check the boxes and add a completion time
 | `bun run format` | Auto-fix formatting (safe fixes only) |
 | `bun run format:unsafe` | Also apply Biome's unsafe autofixes — review the diff; they can change behavior |
 | `bun run lint:mcp` | Validate MCP tool/resource/prompt definitions |
-| `bun run lint:packaging` | Validate env var alignment between `manifest.json` and `server.json` |
+| `bun run lint:packaging` | Validate bundle exclusions, plugin manifests, published skills, env var alignment, and version parity |
 | `bun run bundle` | Build and pack as `.mcpb` for one-click Claude Desktop install |
 | `bun run changelog:build` | Regenerate `CHANGELOG.md` from `changelog/*.md` |
 | `bun run changelog:check` | Verify `CHANGELOG.md` is in sync (used by devcheck) |
@@ -334,7 +345,7 @@ When you complete a skill's checklist, check the boxes and add a completion time
 
 ## Bundling
 
-`bun run bundle` produces a `.mcpb` extension bundle for one-click install in Claude Desktop. The pack step is followed by `scripts/clean-mcpb.ts`, which prunes dev dependencies (`mcpb clean`) and strips two classes of `node_modules/**` content that root-anchored `.mcpbignore` patterns cannot reach: dependency-shipped agent docs (`framework-skills/`, `skills/`, `.claude/`, `.agents/`, `SKILL.md`) and platform-specific native bindings, which would otherwise lock the bundle to the platform it was packed on. MCPB is stdio-only — HTTP deployments are unaffected. The bundle file ships as `dist/congressgov-mcp-server.mcpb`.
+`bun run bundle` produces a `.mcpb` extension bundle for one-click install in Claude Desktop. `.mcpbignore` excludes root development paths with anchored patterns; root `skills/` ships. `scripts/clean-mcpb.ts` prunes dev dependencies and strips dependency agent docs, platform-specific native bindings, node-gyp build output that records host paths, and framework build-only files. Compiled native addons stay. Run `lint:packaging` after the completed bundle. MCPB is stdio-only; HTTP deployments are unaffected. The bundle file ships as `dist/congressgov-mcp-server.mcpb`.
 
 **Adding an env var requires both files:** `server.json` (registry discovery, `environmentVariables[]`) and `manifest.json` (bundle install UX, `mcp_config.env` + `user_config`). `lint:packaging` (run by `devcheck`) verifies the env var names match, every `user_config` option is wired into `mcp_config.env` as `"X": "${user_config.X}"`, and an optional string option carries `"default": ""`. The host substitutes only the `user_config` reference; `"${X}"` reaches the server literally.
 
@@ -400,6 +411,7 @@ The `release-and-publish` run handles npm, MCP Registry, bundle, GitHub Release,
 - [ ] If wrapping external API: tests include at least one sparse payload case with omitted upstream fields
 - [ ] Registered in `createApp()` arrays (directly or via barrel exports)
 - [ ] Tests use `createMockContext()` from `@cyanheads/mcp-ts-core/testing`
+- [ ] Root `plugin.json` metadata matches `package.json`; `mcp.json` uses the unscoped server key, `npx -y <full package name>`, and the fixed env from `.codex-plugin/mcp.json`. User variables remain in the overlays; `.codex-plugin/plugin.json` retains `mcpServers: './.codex-plugin/mcp.json'`
 - [ ] `.codex-plugin/plugin.json` populated — `name` and `interface.displayName` = unscoped repo name; `version`, `description`, `repository`, `license` and `interface.shortDescription` from `package.json`
 - [ ] `.codex-plugin/mcp.json` updated — server name key is the unscoped repo name; every user-supplied variable is listed in `env_vars`. Never write `"KEY": ""` into `env` — it overrides the user's exported key
 - [ ] `.claude-plugin/plugin.json` populated — unscoped `name`, `version`, `description`, `author`, `repository`, `license`, `keywords`; inline `mcpServers` entry keyed by the unscoped repo name. User-supplied variables use `userConfig` and `"KEY": "${user_config.<option>}"` env references, matching `manifest.json`

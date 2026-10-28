@@ -1,13 +1,13 @@
 <div align="center">
   <h1>@cyanheads/congressgov-mcp-server</h1>
   <p><b>Access U.S. congressional data (bills, votes, members, committees) via MCP. STDIO or Streamable HTTP.</b>
-  <div>11 Tools • 5 Resources • 2 Prompts</div>
+  <div>11 Tools • 6 Resources • 2 Prompts • 1 Skill</div>
   </p>
 </div>
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-0.8.1-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/congressgov-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.3.1-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/congressgov-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/congressgov-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.4-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-0.8.1-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/congressgov-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.4.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/congressgov-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/congressgov-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.4-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -56,6 +56,7 @@ US congressional data from Congress.gov and the Senate's official vote feed: bil
 | `congress://member/{bioguideId}` | Member profile by bioguide ID |
 | `congress://bill/{congress}/{billType}/{billNumber}` | Bill detail by congress, type, and number |
 | `congress://committee/{committeeCode}` | Committee detail by committee code |
+| `skill://congressgov-guide/SKILL.md` | Legislative research guide: identifier sources, discovery boundaries, votes, and document evidence |
 
 Bill, member, and committee data is also reachable through `congressgov_bill_lookup`, `congressgov_member_lookup`, and `congressgov_committee_lookup` (operation `get`), since many MCP clients are tool-only and never surface resources.
 
@@ -65,6 +66,10 @@ Bill, member, and committee data is also reachable through `congressgov_bill_loo
 |:---|:---|
 | `congressgov_bill_analysis` | Structured framework for analyzing a bill |
 | `congressgov_legislative_research` | Research framework for a policy area across Congress |
+
+### Agent skill
+
+[`congressgov-guide`](./skills/congressgov-guide/SKILL.md) guides research across bills, laws, members, committees, votes, and floor debate. It covers identifier provenance, discovery limits, and version-specific document evidence. The guide ships with plugin installs, npm, MCPB, and Docker, and is served over MCP through the Skills extension and its `skill://` resource.
 
 ## Capability reference
 
@@ -220,140 +225,32 @@ Agent-friendly output:
 
 ## Getting started
 
-### Public Hosted Instance
-
-A public instance is available at `https://congressgov.caseyjhand.com/mcp` — no installation required. It serves Streamable HTTP; each client takes its own config shape.
-
-For Claude Code:
+Connect to the hosted instance:
 
 ```sh
 claude mcp add --transport http congressgov-mcp-server https://congressgov.caseyjhand.com/mcp
 ```
 
-For Cline (`cline_mcp_settings.json`):
+Or run it locally:
 
-```json
-{
-  "mcpServers": {
-    "congressgov-mcp-server": {
-      "type": "streamableHttp",
-      "url": "https://congressgov.caseyjhand.com/mcp"
-    }
-  }
-}
+```sh
+claude mcp add congressgov-mcp-server -- npx -y @cyanheads/congressgov-mcp-server
 ```
 
-For Cursor (`mcp.json`):
+For other clients, add this to the MCP config file:
 
 ```json
 {
   "mcpServers": {
     "congressgov-mcp-server": {
-      "url": "https://congressgov.caseyjhand.com/mcp"
-    }
-  }
-}
-```
-
-Claude Desktop adds remote servers under Settings → Connectors.
-
-### Self-Hosted / Local
-
-Add the following to your MCP client configuration file.
-
-```json
-{
-  "mcpServers": {
-    "congressgov-mcp-server": {
-      "type": "stdio",
-      "command": "bunx",
-      "args": ["@cyanheads/congressgov-mcp-server@latest"],
-      "env": {
-        "MCP_TRANSPORT_TYPE": "stdio",
-        "MCP_LOG_LEVEL": "info",
-        "CONGRESS_API_KEY": "your-api-key"
-      }
-    }
-  }
-}
-```
-
-Or with npx (no Bun required):
-
-```json
-{
-  "mcpServers": {
-    "congressgov-mcp-server": {
-      "type": "stdio",
       "command": "npx",
-      "args": ["-y", "@cyanheads/congressgov-mcp-server@latest"],
-      "env": {
-        "MCP_TRANSPORT_TYPE": "stdio",
-        "MCP_LOG_LEVEL": "info",
-        "CONGRESS_API_KEY": "your-api-key"
-      }
+      "args": ["-y", "@cyanheads/congressgov-mcp-server"]
     }
   }
 }
 ```
 
-Or with Docker:
-
-```json
-{
-  "mcpServers": {
-    "congressgov-mcp-server": {
-      "type": "stdio",
-      "command": "docker",
-      "args": [
-        "run", "-i", "--rm",
-        "-e", "MCP_TRANSPORT_TYPE=stdio",
-        "-e", "CONGRESS_API_KEY=your-api-key",
-        "ghcr.io/cyanheads/congressgov-mcp-server:latest"
-      ]
-    }
-  }
-}
-```
-
-For Streamable HTTP, set the transport and start the server:
-
-```sh
-MCP_TRANSPORT_TYPE=http MCP_HTTP_PORT=3010 CONGRESS_API_KEY=your-api-key bun run start:http
-# Server listens at http://localhost:3010/mcp
-```
-
-### Prerequisites
-
-- [Bun v1.4.0](https://bun.sh/) or higher (or Node.js v24+).
-- Optional: a free [api.data.gov key](https://api.data.gov/signup/) raises the limit to 5,000 requests/hour from the demo key's 30/hour and 50/day per IP.
-
-### Installation
-
-1. **Clone the repository:**
-
-```sh
-git clone https://github.com/cyanheads/congressgov-mcp-server.git
-```
-
-2. **Navigate into the directory:**
-
-```sh
-cd congressgov-mcp-server
-```
-
-3. **Install dependencies:**
-
-```sh
-bun install
-```
-
-4. **Configure environment:**
-
-```sh
-cp .env.example .env
-# edit .env and set CONGRESS_API_KEY (and the mirror vars, if you want keyword search)
-```
+Optional: set `CONGRESS_API_KEY` to a free [api.data.gov key](https://api.data.gov/signup/) for 5,000 requests/hour instead of the demo key's 30/hour and 50/day per IP. For Docker or a source build, see [Running the server](#running-the-server).
 
 ## Configuration
 
@@ -380,6 +277,15 @@ cp .env.example .env
 See [`.env.example`](./.env.example) for the full list of optional overrides.
 
 ## Running the server
+
+Requires [Bun v1.4.0](https://bun.sh/) or higher (or Node.js v24+).
+
+```sh
+git clone https://github.com/cyanheads/congressgov-mcp-server.git
+cd congressgov-mcp-server && bun install
+cp .env.example .env
+# Optionally set CONGRESS_API_KEY and the mirror variables in .env.
+```
 
 ### Local development
 
@@ -411,17 +317,17 @@ See [`.env.example`](./.env.example) for the full list of optional overrides.
 ### Docker
 
 ```sh
-docker build -t congressgov-mcp-server .
-docker run --rm -e CONGRESS_API_KEY=your-api-key -p 3010:3010 congressgov-mcp-server
+docker run --rm -e CONGRESS_API_KEY=your-api-key -p 3010:3010 ghcr.io/cyanheads/congressgov-mcp-server:latest
 ```
 
-The Dockerfile defaults to HTTP transport, stateless session mode, and logs to `/var/log/congressgov-mcp-server`. OpenTelemetry peer dependencies are installed by default; build with `--build-arg OTEL_ENABLED=false` to omit them. The image carries the mirror scripts, so `docker exec <container> bun run mirror:init` builds the index in place.
+The image defaults to HTTP transport, stateless session mode, and logs to `/var/log/congressgov-mcp-server`. For stdio, use `docker run -i --rm -e MCP_TRANSPORT_TYPE=stdio ghcr.io/cyanheads/congressgov-mcp-server:latest`. To build locally, run `docker build -t congressgov-mcp-server .`; OpenTelemetry peer dependencies are installed by default, with `--build-arg OTEL_ENABLED=false` to omit them. The image carries the mirror scripts, so `docker exec <container> bun run mirror:init` builds the index in place.
 
 ## Project structure
 
 | Directory | Purpose |
 |:---|:---|
 | `src/index.ts` | `createApp()` entry point: registers tools, resources, and prompts, inits services, and schedules the mirror refresh. |
+| `skills/` | Published legislative research guide for agents calling the server. |
 | `src/config/` | Server-specific environment variable parsing and validation with Zod. |
 | `src/mcp-server/tools/` | Tool definitions (`definitions/*.tool.ts`) plus shared input, formatting, and summary-window helpers. |
 | `src/mcp-server/resources/definitions/` | Resource definitions (`*.resource.ts`). |

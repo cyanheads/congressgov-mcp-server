@@ -15,7 +15,7 @@ Annotations on every tool: `readOnlyHint: true`, `idempotentHint: true`, `openWo
 | `congressgov_enacted_laws` | Browse enacted public and private laws by congress. | `operation`, `congress`, `lawType`, `lawNumber` |
 | `congressgov_member_lookup` | Discover members by state, district, or congress and retrieve legislative portfolios. | `operation`, `bioguideId`, `stateCode`, `district`, `congress` |
 | `congressgov_committee_lookup` | Browse committees and retrieve associated legislation, reports, and nominations. | `operation`, `congress`, `chamber`, `committeeCode` |
-| `congressgov_roll_votes` | Retrieve House roll call votes and member voting positions. Senate votes not yet in API. | `operation`, `congress`, `session`, `voteNumber` |
+| `congressgov_roll_votes` | Retrieve House and Senate roll call votes and member voting positions. | `operation`, `chamber`, `congress`, `session`, `voteNumber` |
 | `congressgov_senate_nominations` | Browse presidential nominations and track the Senate confirmation pipeline. | `operation`, `congress`, `nominationNumber` |
 | `congressgov_bill_summaries` | Browse recent CRS bill summaries — the best "what's happening" feed. Defaults to last 7 days. | `congress`, `billType`, `fromDateTime`, `toDateTime` |
 | `congressgov_crs_reports` | Browse and retrieve nonpartisan CRS policy analysis reports. | `operation`, `reportNumber` |
@@ -111,7 +111,7 @@ operation: z.enum([
 | `format` | content | `text` (GPO Formatted Text) or `xml` (USLM, falling back to Formatted XML). Default `text`. |
 | `characterOffset` | content | First character of the window, 0-based. Default 0. |
 | `characterLimit` | content | Maximum characters in the window (1-100,000). Default 25,000. |
-| `fromDateTime` | list | Start of date range filter (ISO 8601). Filters by latest action date. |
+| `fromDateTime` | list | Start of date range filter (ISO 8601). Filters by the record's update date, not its latest legislative action. |
 | `toDateTime` | list | End of date range filter (ISO 8601). |
 | `limit` | list, sub-resources | Results per page (1-250, default 20). |
 | `offset` | list, sub-resources | Pagination offset. |
@@ -303,7 +303,7 @@ The committeeCode also works with the congress://committee/{committeeCode} resou
 
 ### 5. `congressgov_roll_votes`
 
-Roll call votes and individual member positions. House only — Senate vote endpoint not yet in the API.
+Roll call votes and individual member positions for both chambers. House data comes from the Congress.gov API; Senate data comes from the Senate's official LIS XML feed.
 
 ```ts
 operation: z.enum([
@@ -319,6 +319,7 @@ operation: z.enum([
 |:------|:--------|:------------|
 | `operation` | all | Which data to retrieve. |
 | `congress` | all | Congress number. Required. |
+| `chamber` | all | `house` (default) or `senate`. Roll numbers are chamber-specific and reset each session. |
 | `session` | all | Session number (1 or 2). Required. Odd years are session 1, even years session 2. |
 | `voteNumber` | get, members | Roll call vote number. Required for detail operations. |
 | `limit` | list, members | Results per page (1-250). |
@@ -326,12 +327,12 @@ operation: z.enum([
 
 **Description:**
 ```
-Retrieve House roll call vote data and individual member voting positions.
+Retrieve House and Senate roll call vote data and individual member voting positions.
 
-NOTE: Covers House votes only — Senate vote data is not yet in the Congress.gov API.
+House votes use the Congress.gov API; Senate votes use the Senate's official LIS feed.
 
 Use 'list' to find votes by congress and session, 'get' for vote details
-(question, result, associated bill), and 'members' for how each representative voted.
+(question, result, associated measure), and 'members' for how each member voted.
 ```
 
 **Output:**
@@ -344,7 +345,7 @@ Use 'list' to find votes by congress and session, 'get' for vote details
 **Error guidance:**
 - Missing session: "The 'session' parameter is required. Each congress has two sessions — session 1 for odd years, session 2 for even years."
 - Vote not found: "No roll call vote {voteNumber} found in session {session} of the {congress}th Congress. Use 'list' to browse available votes."
-- Senate vote request: "Senate vote data is not available in the Congress.gov API. This tool covers House roll call votes only."
+- Empty Senate list: verify the congress and session; the Senate publishes roll call votes from the 101st Congress (1989) onward.
 
 ---
 
@@ -606,9 +607,12 @@ All tools share these error patterns. The service layer handles them uniformly.
 
 | Service | Wraps | Used By |
 |:--------|:------|:--------|
-| `CongressApiService` | Congress.gov REST API v3 — auth, pagination, rate limiting, response normalization | All tools and resources |
+| `CongressApiService` | Congress.gov REST API v3 — auth, pagination, rate limiting, response normalization | Legislative API tools and live resources; House branch of roll votes |
+| `SenateVoteService` | Senate LIS XML feed | Senate branch of roll votes |
+| `CongressDocumentsService` | Congress.gov published document bodies | Bill, committee-report, and Record content |
+| `CongressMirrorService` | Local SQLite FTS5 bill index | Optional bill search |
 
-Single service. The Congress.gov API is one coherent REST API with consistent patterns.
+Each upstream and the local mirror have separate service boundaries.
 
 ### CongressApiService Design
 
@@ -668,7 +672,7 @@ class CongressApiService {
 ```
 
 **Internal concerns:**
-- API key injected via `?api_key=` query parameter — ensure key is not included in logs
+- API key sent in the `X-Api-Key` header, never logged
 - Pagination: `offset` and `limit` as query params, return `pagination` metadata
 - Rate limiting: track request count per hour window, throw `rateLimited()` before hitting 5,000/hr ceiling
 - Response normalization: request `format=json`, strip wrapper elements, return typed data
@@ -734,7 +738,7 @@ Each step is independently testable after the service layer is in place.
 The Congress.gov API does not expose full-text search. Every tool description guides agents toward browse/filter strategies:
 
 - **Find a specific bill:** Filter by congress + bill type, or discover via a member's sponsored legislation
-- **Find bills on a topic:** Use `congressgov_bill_summaries` with date ranges, or `congressgov_crs_reports` for policy areas
+- **Find bills on a topic:** Use `congressgov_search_bills` when the optional mirror is enabled; otherwise obtain a bill, member, committee, or report seed. Summary and CRS report browsing do not accept topical queries
 - **Find a member by name:** List members by state/congress, scan results
 
 ### Domain-specific tools with operation enums
@@ -759,9 +763,9 @@ Member, bill, and committee detail are exposed as both tool `get` operations and
 
 The `/summaries` endpoint is the closest thing to an activity feed. By defaulting to a 7-day window (the API defaults to 1 day), `congressgov_bill_summaries` becomes the "what's happening" entry point.
 
-### House votes only (for now)
+### Both chambers through separate upstreams
 
-The Congress.gov API exposes House votes but not Senate votes. When Senate votes are added, `congressgov_roll_votes` extends with a `chamber` parameter.
+The Congress.gov API exposes House votes but no Senate vote namespace. `congressgov_roll_votes` selects the Congress.gov API or Senate LIS feed by chamber, preserving the same list/detail/member-position workflow.
 
 ### No SDK dependency
 
@@ -803,7 +807,7 @@ Most list endpoints support `fromDateTime`/`toDateTime` (ISO 8601) for action da
 
 ### Authentication
 
-All requests require `?api_key={key}` as a query parameter.
+Congress.gov API requests send `X-Api-Key`; a configured key is optional and otherwise falls back to `DEMO_KEY`. Senate LIS and published-document requests need no API key.
 
 ### Rate Limits
 
@@ -831,14 +835,13 @@ All requests require `?api_key={key}` as a query parameter.
 | Member | `bioguideId` | `P000197` |
 | Committee | `{chamber}/{systemCode}` | `house/hsju00` |
 | Nomination | `{congress}/{nominationNumber}` | `118/1064` |
-| Vote | `{congress}/{session}/{voteNumber}` | `118/1/234` |
+| Vote | `{chamber}/{congress}/{session}/{voteNumber}` | `house/118/1/234` |
 | CRS Report | `reportNumber` | `R40097` |
 
 ---
 
 ## Future Considerations
 
-- **Senate votes**: Extend `congressgov_roll_votes` with `chamber` when the API adds Senate endpoints
 - **Bound Congressional Record**: Date-based lookup into the permanent edited compilation. Niche archival use case — daily record covers active needs. Add as `congressgov_bound_record` if demand warrants.
 - **Full-text search**: Delivered via `congressgov_search_bills` — keyword search over a local FTS mirror of bill title + summary (opt-in, `CONGRESS_MIRROR_ENABLED`); Congress.gov itself still exposes no search API
 - **Treaties and hearings**: Lower-frequency endpoints, add as separate tools if demand warrants

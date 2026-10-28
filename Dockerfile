@@ -28,6 +28,9 @@ RUN --mount=type=cache,target=/root/.bun/install/cache \
 # Copy the rest of the source code
 COPY . .
 
+# Published agent skills are read from the application root at runtime.
+RUN mkdir -p skills
+
 # Build the application
 RUN bun run build
 
@@ -134,6 +137,7 @@ COPY --from=deps /usr/src/app/node_modules ./node_modules
 
 # Copy the compiled application code from the build stage
 COPY --from=build /usr/src/app/dist ./dist
+COPY --from=build /usr/src/app/skills ./skills
 
 # Copy the mirror lifecycle scripts (mirror:init / mirror:refresh / mirror:verify)
 # and the shared context shim they import, then emit a runtime tsconfig so Bun

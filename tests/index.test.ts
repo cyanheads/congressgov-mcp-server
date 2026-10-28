@@ -110,4 +110,7 @@ describe('application lifecycle', () => {
   it('declares the stateless HTTP default', () => {
     expect(state.app?.sessionMode).toBe('stateless');
   });
+  it('serves the published skills from the application root', () => {
+    expect(state.app?.skills).toBe('skills');
+  });
 });
