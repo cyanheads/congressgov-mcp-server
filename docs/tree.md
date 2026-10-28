@@ -1,6 +1,6 @@
 # congressgov-mcp-server - Directory Structure
 
-Generated on: 2026-10-13 12:41:59
+Generated on: 2026-10-28 07:30:02
 
 ```text
 congressgov-mcp-server/
@@ -32,6 +32,7 @@ congressgov-mcp-server/
 │   ├── 0.6.x/
 │   ├── 0.7.x/
 │   ├── 0.8.x/
+│   ├── 0.9.x/
 │   └── template.md
 ├── docs/
 │   └── congress-gov-mcp-design.md
@@ -43,6 +44,8 @@ congressgov-mcp-server/
 │   ├── add-resource/
 │   │   └── SKILL.md
 │   ├── add-service/
+│   │   └── SKILL.md
+│   ├── add-skill/
 │   │   └── SKILL.md
 │   ├── add-test/
 │   │   └── SKILL.md
@@ -145,6 +148,9 @@ congressgov-mcp-server/
 │   ├── release-github.ts
 │   ├── split-changelog.ts
 │   └── tree.ts
+├── skills/
+│   └── congressgov-guide/
+│       └── SKILL.md
 ├── src/
 │   ├── config/
 │   │   └── server-config.ts
@@ -241,6 +247,8 @@ congressgov-mcp-server/
 │   │       ├── senate-votes.format.test.ts
 │   │       ├── summary-window.test.ts
 │   │       └── tool-helpers.test.ts
+│   ├── scripts/
+│   │   └── agent-doc-packaging.test.ts
 │   ├── services/
 │   │   ├── congress-api/
 │   │   │   ├── congress-api-service.test.ts
@@ -282,7 +290,9 @@ congressgov-mcp-server/
 ├── Dockerfile
 ├── LICENSE
 ├── manifest.json
+├── mcp.json
 ├── package.json
+├── plugin.json
 ├── README.md
 ├── server.json
 ├── tsconfig.build.json

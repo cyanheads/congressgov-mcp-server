@@ -1,6 +1,6 @@
 {
   "name": "congressgov-mcp-server",
-  "version": "0.8.1",
+  "version": "0.9.0",
   "description": "Access U.S. congressional data (bills, votes, members, committees) via MCP. STDIO or Streamable HTTP.",
   "author": {
     "name": "Casey Hand",
