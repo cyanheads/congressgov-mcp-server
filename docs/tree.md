@@ -1,6 +1,6 @@
 # congressgov-mcp-server - Directory Structure
 
-Generated on: 2026-10-28 07:30:02
+Generated on: 2026-11-01 12:43:54
 
 ```text
 congressgov-mcp-server/
@@ -188,6 +188,7 @@ congressgov-mcp-server/
 │   │   │   └── types.ts
 │   │   ├── congress-documents/
 │   │   │   ├── congress-documents-service.ts
+│   │   │   ├── document-body-cache.ts
 │   │   │   ├── document-formats.ts
 │   │   │   ├── extract-text-stream.ts
 │   │   │   ├── extract-text.ts
@@ -198,16 +199,20 @@ congressgov-mcp-server/
 │   │   │   ├── normalize.ts
 │   │   │   ├── schema.ts
 │   │   │   └── types.ts
-│   │   └── senate-lis/
-│   │       ├── parse.ts
-│   │       ├── senate-vote-service.ts
-│   │       └── types.ts
+│   │   ├── senate-lis/
+│   │   │   ├── parse.ts
+│   │   │   ├── senate-vote-service.ts
+│   │   │   └── types.ts
+│   │   └── call-budget.ts
 │   ├── utils/
-│   │   └── character-references.ts
+│   │   ├── character-references.ts
+│   │   └── congress-calendar.ts
 │   └── index.ts
 ├── tests/
 │   ├── config/
 │   │   └── server-config.test.ts
+│   ├── helpers/
+│   │   └── budget-fixtures.ts
 │   ├── mcp-server/
 │   │   ├── prompts/
 │   │   │   └── definitions/
@@ -255,24 +260,28 @@ congressgov-mcp-server/
 │   │   │   └── normalizers.test.ts
 │   │   ├── congress-documents/
 │   │   │   ├── congress-documents-service.test.ts
+│   │   │   ├── document-body-cache.test.ts
 │   │   │   ├── document-formats.test.ts
 │   │   │   ├── extract-text-stream.test.ts
 │   │   │   └── extract-text.test.ts
 │   │   ├── congress-mirror/
 │   │   │   ├── congress-mirror-service.test.ts
+│   │   │   ├── mirror-cli.test.ts
 │   │   │   └── normalize.test.ts
-│   │   └── senate-lis/
-│   │       ├── fixtures/
-│   │       │   ├── menu-112-2-rollover.xml
-│   │       │   ├── menu-116-2-rollover.xml
-│   │       │   ├── menu-118-1-december.xml
-│   │       │   ├── menu.xml
-│   │       │   ├── vote-amendment.xml
-│   │       │   └── vote-cloture.xml
-│   │       ├── parse.test.ts
-│   │       └── senate-vote-service.test.ts
+│   │   ├── senate-lis/
+│   │   │   ├── fixtures/
+│   │   │   │   ├── menu-112-2-rollover.xml
+│   │   │   │   ├── menu-116-2-rollover.xml
+│   │   │   │   ├── menu-118-1-december.xml
+│   │   │   │   ├── menu.xml
+│   │   │   │   ├── vote-amendment.xml
+│   │   │   │   └── vote-cloture.xml
+│   │   │   ├── parse.test.ts
+│   │   │   └── senate-vote-service.test.ts
+│   │   └── call-budget.test.ts
 │   ├── utils/
-│   │   └── character-references.test.ts
+│   │   ├── character-references.test.ts
+│   │   └── congress-calendar.test.ts
 │   └── index.test.ts
 ├── .dockerignore
 ├── .env.example

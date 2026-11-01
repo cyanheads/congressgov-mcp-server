@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.9.1](changelog/0.9.x/0.9.1.md) — 2026-11-01
+
+Rejected API keys get a distinct error, each tool call shares a 50-second upstream budget, nomination actions point at their Senate roll votes, and the bill mirror stores summaries.
+
 ## [0.9.0](changelog/0.9.x/0.9.0.md) — 2026-10-28
 
 Publish a legislative research guide over MCP and refresh framework and bundle delivery.
