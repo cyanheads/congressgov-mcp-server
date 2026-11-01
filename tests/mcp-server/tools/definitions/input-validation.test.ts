@@ -619,21 +619,27 @@ describe('committeeReportsTool — enrichment', () => {
   });
 });
 
-// ── Error contract advertisement (#32/#34) ───────────────────────────────────
+// ── Error contract advertisement (#32/#34/#84) ───────────────────────────────
 
 describe('error contracts', () => {
   const REQUIRED_REASONS = [
     'not_found',
     'rate_limited',
     'invalid_request',
+    'api_key_rejected',
     'upstream_error',
     'upstream_timeout',
   ];
   const contractTools = {
     bill_lookup: billLookupTool,
+    bill_summaries: billSummariesTool,
+    committee_lookup: committeeLookupTool,
+    committee_reports: committeeReportsTool,
     crs_reports: crsReportsTool,
     daily_record: dailyRecordTool,
+    enacted_laws: enactedLawsTool,
     member_lookup: memberLookupTool,
+    roll_votes: rollVotesTool,
     senate_nominations: senateNominationsTool,
   };
 

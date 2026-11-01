@@ -3,8 +3,15 @@
  * @module tests/mcp-server/tools/definitions/committee-lookup.tool.test
  */
 
-import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  CLIENT_TIMEOUT_MS,
+  expectBudgetTimeout,
+  scriptedCongressApi,
+  track,
+  useFakeClock,
+} from '../../../helpers/budget-fixtures.js';
 
 vi.mock('@/services/congress-api/congress-api-service.js', () => ({
   getCongressApi: vi.fn(),
@@ -13,6 +20,11 @@ vi.mock('@/services/congress-api/congress-api-service.js', () => ({
 
 import { committeeLookupTool } from '@/mcp-server/tools/definitions/committee-lookup.tool.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
+
+/** The real API client, for the cases where the call budget across chained requests is under test. */
+const { CongressApiService } = await vi.importActual<
+  typeof import('@/services/congress-api/congress-api-service.js')
+>('@/services/congress-api/congress-api-service.js');
 
 const HOUSE_COMMITTEES = [
   { name: 'Transportation and Infrastructure Committee', systemCode: 'hspw00', chamber: 'house' },
@@ -879,5 +891,96 @@ describe('committeeLookupTool', () => {
     expect(mockApi.getCommitteeSubResource).toHaveBeenCalledTimes(1);
     expect(result.data).toEqual([]);
     expect(result.pagination).toEqual({ count: 10, nextOffset: null });
+  });
+
+  /**
+   * Filtering and name resolution page the whole 818-row roster (four requests)
+   * before matching, and a resolved name then makes one or two more. Every one
+   * of them spends the call's one budget.
+   */
+  describe('call budget across the chained committee requests', () => {
+    const ROSTER = '/v3/committee';
+    const ROSTER_NEXT = 'https://api.congress.gov/v3/committee';
+
+    /** The four roster pages, each answering after `stalls` full 10 s attempts. */
+    function rosterPages(stalls: number) {
+      return Object.fromEntries(
+        [0, 250, 500, 750].map((offset) => [
+          `${ROSTER}?offset=${offset}`,
+          {
+            stalls,
+            body: {
+              committees:
+                offset === 0
+                  ? [{ name: 'Judiciary Committee', systemCode: 'hsju00', chamber: 'House' }]
+                  : [],
+              pagination: { count: 818, ...(offset < 750 ? { next: ROSTER_NEXT } : {}) },
+            },
+          },
+        ]),
+      );
+    }
+
+    async function settleInsideBudget(
+      upstream: ReturnType<typeof scriptedCongressApi>,
+      input: Parameters<typeof runToolContract<typeof committeeLookupTool>>[1],
+    ) {
+      vi.stubGlobal('fetch', upstream.fetch);
+      const start = Date.now();
+      const call = track(runToolContract(committeeLookupTool, input));
+      await vi.advanceTimersByTimeAsync(CLIENT_TIMEOUT_MS);
+      expectBudgetTimeout(call, start);
+    }
+
+    beforeEach(() => {
+      useFakeClock();
+      vi.mocked(getCongressApi).mockReturnValue(new CongressApiService());
+    });
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    });
+
+    it("'list' with a filter ends at the budget while the roster is still paging", async () => {
+      const upstream = scriptedCongressApi(rosterPages(2));
+      await settleInsideBudget(upstream, { operation: 'list', filter: 'judiciary' });
+      /** Two ~22 s pages, then the third page's first attempt clamped to what was left. */
+      expect(upstream.hits).toEqual({
+        [`${ROSTER}?offset=0`]: 3,
+        [`${ROSTER}?offset=250`]: 3,
+        [`${ROSTER}?offset=500`]: 1,
+      });
+    });
+
+    it("'get' by committee name ends at the budget in the request after the roster", async () => {
+      const upstream = scriptedCongressApi({
+        ...rosterPages(1),
+        '/v3/committee/house/hsju00': { stalls: 0 },
+      });
+      await settleInsideBudget(upstream, { operation: 'get', committeeCode: 'Judiciary' });
+      /** Four ~11 s pages resolve the name; the detail request gets the remaining few seconds. */
+      expect(upstream.hits).toEqual({
+        [`${ROSTER}?offset=0`]: 2,
+        [`${ROSTER}?offset=250`]: 2,
+        [`${ROSTER}?offset=500`]: 2,
+        [`${ROSTER}?offset=750`]: 2,
+        '/v3/committee/house/hsju00': 1,
+      });
+    });
+
+    it("'bills' in recent order by committee name ends at the budget in the count probe", async () => {
+      const upstream = scriptedCongressApi({
+        ...rosterPages(1),
+        '/v3/committee/house/hsju00/bills?offset=0': { stalls: 0 },
+      });
+      await settleInsideBudget(upstream, { operation: 'bills', committeeCode: 'Judiciary' });
+      expect(upstream.hits).toEqual({
+        [`${ROSTER}?offset=0`]: 2,
+        [`${ROSTER}?offset=250`]: 2,
+        [`${ROSTER}?offset=500`]: 2,
+        [`${ROSTER}?offset=750`]: 2,
+        '/v3/committee/house/hsju00/bills?offset=0': 1,
+      });
+    });
   });
 });

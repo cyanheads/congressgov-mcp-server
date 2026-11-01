@@ -27,6 +27,7 @@ import { dailyRecordTool } from '@/mcp-server/tools/definitions/daily-record.too
 import { enactedLawsTool } from '@/mcp-server/tools/definitions/enacted-laws.tool.js';
 import { memberLookupTool } from '@/mcp-server/tools/definitions/member-lookup.tool.js';
 import { rollVotesTool } from '@/mcp-server/tools/definitions/roll-votes.tool.js';
+import { senateNominationsTool } from '@/mcp-server/tools/definitions/senate-nominations.tool.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 import { initSenateVoteService } from '@/services/senate-lis/senate-vote-service.js';
 
@@ -113,6 +114,7 @@ describe('#45 — law citation reaches structuredContent and content[]', () => {
       'not_found',
       'rate_limited',
       'invalid_request',
+      'api_key_rejected',
       'upstream_error',
       'upstream_timeout',
     ]);
@@ -546,5 +548,57 @@ describe('#55 — list rows reach structuredContent and content[] intact', () =>
     const ctx = createMockContext({ errors: committeeLookupTool.errors });
     const input = committeeLookupTool.input.parse({ operation: 'reports' });
     await expect(committeeLookupTool.handler(input, ctx)).rejects.toThrow(/requires committeeCode/);
+  });
+});
+
+describe('#62 — a nomination action citing its Senate vote points at it on both surfaces', () => {
+  /** Real `latestAction` / `S05310` text from /nomination/119/730-2. */
+  const confirmed = {
+    actionDate: '2026-08-07',
+    text: 'Confirmed by the Senate by Yea-Nay Vote. 51 - 47. Record Vote Number: 225.',
+  };
+  const rollVote = { chamber: 'senate', congress: 119, session: 2, voteNumber: 225 };
+  const line =
+    '**Senate Roll Vote:** congressgov_roll_votes chamber=senate, congress=119, session=2, voteNumber=225';
+
+  beforeEach(() => {
+    vi.mocked(getCongressApi).mockReturnValue({
+      getNomination: vi.fn(async () => ({
+        nomination: { citation: 'PN730-2', congress: 119, latestAction: { ...confirmed } },
+      })),
+      getNominationSubResource: vi.fn(async () => ({
+        data: [{ actionCode: 'S05310', ...confirmed, type: 'Floor' }],
+        pagination: { count: 15, nextOffset: 1 },
+      })),
+    } as never);
+  });
+
+  it('get carries the pointer on latestAction', async () => {
+    const result = await runToolContract(senateNominationsTool, {
+      operation: 'get',
+      congress: 119,
+      nominationNumber: '730-2',
+    });
+    expect(result.isError).toBeFalsy();
+    const structured = senateNominationsTool.output.parse(result.structuredContent) as {
+      nomination?: { latestAction?: { rollVote?: unknown } };
+    };
+    expect(structured.nomination?.latestAction?.rollVote).toEqual(rollVote);
+    expect(joinText(result.content as Array<{ type: string; text?: string }>)).toContain(line);
+  });
+
+  it('actions carries the pointer on the citing row', async () => {
+    const result = await runToolContract(senateNominationsTool, {
+      operation: 'actions',
+      congress: 119,
+      nominationNumber: '730-2',
+      limit: 1,
+    });
+    expect(result.isError).toBeFalsy();
+    const structured = senateNominationsTool.output.parse(result.structuredContent) as {
+      data?: Array<{ rollVote?: unknown }>;
+    };
+    expect(structured.data?.[0]?.rollVote).toEqual(rollVote);
+    expect(joinText(result.content as Array<{ type: string; text?: string }>)).toContain(line);
   });
 });

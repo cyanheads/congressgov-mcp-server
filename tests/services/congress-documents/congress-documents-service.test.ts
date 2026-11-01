@@ -1,21 +1,48 @@
 /**
  * @fileoverview Tests for CongressDocumentsService — host allowlisting, the byte
- * ceiling on the fetch itself, content-type validation, and the exact-offset
+ * ceiling on the fetch itself, content-type validation, the exact-offset
  * character window (including a full round-trip walk that must reassemble the
- * source byte-for-byte).
+ * source byte-for-byte), and the one time budget a `content` call's upstream
+ * requests share, through the service and through each tool that reaches it.
  * @module tests/services/congress-documents/congress-documents-service.test
  */
 
 import { JsonRpcErrorCode, type McpError } from '@cyanheads/mcp-ts-core/errors';
-import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('@/services/congress-api/congress-api-service.js', () => ({
+  getCongressApi: vi.fn(),
+}));
+
+import { billLookupTool } from '@/mcp-server/tools/definitions/bill-lookup.tool.js';
+import { committeeReportsTool } from '@/mcp-server/tools/definitions/committee-reports.tool.js';
+import { dailyRecordTool } from '@/mcp-server/tools/definitions/daily-record.tool.js';
+import { congressErrorContracts } from '@/mcp-server/tools/tool-helpers.js';
+import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 import {
   CongressDocumentsService,
   getCongressDocuments,
   initCongressDocuments,
   MAX_DOCUMENT_BYTES,
 } from '@/services/congress-documents/congress-documents-service.js';
+import { DocumentBodyCache } from '@/services/congress-documents/document-body-cache.js';
 import { extractDocumentText } from '@/services/congress-documents/extract-text.js';
+import type { DocumentContent } from '@/services/congress-documents/types.js';
+import {
+  CALL_BUDGET_MS,
+  CLIENT_TIMEOUT_MS,
+  expectBudgetTimeout,
+  retryAfterResponse,
+  stalledHeadersFetch,
+  track,
+  useFakeClock,
+} from '../../helpers/budget-fixtures.js';
+
+/** The real API client, for the cases where the format lookup's own budget is under test. */
+const { CongressApiService } = await vi.importActual<
+  typeof import('@/services/congress-api/congress-api-service.js')
+>('@/services/congress-api/congress-api-service.js');
 
 const URL_BILL = 'https://www.congress.gov/119/bills/hr1/BILLS-119hr1enr.htm';
 
@@ -65,6 +92,40 @@ function errorResponse(status: number): Response {
   });
 }
 
+/**
+ * A response whose headers arrive and whose body delivers `prefix`, then stalls.
+ * The body errors only when the request's signal aborts. `onStall` fires the
+ * first time the reader waits on the stalled body.
+ */
+function stalledBodyFetch(prefix: string, onStall?: () => void) {
+  return (_url: unknown, init?: RequestInit): Promise<Response> => {
+    const signal = init?.signal;
+    let pulls = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (pulls++ === 0) {
+          controller.enqueue(new TextEncoder().encode(prefix));
+          return;
+        }
+        onStall?.();
+        return new Promise<void>((resolve) => {
+          signal?.addEventListener(
+            'abort',
+            () => {
+              controller.error(signal.reason);
+              resolve();
+            },
+            { once: true },
+          );
+        });
+      },
+    });
+    return Promise.resolve(
+      new Response(stream, { status: 200, headers: { 'content-type': 'text/html' } }),
+    );
+  };
+}
+
 /** Wrap `text` in the `<pre>` shell Congress.gov serves, so extraction yields `text`. */
 function preDoc(text: string): string {
   return `<pre>\n${text}\n</pre>`;
@@ -80,6 +141,61 @@ const LONG_TEXT = Array.from(
 const XML_BODY =
   '<bill><section><label>SEC. 1.</label><heading>SHORT TITLE</heading><text>pre<em>formatted</em>text &amp; more</text></section><!-- note --><section><label>SEC. 2.</label><text>Second.\r\nLine two.</text></section></bill>';
 const XML_TEXT = 'SEC. 1. SHORT TITLE preformattedtext & more SEC. 2. Second.\nLine two.';
+
+/** The service's replay slice. The fixtures below place constructs across its boundaries. */
+const SLICE = 128 * 1024;
+const encoder = new TextEncoder();
+
+/** Pad `prefix` with ASCII so whatever is appended next starts at byte `at` of the body. */
+function padTo(prefix: string, at: number): string {
+  const missing = at - encoder.encode(prefix).byteLength;
+  if (missing < 0) throw new Error(`fixture already runs past byte ${at}`);
+  return prefix + 'x'.repeat(missing);
+}
+
+function repeatSections(section: (i: number) => string, from: number, count: number): string {
+  return Array.from({ length: count }, (_, k) => section(from + k)).join('');
+}
+
+/**
+ * GPO-style Formatted Text past two replay slices: a four-byte character spans
+ * the first slice boundary and an entity the second, among multi-byte text,
+ * entities, and comments throughout.
+ */
+const PRE_SECTION = (i: number) =>
+  `\nSEC. ${i}. TITLE — § ${i} costs €${i} &amp; more 𝔄.\n    Body ${i} &lt;tag&gt; &#x2014; line.<!-- note ${i} -->`;
+const BIG_TEXT_BODY = `${padTo(
+  `${padTo(`<html><body><pre>\n${repeatSections(PRE_SECTION, 1, 1000)}`, SLICE - 2)}𝔄${repeatSections(PRE_SECTION, 1001, 1000)}`,
+  2 * SLICE - 1,
+)}&amp;${repeatSections(PRE_SECTION, 2001, 500)}\n</pre></body></html>\n`;
+
+/** No-`<pre>` XML past two replay slices: a tag spans the first boundary, a three-byte character the second. */
+const XML_SECTION = (i: number) =>
+  `<section id="s${i}"><num>${i}.</num><heading>Título — ${i}</heading><text>Amount &amp; €${i} <em>em</em>phasis 𝔄</text></section><!-- c${i} -->`;
+const BIG_XML_BODY = `${padTo(
+  `${padTo(`<?xml version="1.0"?><bill>${repeatSections(XML_SECTION, 1, 700)}`, SLICE - 3)}<note>straddle</note>${repeatSections(XML_SECTION, 701, 700)}`,
+  2 * SLICE - 2,
+)}€${repeatSections(XML_SECTION, 1401, 300)}</bill>`;
+
+const URL_REPORT = 'https://www.congress.gov/118/crpt/hrpt121/generated/CRPT-118hrpt121.htm';
+const URL_XML = 'https://www.congress.gov/116/bills/hr133/BILLS-116hr133enr.xml';
+
+/** Serve each document by path, streamed in chunks that never line up with a replay slice. */
+function serveDocuments(documents: Map<string, { body: string; type: string }>) {
+  return (url: string | URL): Promise<Response> => {
+    const parsed = new URL(String(url));
+    const document =
+      parsed.hostname === 'www.congress.gov' ? documents.get(parsed.pathname) : undefined;
+    if (!document) return Promise.resolve(errorResponse(404));
+    return Promise.resolve(streamedResponse(document.body, document.type, 4093));
+  };
+}
+
+const DOCUMENTS = new Map([
+  [new URL(URL_BILL).pathname, { body: preDoc(LONG_TEXT), type: 'text/html' }],
+  [new URL(URL_REPORT).pathname, { body: BIG_TEXT_BODY, type: 'text/html' }],
+  [new URL(URL_XML).pathname, { body: BIG_XML_BODY, type: 'application/xml' }],
+]);
 
 describe('CongressDocumentsService', () => {
   const mockFetch = vi.fn();
@@ -542,6 +658,475 @@ describe('CongressDocumentsService', () => {
       expect(result.totalCharacters).toBe(0);
       expect(result.truncated).toBe(false);
       expect(result.nextOffset).toBeNull();
+    });
+  });
+
+  /**
+   * One budget covers every upstream request a `content` call makes. It runs
+   * from the call's start, so whatever the handler spent before the document
+   * fetch — the format lookup — is already gone from it.
+   */
+  describe('call budget', () => {
+    const window = { url: URL_BILL, characterOffset: 0, characterLimit: 100 };
+
+    beforeEach(() => useFakeClock());
+    afterEach(() => vi.useRealTimers());
+
+    it('retries a transient failure and serves the fast second attempt', async () => {
+      mockFetch
+        .mockResolvedValueOnce(errorResponse(503))
+        .mockImplementationOnce(() => Promise.resolve(streamedResponse(preDoc('Hello.'))));
+      const call = track(service.fetchDocument(window, createMockContext()));
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(call.state.error).toBeUndefined();
+      expect(call.state.value?.text).toBe('Hello.');
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+    });
+
+    it.each([
+      ['headers never arrive', () => stalledHeadersFetch],
+      ['the body stalls after its headers', () => stalledBodyFetch(preDoc('SEC. 1.'))],
+    ])('fails inside the budget when %s on every attempt', async (_label, fixture) => {
+      mockFetch.mockImplementation(fixture());
+      const ctx = createMockContext();
+      const start = Date.now();
+      const call = track(service.fetchDocument(window, ctx));
+      await vi.advanceTimersByTimeAsync(CLIENT_TIMEOUT_MS);
+
+      expect(call.state.settledAt, 'settled before the client timeout').toBeDefined();
+      const elapsed = (call.state.settledAt as number) - start;
+      expect(elapsed).toBeLessThanOrEqual(CALL_BUDGET_MS);
+      /** The first attempt's own 30 s timeout ended at 30 s; the budget ended the second. */
+      expect(elapsed).toBeGreaterThan(30_000);
+      expect(call.state.error).toMatchObject({
+        code: JsonRpcErrorCode.Timeout,
+        data: { reason: 'upstream_timeout', budgetMs: CALL_BUDGET_MS, retryAttempts: 2 },
+      });
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+    });
+
+    it('charges time the call already spent and clamps the attempt to what is left', async () => {
+      mockFetch.mockImplementation(stalledHeadersFetch);
+      const ctx = createMockContext();
+      const start = Date.now();
+      /** The handler's format lookup took 40 s before the document fetch began. */
+      await vi.advanceTimersByTimeAsync(40_000);
+      const call = track(service.fetchDocument(window, ctx));
+      await vi.advanceTimersByTimeAsync(CLIENT_TIMEOUT_MS - 40_000);
+
+      expect(call.state.settledAt).toBe(start + CALL_BUDGET_MS);
+      expect(call.state.error).toMatchObject({
+        code: JsonRpcErrorCode.Timeout,
+        data: { reason: 'upstream_timeout', retryAttempts: 1 },
+      });
+      expect(mockFetch).toHaveBeenCalledOnce();
+    });
+
+    it('sends nothing once the budget is spent', async () => {
+      mockFetch.mockImplementation(() => Promise.resolve(streamedResponse(preDoc('Hello.'))));
+      const ctx = createMockContext();
+      await vi.advanceTimersByTimeAsync(CALL_BUDGET_MS);
+      const error = (await service.fetchDocument(window, ctx).catch((e: unknown) => e)) as McpError;
+      expect(error).toMatchObject({
+        code: JsonRpcErrorCode.Timeout,
+        data: { reason: 'upstream_timeout', budgetMs: CALL_BUDGET_MS, retryAttempts: 0 },
+      });
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('ends as RequestCancelled when the caller aborts mid-body, without retrying', async () => {
+      const controller = new AbortController();
+      const { promise: bodyStalled, resolve: stalled } = Promise.withResolvers<void>();
+      mockFetch.mockImplementation(stalledBodyFetch(preDoc('SEC. 1.'), stalled));
+      const call = service
+        .fetchDocument(window, { ...createMockContext(), signal: controller.signal })
+        .catch((e: unknown) => e);
+      await bodyStalled;
+      controller.abort();
+      expect(await call).toMatchObject({ code: JsonRpcErrorCode.RequestCancelled });
+      expect(mockFetch).toHaveBeenCalledOnce();
+    });
+
+    it('stops at once when the caller aborts during a backoff', async () => {
+      const controller = new AbortController();
+      mockFetch.mockResolvedValue(errorResponse(503));
+      const call = track(
+        service.fetchDocument(window, { ...createMockContext(), signal: controller.signal }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockFetch).toHaveBeenCalledOnce();
+      controller.abort();
+      await call.done;
+      /** The abort reason itself; the handler factory reports it as RequestCancelled (below). */
+      expect(call.state.error).toMatchObject({ name: 'AbortError' });
+      expect(mockFetch).toHaveBeenCalledOnce();
+    });
+  });
+
+  /**
+   * The wiring of each tool's `content` branch: the budget runs from the tool
+   * call's start, so a slow format lookup leaves the document fetch less time
+   * rather than adding to the total.
+   */
+  describe('call budget through each tool', () => {
+    const api = {
+      getBillSubResource: vi.fn(),
+      getCommitteeReportText: vi.fn(),
+      getDailyArticles: vi.fn(),
+    };
+    const LOOKUP_MS = 20_000;
+    const timeoutHint = congressErrorContracts.find(
+      (entry) => entry.reason === 'upstream_timeout',
+    )?.recovery;
+
+    /** An API lookup that answers after {@link LOOKUP_MS} of fake time. */
+    function slowLookup<T>(value: T) {
+      return () =>
+        new Promise<T>((resolve) => {
+          setTimeout(() => resolve(value), LOOKUP_MS);
+        });
+    }
+
+    const formats = [{ type: 'Formatted Text', url: URL_BILL }];
+    const cases = [
+      {
+        name: 'congressgov_bill_lookup',
+        run: () =>
+          runToolContract(billLookupTool, {
+            operation: 'content',
+            congress: 119,
+            billType: 'hr',
+            billNumber: 1,
+          }),
+        arrange: () =>
+          api.getBillSubResource.mockImplementation(
+            slowLookup({
+              data: [{ type: 'Enrolled Bill', formats }],
+              pagination: { count: 1, nextOffset: null },
+            }),
+          ),
+      },
+      {
+        name: 'congressgov_committee_reports',
+        run: () =>
+          runToolContract(committeeReportsTool, {
+            operation: 'content',
+            congress: 118,
+            reportType: 'hrpt',
+            reportNumber: 1,
+          }),
+        arrange: () =>
+          api.getCommitteeReportText.mockImplementation(slowLookup({ text: [{ formats }] })),
+      },
+      {
+        name: 'congressgov_daily_record',
+        run: () =>
+          runToolContract(dailyRecordTool, {
+            operation: 'content',
+            volumeNumber: 169,
+            issueNumber: 109,
+          }),
+        arrange: () =>
+          api.getDailyArticles.mockImplementation(
+            slowLookup({
+              data: [{ title: 'Article', text: formats }],
+              pagination: { count: 1, nextOffset: null },
+            }),
+          ),
+      },
+    ];
+
+    beforeEach(() => {
+      useFakeClock();
+      vi.mocked(getCongressApi).mockReturnValue(api as never);
+      initCongressDocuments();
+    });
+    afterEach(() => vi.useRealTimers());
+
+    it.each(cases)(
+      '$name settles inside the budget after a slow lookup and a stalled document',
+      async ({ arrange, run }) => {
+        arrange();
+        mockFetch.mockImplementation(stalledHeadersFetch);
+        const start = Date.now();
+        const call = track(run());
+        await vi.advanceTimersByTimeAsync(CLIENT_TIMEOUT_MS);
+
+        expectBudgetTimeout(call, start, { hint: timeoutHint });
+        /** 20 s of lookup leaves 30 s, which the first attempt uses up; no second attempt fits. */
+        expect(mockFetch).toHaveBeenCalledOnce();
+      },
+    );
+
+    it('bounds the format lookup itself: a lookup that would run past the budget ends at it, and no document is requested', async () => {
+      vi.mocked(getCongressApi).mockReturnValue(new CongressApiService());
+      const hits = { api: 0, document: 0 };
+      mockFetch.mockImplementation((url: string | URL, init?: RequestInit) => {
+        if (new URL(String(url)).hostname === 'api.congress.gov') {
+          /** The lookup is asked to wait 30 s, then stalls on every later attempt. */
+          return hits.api++ === 0
+            ? Promise.resolve(retryAfterResponse(503, 30))
+            : stalledHeadersFetch(url, init);
+        }
+        hits.document++;
+        return stalledHeadersFetch(url, init);
+      });
+      const start = Date.now();
+      const call = track(cases[0]!.run());
+      await vi.advanceTimersByTimeAsync(CLIENT_TIMEOUT_MS);
+
+      expectBudgetTimeout(call, start, {
+        hint: 'Retry after a short delay; the Congress.gov service may be temporarily degraded.',
+      });
+      /** The lookup's expiry, in the API client's own words, before any document request. */
+      expect(call.state.value?.structuredContent).toMatchObject({
+        error: {
+          message:
+            "Congress.gov did not deliver the API response within this call's 50-second budget for upstream requests (3 attempts).",
+        },
+      });
+      expect(hits).toEqual({ api: 3, document: 0 });
+    });
+
+    it('reports a caller abort during a backoff as RequestCancelled on both surfaces', async () => {
+      api.getCommitteeReportText.mockResolvedValue({ text: [{ formats }] });
+      mockFetch.mockResolvedValue(errorResponse(503));
+      const controller = new AbortController();
+      const call = track(
+        runToolContract(
+          committeeReportsTool,
+          { operation: 'content', congress: 118, reportType: 'hrpt', reportNumber: 1 },
+          { context: { signal: controller.signal } },
+        ),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockFetch).toHaveBeenCalledOnce();
+      controller.abort();
+      await call.done;
+      expect(call.state.value?.structuredContent).toMatchObject({
+        error: { code: JsonRpcErrorCode.RequestCancelled },
+      });
+      expect(call.state.value?.isError).toBe(true);
+      expect(mockFetch).toHaveBeenCalledOnce();
+    });
+  });
+
+  /**
+   * A multi-window document is fetched once per TTL: its decompressed body is
+   * cached and later windows replay it through the same extractor.
+   */
+  describe('body cache', () => {
+    const read = (
+      target: CongressDocumentsService,
+      url: string,
+      characterOffset: number,
+      characterLimit = 25_000,
+      signal?: AbortSignal,
+    ) =>
+      target.fetchDocument(
+        { url, characterOffset, characterLimit },
+        signal ? { ...createMockContext(), signal } : createMockContext(),
+      );
+
+    /** Walk a whole document via nextOffset on one service. */
+    async function walk(target: CongressDocumentsService, url: string, limit: number) {
+      const pages: DocumentContent[] = [];
+      let offset: number | null = 0;
+      while (offset !== null) {
+        if (pages.length > 500) throw new Error('walk did not terminate');
+        const page: DocumentContent = await read(target, url, offset, limit);
+        pages.push(page);
+        offset = page.nextOffset;
+      }
+      return pages;
+    }
+
+    beforeEach(() => {
+      mockFetch.mockImplementation(serveDocuments(DOCUMENTS));
+    });
+    afterEach(() => vi.useRealTimers());
+
+    it('places a construct across each replay slice boundary', () => {
+      const text = encoder.encode(BIG_TEXT_BODY);
+      expect(text.byteLength).toBeGreaterThan(2 * SLICE);
+      /** Mid-character: a UTF-8 continuation byte sits at each boundary. */
+      expect(text[SLICE]! & 0xc0).toBe(0x80);
+      expect(new TextDecoder().decode(text.subarray(2 * SLICE - 1, 2 * SLICE + 4))).toBe('&amp;');
+      const xml = encoder.encode(BIG_XML_BODY);
+      expect(xml.byteLength).toBeGreaterThan(2 * SLICE);
+      expect(new TextDecoder().decode(xml.subarray(SLICE - 3, SLICE + 3))).toBe('<note>');
+      expect(xml[2 * SLICE]! & 0xc0).toBe(0x80);
+    });
+
+    it.each([
+      ['Formatted Text', URL_REPORT, BIG_TEXT_BODY],
+      ['XML', URL_XML, BIG_XML_BODY],
+    ])(
+      'serves a %s walk from one fetch, identical to per-window fetches',
+      async (_label, url, body) => {
+        const pages = await walk(service, url, 25_000);
+        expect(mockFetch).toHaveBeenCalledOnce();
+        expect(pages.length).toBeGreaterThan(5);
+        expect(pages.map((page) => page.text).join('')).toBe(extractDocumentText(body));
+
+        for (const page of pages) {
+          const fresh = await read(new CongressDocumentsService(ROOMY), url, page.offset);
+          expect(page, `window at ${page.offset}`).toEqual(fresh);
+        }
+        expect(mockFetch).toHaveBeenCalledTimes(1 + pages.length);
+      },
+    );
+
+    it('serves the same window on a fresh instance and after priming calls on other documents', async () => {
+      const fresh = await read(new CongressDocumentsService(ROOMY), URL_REPORT, 50_000);
+      await read(service, URL_XML, 0);
+      await read(service, URL_BILL, 0, 100);
+      await read(service, URL_REPORT, 0);
+      const fetches = mockFetch.mock.calls.length;
+      const fromCache = await read(service, URL_REPORT, 50_000);
+      expect(mockFetch).toHaveBeenCalledTimes(fetches);
+      expect(fromCache).toEqual(fresh);
+    });
+
+    it('fetches once while the entry lives and once more after it expires', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      const start = Date.now();
+      await read(service, URL_BILL, 0, 100);
+      await read(service, URL_BILL, 100, 100);
+      expect(mockFetch).toHaveBeenCalledOnce();
+
+      vi.setSystemTime(start + 10 * 60_000 - 1);
+      await read(service, URL_BILL, 200, 100);
+      expect(mockFetch).toHaveBeenCalledOnce();
+
+      vi.setSystemTime(start + 10 * 60_000);
+      await read(service, URL_BILL, 300, 100);
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      await read(service, URL_BILL, 400, 100);
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+    });
+
+    it('caches nothing for a single-window document, which fetches each time as before', async () => {
+      await read(service, URL_BILL, 0, LONG_TEXT.length);
+      await read(service, URL_BILL, 0, LONG_TEXT.length);
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+    });
+
+    it('caches nothing from a window that reaches the end, even of a long document', async () => {
+      await read(service, URL_BILL, LONG_TEXT.length - 50, 100);
+      await read(service, URL_BILL, 0, 100);
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      await read(service, URL_BILL, 100, 100);
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+    });
+
+    it('never caches a body past the entry ceiling, and caches one exactly at it', async () => {
+      const bytes = encoder.encode(preDoc(LONG_TEXT)).byteLength;
+      const limits = { maxBytes: 10 * bytes, ttlMs: 10 * 60_000 };
+      const over = new CongressDocumentsService(
+        ROOMY,
+        new DocumentBodyCache({ ...limits, maxEntryBytes: bytes - 1 }),
+      );
+      await read(over, URL_BILL, 0, 100);
+      await read(over, URL_BILL, 100, 100);
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+
+      const at = new CongressDocumentsService(
+        ROOMY,
+        new DocumentBodyCache({ ...limits, maxEntryBytes: bytes }),
+      );
+      await read(at, URL_BILL, 0, 100);
+      await read(at, URL_BILL, 100, 100);
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+    });
+
+    it('caches nothing from a cancelled read', async () => {
+      const controller = new AbortController();
+      const { promise: bodyStalled, resolve: stalled } = Promise.withResolvers<void>();
+      mockFetch.mockImplementationOnce(stalledBodyFetch(preDoc(LONG_TEXT), stalled));
+      const cancelled = read(service, URL_BILL, 0, 100, controller.signal).catch((e: unknown) => e);
+      await bodyStalled;
+      controller.abort();
+      expect(await cancelled).toMatchObject({ code: JsonRpcErrorCode.RequestCancelled });
+
+      const page = await read(service, URL_BILL, 0, 100);
+      expect(page.text).toBe(LONG_TEXT.slice(0, 100));
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      await read(service, URL_BILL, 100, 100);
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+    });
+
+    it('stops a cancelled replay at its next yield, without fetching', async () => {
+      await read(service, URL_REPORT, 0);
+      const controller = new AbortController();
+      const replay = read(service, URL_REPORT, 25_000, 25_000, controller.signal).catch(
+        (e: unknown) => e,
+      );
+      controller.abort();
+      expect(await replay).toMatchObject({ code: JsonRpcErrorCode.RequestCancelled });
+      expect(mockFetch).toHaveBeenCalledOnce();
+    });
+
+    it('stops a cancelled replay at the first yield after the abort, not after the whole body', async () => {
+      await read(service, URL_REPORT, 0);
+      const controller = new AbortController();
+      const yields = vi.spyOn(globalThis, 'setImmediate');
+      try {
+        const replay = read(service, URL_REPORT, 25_000, 25_000, controller.signal).catch(
+          (e: unknown) => e,
+        );
+        controller.abort();
+        expect(await replay).toMatchObject({ code: JsonRpcErrorCode.RequestCancelled });
+        /** The body spans three replay slices; the abort lands before the first yield returns. */
+        expect(yields).toHaveBeenCalledTimes(1);
+      } finally {
+        yields.mockRestore();
+      }
+    });
+
+    it("keeps one caller's cancelled replay from failing another's", async () => {
+      await read(service, URL_REPORT, 0);
+      const reference = extractDocumentText(BIG_TEXT_BODY);
+      const controller = new AbortController();
+      const cancelled = read(service, URL_REPORT, 25_000, 25_000, controller.signal).catch(
+        (e: unknown) => e,
+      );
+      const other = read(service, URL_REPORT, 25_000);
+      controller.abort();
+      expect(await cancelled).toMatchObject({ code: JsonRpcErrorCode.RequestCancelled });
+      expect((await other).text).toBe(reference.slice(25_000, 50_000));
+      expect(mockFetch).toHaveBeenCalledOnce();
+    });
+
+    it("fetches concurrent cold reads separately, and one's cancellation leaves the other whole", async () => {
+      const controller = new AbortController();
+      const { promise: bodyStalled, resolve: stalled } = Promise.withResolvers<void>();
+      mockFetch.mockImplementationOnce(stalledBodyFetch(preDoc(LONG_TEXT), stalled));
+      const cancelled = read(service, URL_BILL, 0, 100, controller.signal).catch((e: unknown) => e);
+      await bodyStalled;
+      /** Both reads are cold and in flight: the first is stalled mid-body. */
+      const other = read(service, URL_BILL, 0, 100);
+      controller.abort();
+      expect(await cancelled).toMatchObject({ code: JsonRpcErrorCode.RequestCancelled });
+      expect((await other).text).toBe(LONG_TEXT.slice(0, 100));
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      /** The read that finished cached the body for later windows. */
+      await read(service, URL_BILL, 100, 100);
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+    });
+
+    it('serves a cached window without the budget, even once the budget is spent', async () => {
+      await read(service, URL_BILL, 0, 100);
+      useFakeClock();
+      const ctx = createMockContext();
+      await vi.advanceTimersByTimeAsync(CALL_BUDGET_MS);
+      mockFetch.mockImplementation(stalledHeadersFetch);
+      const page = await service.fetchDocument(
+        { url: URL_BILL, characterOffset: 100, characterLimit: 100 },
+        ctx,
+      );
+      expect(page.text).toBe(LONG_TEXT.slice(100, 200));
+      expect(mockFetch).toHaveBeenCalledOnce();
     });
   });
 

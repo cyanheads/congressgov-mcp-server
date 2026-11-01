@@ -5,19 +5,10 @@
 
 import { z } from '@cyanheads/mcp-ts-core';
 import { parseEnvConfig } from '@cyanheads/mcp-ts-core/config';
+import { currentCongressNumber } from '@/utils/congress-calendar.js';
 
 /** Default on-disk location of the SQLite bill FTS mirror. */
 export const DEFAULT_MIRROR_PATH = '.mirror/bills.sqlite3';
-
-/**
- * Congress number covering a given date. The 1st U.S. Congress convened in 1789
- * and each Congress spans two years, so `floor((year - 1789) / 2) + 1` yields the
- * ordinal (2025–2026 → 119). Used to seed the default mirror window when
- * `CONGRESS_MIRROR_CONGRESSES` is unset.
- */
-export function currentCongressNumber(date: Date = new Date()): number {
-  return Math.floor((date.getUTCFullYear() - 1789) / 2) + 1;
-}
 
 /**
  * Parse `CONGRESS_MIRROR_CONGRESSES` — a comma-separated list of congress numbers

@@ -5,6 +5,7 @@
 
 import type { Context } from '@cyanheads/mcp-ts-core';
 import {
+  configurationError,
   invalidParams,
   JsonRpcErrorCode,
   McpError,
@@ -17,9 +18,10 @@ import {
   defaultIsTransient,
   fetchWithTimeout,
   requestContextService,
-  withRetry,
 } from '@cyanheads/mcp-ts-core/utils';
 import { getServerConfig } from '@/config/server-config.js';
+import { type BudgetedAttempt, withCallBudget } from '@/services/call-budget.js';
+import { ordinal } from '@/utils/congress-calendar.js';
 import type {
   BillSubResourceParams,
   CommitteeSubResourceParams,
@@ -58,22 +60,6 @@ interface FetchListResult {
 
 function isApiRecord(value: unknown): value is ApiRecord {
   return typeof value === 'object' && value !== null;
-}
-
-/** English ordinal for a congress number — "119" → "119th". */
-function ordinal(n: number): string {
-  const lastTwo = n % 100;
-  if (lastTwo >= 11 && lastTwo <= 13) return `${n}th`;
-  switch (n % 10) {
-    case 1:
-      return `${n}st`;
-    case 2:
-      return `${n}nd`;
-    case 3:
-      return `${n}rd`;
-    default:
-      return `${n}th`;
-  }
 }
 
 /** Normalize upstream casing: bioguideID → bioguideId. */
@@ -243,6 +229,12 @@ const INVALID_REQUEST_RECOVERY = {
     hint: 'Check parameter formats — dates must be ISO 8601 (2026-05-01T00:00:00Z) and identifiers must match their documented shape.',
   },
 } as const;
+const API_KEY_REJECTED_RECOVERY = {
+  reason: 'api_key_rejected',
+  recovery: {
+    hint: 'This is a server configuration problem, not a request problem: the operator must replace CONGRESS_API_KEY with a valid api.data.gov key (https://api.data.gov/signup/) or unset it to fall back to the rate-limited DEMO_KEY, then restart the server.',
+  },
+} as const;
 const UPSTREAM_ERROR_RECOVERY = {
   reason: 'upstream_error',
   recovery: {
@@ -266,6 +258,24 @@ function readUpstreamBody(error: McpError): string | undefined {
 }
 
 /**
+ * Read an api.data.gov key-rejection code (`API_KEY_MISSING`, `_INVALID`,
+ * `_DISABLED`, `_UNAUTHORIZED`, `_UNVERIFIED`) off a captured error body. The
+ * gateway in front of api.congress.gov wraps each in
+ * `{ "error": { "code", "message" } }`; Congress.gov's own errors carry a
+ * string `error` or plain text and read as none.
+ */
+function readGatewayKeyCode(body: string | undefined): string | undefined {
+  if (!body) return;
+  try {
+    const parsed: unknown = JSON.parse(body);
+    const code = isApiRecord(parsed) && isApiRecord(parsed.error) ? parsed.error.code : undefined;
+    return typeof code === 'string' && code.startsWith('API_KEY_') ? code : undefined;
+  } catch {
+    return;
+  }
+}
+
+/**
  * Map an McpError raised by fetchWithTimeout — whose message embeds the full
  * upstream URL and which carries no machine-readable reason — into a clean
  * domain error: a stable `data.reason`, an actionable `data.recovery.hint`, and
@@ -286,6 +296,21 @@ function classifyUpstreamError(error: McpError, path: string): McpError {
   if (typeof error.data?.retryAfter === 'string') meta.retryAfter = error.data.retryAfter;
   const opts = { cause: error };
   const suffix = status !== undefined ? ` (HTTP ${status})` : '';
+
+  /** A rejected key and a malformed path segment (#34) both arrive as 403, so the
+   *  gateway's body code, not the status, separates operator configuration from
+   *  caller input. Resolves cyanheads/congressgov-mcp-server#84. */
+  const upstreamCode =
+    error.code === JsonRpcErrorCode.Forbidden || error.code === JsonRpcErrorCode.Unauthorized
+      ? readGatewayKeyCode(body)
+      : undefined;
+  if (upstreamCode !== undefined) {
+    return configurationError(
+      `Congress.gov's api.data.gov gateway rejected the server's API key with ${upstreamCode}${suffix}.`,
+      { ...meta, retryable: false, upstreamCode, ...API_KEY_REJECTED_RECOVERY },
+      opts,
+    );
+  }
 
   switch (error.code) {
     case JsonRpcErrorCode.RequestCancelled:
@@ -762,34 +787,45 @@ export class CongressApiService {
     return { count, nextOffset };
   }
 
+  /**
+   * One request under its call's budget (`call-budget.ts`) when `ctx` is the
+   * handler's context; without one — the mirror ingester — the plain ladder.
+   */
   // biome-ignore lint/suspicious/noExplicitAny: API responses are dynamic JSON
   private get(path: string, ctx?: Context, query?: Record<string, string>): Promise<any> {
     const url = this.buildUrl(path, query);
     const operation = `CongressApiService GET ${path}`;
     const requestContext = this.getRequestContext(ctx, operation);
     const signal = this.getAbortSignal(ctx);
-    const retryOptions = {
-      operation,
-      context: requestContext,
-      baseDelayMs: BASE_BACKOFF_MS,
-      maxRetries: MAX_ATTEMPTS - 1,
-      isTransient: (error: unknown) => this.isRetryableError(error),
-      ...(signal ? { signal } : {}),
-    };
 
-    return withRetry(async () => {
-      this.reserveAttempt();
-      const sequence = ++this.requestSequence;
-      const response = await this.fetchResponse(url, path, requestContext, signal, sequence);
-      let text: string;
-      try {
-        text = await response.text();
-      } catch (error) {
-        if (error instanceof McpError) throw classifyUpstreamError(error, path);
-        throw error;
-      }
-      return this.parseJsonResponse(text, path);
-    }, retryOptions);
+    return withCallBudget(
+      async (attempt) => {
+        this.reserveAttempt();
+        const sequence = ++this.requestSequence;
+        const response = await this.fetchResponse(url, path, requestContext, attempt, sequence);
+        let text: string;
+        try {
+          text = await response.text();
+        } catch (error) {
+          if (error instanceof McpError) throw classifyUpstreamError(error, path);
+          throw error;
+        }
+        return this.parseJsonResponse(text, path);
+      },
+      {
+        call: ctx,
+        attemptTimeoutMs: REQUEST_TIMEOUT_MS,
+        upstream: 'Congress.gov',
+        request: 'the API response',
+        recovery: UPSTREAM_ERROR_RECOVERY.recovery,
+        operation,
+        context: requestContext,
+        baseDelayMs: BASE_BACKOFF_MS,
+        maxRetries: MAX_ATTEMPTS - 1,
+        isTransient: (error: unknown) => this.isRetryableError(error),
+        ...(signal ? { signal } : {}),
+      },
+    );
   }
 
   private reserveAttempt(): void {
@@ -911,11 +947,11 @@ export class CongressApiService {
     url: URL,
     path: string,
     requestContext: RequestContext,
-    signal: AbortSignal | undefined,
+    attempt: BudgetedAttempt,
     sequence: number,
   ): Promise<Response> {
     try {
-      const response = await fetchWithTimeout(url, REQUEST_TIMEOUT_MS, requestContext, {
+      const response = await fetchWithTimeout(url, attempt.timeoutMs, requestContext, {
         headers: { Accept: 'application/json', 'X-Api-Key': this.apiKey },
         errorHeaders: ['x-ratelimit-limit', 'x-ratelimit-remaining'],
         /** Congress.gov answers 404 for any identifier it does not hold, which is an
@@ -923,7 +959,7 @@ export class CongressApiService {
          *  tryNotFound turn it into an actionable domain notFound. Listing it drops
          *  the framework's log severity to debug; the thrown McpError is unchanged. */
         expectedStatuses: [404],
-        ...(signal ? { signal } : {}),
+        signal: attempt.signal,
       });
       this.observeQuota(response.headers, sequence);
       return response;

@@ -30,9 +30,15 @@ import {
   defaultIsTransient,
   fetchWithTimeout,
   requestContextService,
-  withRetry,
 } from '@cyanheads/mcp-ts-core/utils';
-import { computePartyTotals, parseRollCallVote, parseVoteMenu } from './parse.js';
+import { type BudgetedAttempt, withCallBudget } from '@/services/call-budget.js';
+import { ordinal } from '@/utils/congress-calendar.js';
+import {
+  computePartyTotals,
+  parseRollCallVote,
+  parseVoteMenu,
+  SENATE_VOTE_COVERAGE,
+} from './parse.js';
 import type { SenateMemberVote, SenateVoteDetail, SenateVoteSummary } from './types.js';
 
 const DEFAULT_BASE_URL = 'https://www.senate.gov/legislative/LIS';
@@ -49,6 +55,18 @@ const NOT_FOUND_RECOVERY = {
   reason: 'not_found',
   recovery: {
     hint: "Use operation 'list' with chamber 'senate' to find valid vote numbers for the congress and session, then retry.",
+  },
+} as const;
+/**
+ * senate.gov's firewall answers non-browser clients with HTTP 403. A retry meets
+ * the same refusal, so it fails on the first attempt and says so, rather than
+ * reading as a brief outage.
+ */
+const REFUSED_RECOVERY = {
+  reason: 'upstream_error',
+  retryable: false,
+  recovery: {
+    hint: "Senate roll call votes cannot be retrieved while senate.gov refuses automated requests; House votes (chamber 'house') are unaffected.",
   },
 } as const;
 const UPSTREAM_ERROR_RECOVERY = {
@@ -95,22 +113,6 @@ export type SenateVoteMembersResult = {
   pagination: Pagination;
 };
 
-/** English ordinal for a congress number — "118" → "118th". */
-function ordinal(n: number): string {
-  const lastTwo = n % 100;
-  if (lastTwo >= 11 && lastTwo <= 13) return `${n}th`;
-  switch (n % 10) {
-    case 1:
-      return `${n}st`;
-    case 2:
-      return `${n}nd`;
-    case 3:
-      return `${n}rd`;
-    default:
-      return `${n}th`;
-  }
-}
-
 function isNativeAbortSignal(value: unknown): value is AbortSignal {
   if (
     typeof AbortSignal !== 'function' ||
@@ -140,7 +142,7 @@ export class SenateVoteService {
       url,
       `SenateVoteService GET vote_menu_${params.congress}_${params.session}`,
       ctx,
-      `No Senate roll call votes found for the ${ordinal(params.congress)} Congress, session ${params.session}. Valid sessions are 1 and 2; the Senate publishes roll call votes from the 101st Congress (1989) onward.`,
+      `No Senate roll call votes found for the ${ordinal(params.congress)} Congress, session ${params.session}. Valid sessions are 1 and 2; ${SENATE_VOTE_COVERAGE}.`,
       { congress: params.congress, session: params.session },
     );
 
@@ -201,7 +203,12 @@ export class SenateVoteService {
     const requestContext = this.getRequestContext(ctx, operation);
     const signal = this.getAbortSignal(ctx);
 
-    const text = await withRetry(() => this.doFetch(url, requestContext, signal), {
+    const text = await withCallBudget((attempt) => this.doFetch(url, requestContext, attempt), {
+      call: ctx,
+      attemptTimeoutMs: REQUEST_TIMEOUT_MS,
+      upstream: 'senate.gov',
+      request: 'the Senate LIS feed',
+      recovery: UPSTREAM_ERROR_RECOVERY.recovery,
       operation,
       context: requestContext,
       baseDelayMs: BASE_BACKOFF_MS,
@@ -227,21 +234,29 @@ export class SenateVoteService {
   private async doFetch(
     url: string,
     requestContext: RequestContext,
-    signal?: AbortSignal,
+    attempt: BudgetedAttempt,
   ): Promise<string> {
     try {
-      const response = await fetchWithTimeout(url, REQUEST_TIMEOUT_MS, requestContext, {
+      const response = await fetchWithTimeout(url, attempt.timeoutMs, requestContext, {
         headers: { Accept: 'application/xml, text/xml, */*' },
-        ...(signal ? { signal } : {}),
+        signal: attempt.signal,
       });
       return await response.text();
     } catch (error) {
       /** fetchWithTimeout throws a status-mapped McpError whose message embeds the
        *  full URL. The missing-resource case never lands here (the host answers 200
-       *  with HTML), so a genuine non-2xx is an outage/timeout — surface it as a clean,
-       *  retryable upstream error without echoing the URL. */
+       *  with HTML), so a 403 is the host refusing the client and any other non-2xx
+       *  is an outage/timeout — surface either as a clean upstream error without
+       *  echoing the URL. */
       if (error instanceof McpError) {
         if (error.code === JsonRpcErrorCode.RequestCancelled) throw error;
+        if (error.data?.status === 403) {
+          throw serviceUnavailable(
+            'senate.gov refused the request for the Senate LIS feed (HTTP 403).',
+            REFUSED_RECOVERY,
+            { cause: error },
+          );
+        }
         throw serviceUnavailable(
           'The Senate.gov LIS feed is temporarily unavailable.',
           {

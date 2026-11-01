@@ -830,3 +830,132 @@ describe('empty paginated pages (issue #28)', () => {
     expect(text).not.toContain('Page is empty');
   });
 });
+
+describe('Senate roll vote pointer rendering (issue #62)', () => {
+  /** Real row from /bill/117/hr/3684/actions — its text cites a Senate vote, but bill rows carry `recordedVotes`, never `rollVote`. */
+  const billSenateAction = {
+    actionDate: '2021-08-10',
+    recordedVotes: [
+      {
+        chamber: 'Senate',
+        congress: 117,
+        date: '2021-08-10T15:51:57Z',
+        rollNumber: 314,
+        sessionNumber: 1,
+        url: 'https://www.senate.gov/legislative/LIS/roll_call_votes/vote1171/vote_117_1_00314.xml',
+      },
+    ],
+    sourceSystem: { name: 'Senate' },
+    text: 'Passed Senate with an amendment by Yea-Nay Vote. 69 - 30. Record Vote Number: 314.',
+    type: 'Floor',
+  };
+  const billRow = {
+    congress: 117,
+    type: 'HR',
+    number: '3684',
+    title: 'Infrastructure Investment and Jobs Act',
+    latestAction: {
+      actionDate: '2021-11-15',
+      actionTime: '16:42:00',
+      text: 'Became Public Law No: 117-58.',
+    },
+    url: 'https://api.congress.gov/v3/bill/117/hr/3684?format=json',
+  };
+
+  it('renders a bill action row byte-identically', () => {
+    expect(
+      textOf(formatBills({ data: [billSenateAction], pagination: { count: 1, nextOffset: null } })),
+    ).toBe(
+      '**1 result**\n\n### 1. 2021-08-10 — Passed Senate with an amendment by Yea-Nay Vote. 69 - 30. Record Vote Number: 314.\n**Type:** Floor | **Source:** Senate\n\n\n**recordedVotes** (1):\n- chamber: Senate, congress: 117, date: 2021-08-10T15:51:57Z, rollNumber: 314, sessionNumber: 1, url: https://www.senate.gov/legislative/LIS/roll_call_votes/vote1171/vote_117_1_00314.xml',
+    );
+  });
+
+  it('renders a bill latest action byte-identically on list rows and detail', () => {
+    expect(
+      textOf(formatBills({ data: [billRow], pagination: { count: 1, nextOffset: null } })),
+    ).toBe(
+      '**1 result**\n\n### 1. HR 3684: Infrastructure Investment and Jobs Act\n**Congress:** 117\n**Latest Action:** 2021-11-15 — Became Public Law No: 117-58. — actionTime: 16:42:00\n**URL:** https://api.congress.gov/v3/bill/117/hr/3684?format=json',
+    );
+    expect(textOf(formatBills({ bill: billRow }))).toBe(
+      '# HR 3684: Infrastructure Investment and Jobs Act\n**Congress:** 117\n**Latest Action:** 2021-11-15 — Became Public Law No: 117-58. — actionTime: 16:42:00\n\n**url:** https://api.congress.gov/v3/bill/117/hr/3684?format=json',
+    );
+  });
+
+  it('renders a multi-part parent nomination with no latest action as before', () => {
+    /** Real record from /nomination/119/730 — the parent carries no activity. */
+    const parent = {
+      authorityDate: '2026-01-13',
+      citation: 'PN730',
+      congress: 119,
+      description:
+        'Ademola Adewale-Sadik, of New York, to be United States Director of the African Development Bank for a term of five years, vice Oren E. Whyche-Shaw.',
+      nominationType: { isCivilian: true },
+      number: 730,
+      partNumber: '00',
+      receivedDate: '2026-01-13',
+      updateDate: '2026-01-14T12:00:38Z',
+    };
+    const expected =
+      '# PN730\nAdemola Adewale-Sadik, of New York, to be United States Director of the African Development Bank for a term of five years, vice Oren E. Whyche-Shaw.\n**Congress:** 119 | **Type:** Civilian | **Part Number:** 00 | **Received:** 2026-01-13 | **Authority Date:** 2026-01-13 | **Updated:** 2026-01-14T12:00:38Z\n\n_This is a parent nomination. Individual nominees and confirmation actions live on partitioned children (e.g. `PN851-1`, `PN851-2`). Use the partitioned form for `actions`, `committees`, `hearings`, or `nominees`._';
+    expect(textOf(formatNominations({ nomination: parent }))).toBe(expected);
+    expect(textOf(formatNominations({ nomination: { ...parent, latestAction: null } }))).toBe(
+      expected,
+    );
+  });
+
+  const rollVote = { chamber: 'senate', congress: 119, session: 2, voteNumber: 225 };
+  const confirmed = {
+    actionDate: '2026-08-07',
+    text: 'Confirmed by the Senate by Yea-Nay Vote. 51 - 47. Record Vote Number: 225.',
+  };
+  const pointerLine =
+    '**Senate Roll Vote:** congressgov_roll_votes chamber=senate, congress=119, session=2, voteNumber=225';
+
+  it('renders an action row’s pointer as one line, never as a fall-through field', () => {
+    const text = textOf(
+      formatNominations({
+        data: [{ actionCode: 'S05310', ...confirmed, type: 'Floor', rollVote }],
+        pagination: { count: 15, nextOffset: 1 },
+      }),
+    );
+    expect(text).toBe(
+      `**15 results** | next offset: 1\n\n### 1. 2026-08-07 — ${confirmed.text}\n**Type:** Floor | **Action Code:** S05310\n${pointerLine}`,
+    );
+  });
+
+  it('renders a latest action’s pointer beneath it on list rows and detail', () => {
+    const latestLines = `**Latest Action:** 2026-08-07 — ${confirmed.text}\n${pointerLine}`;
+    const list = textOf(
+      formatNominations({
+        data: [{ citation: 'PN730-2', congress: 119, latestAction: { ...confirmed, rollVote } }],
+        pagination: { count: 1, nextOffset: null },
+      }),
+    );
+    expect(list).toBe(`**1 result**\n\n### 1. PN730-2\n**Congress:** 119\n${latestLines}`);
+    const detail = textOf(
+      formatNominations({
+        nomination: {
+          citation: 'PN730-2',
+          congress: 119,
+          latestAction: { ...confirmed, rollVote },
+        },
+      }),
+    );
+    expect(detail).toBe(`# PN730-2\n**Congress:** 119\n${latestLines}`);
+  });
+
+  it('keeps an unnamed latest-action field on the action line, the pointer beneath', () => {
+    const text = textOf(
+      formatNominations({
+        nomination: {
+          citation: 'PN730-2',
+          latestAction: { ...confirmed, actionTime: '16:42:00', rollVote },
+        },
+      }),
+    );
+    expect(text).toContain(
+      `**Latest Action:** 2026-08-07 — ${confirmed.text} — actionTime: 16:42:00\n${pointerLine}`,
+    );
+    expect(text).not.toContain('rollVote');
+  });
+});

@@ -16,6 +16,7 @@ import {
   computePartyTotals,
   parseRollCallVote,
   parseVoteMenu,
+  senateSessionForDate,
 } from '@/services/senate-lis/parse.js';
 
 const fixture = (name: string) =>
@@ -183,6 +184,62 @@ describe('parseVoteMenu — resolved calendar dates', () => {
       ).get(1);
     expect(leapDay(2024)).toBe('2024-02-29');
     expect(leapDay(2023)).toBeUndefined();
+  });
+});
+
+describe('senateSessionForDate', () => {
+  it.each([
+    /** The first year of a congress is session 1, the second year session 2. */
+    [105, '1997-01-29', 1],
+    [119, '2025-01-03', 1],
+    [119, '2026-08-07', 2],
+    [116, '2020-12-30', 2],
+    /** A second session sitting into January 1–3 of the year after. */
+    [115, '2018-01-03', 2],
+    [116, '2021-01-01', 2],
+    [112, '2013-01-01', 2],
+    [116, '2021-01-03', 2],
+  ] as const)('%i / %s → session %i', (congress, date, session) => {
+    expect(senateSessionForDate(congress, date)).toBe(session);
+  });
+
+  it.each([
+    [116, '2021-01-04'],
+    [116, '2021-02-01'],
+    [116, '2018-12-31'],
+    [119, '2027-01-04'],
+    [105, '2001-06-01'],
+  ] as const)('%i / %s is outside the congress → undefined', (congress, date) => {
+    expect(senateSessionForDate(congress, date)).toBeUndefined();
+  });
+
+  it.each(['', '2026-8-7', '08/07/2026', '2026-08-07T00:00:00Z', ' 2026-08-07'])(
+    'rejects the non-YYYY-MM-DD date %j',
+    (date) => {
+      expect(senateSessionForDate(119, date)).toBeUndefined();
+    },
+  );
+
+  it('rejects a congress number that is not a positive integer', () => {
+    expect(senateSessionForDate(0, '1788-06-01')).toBeUndefined();
+    expect(senateSessionForDate(118.5, '2024-03-21')).toBeUndefined();
+  });
+
+  it('agrees with the session of every dated vote in the committed LIS menus', () => {
+    /** Each fixture is one LIS session menu; its votes' resolved dates must map back to it. */
+    for (const [xml, congress, session] of [
+      [ROLLOVER_116, 116, 2],
+      [ROLLOVER_112, 112, 2],
+      [DECEMBER_118, 118, 1],
+    ] as const) {
+      const dated = parseVoteMenu(xml).filter((vote) => vote.voteDateIso !== undefined);
+      expect(dated.length).toBeGreaterThan(0);
+      for (const vote of dated) {
+        expect(senateSessionForDate(congress, vote.voteDateIso as string), vote.voteDateIso).toBe(
+          session,
+        );
+      }
+    }
   });
 });
 

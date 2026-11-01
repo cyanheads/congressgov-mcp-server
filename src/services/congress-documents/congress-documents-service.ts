@@ -8,15 +8,23 @@
  * its own service the way `SenateVoteService` does for the Senate LIS feed.
  *
  * Two bounds, deliberately separate:
- * - **The fetch** is bounded by {@link MAX_DOCUMENT_BYTES}, a request timeout, and
- *   a content-type allowlist. The body is extracted as it streams and only the
- *   requested window is kept, so what a read *retains* is flat in the size of
- *   the document and the ceiling bounds how long a response may run rather than
- *   how much of one fits in a buffer.
+ * - **The fetch** is bounded by {@link MAX_DOCUMENT_BYTES}, a per-attempt timeout,
+ *   the tool call's one time budget (`call-budget.ts`), which the format lookup
+ *   before it spends from too, and a content-type allowlist. The body is
+ *   extracted as it streams and only the requested window is extracted into
+ *   memory, so the ceiling bounds how long a response may run rather than how
+ *   much of one fits in a buffer.
  * - **The response** is bounded by an exact character offset/limit window. Offsets
  *   index into the extracted plain text and are never snapped to section or
  *   paragraph breaks, so feeding `nextOffset` back walks a document with every
  *   character returned exactly once — no overlap, no gap.
+ *
+ * Every window streams the whole body to learn `totalCharacters`, so a walk
+ * would fetch its document once per window. Instead the first read of a
+ * document that runs past its window keeps the decompressed body in a
+ * {@link DocumentBodyCache} (64 MB total, 16 MB per body, 10-minute TTL), and
+ * later windows replay those bytes through the same extractor: one fetch per
+ * document per TTL. A replay is local work and never touches the time budget.
  *
  * @module services/congress-documents/congress-documents-service
  */
@@ -26,6 +34,7 @@ import {
   JsonRpcErrorCode,
   McpError,
   notFound,
+  requestCancelled,
   serviceUnavailable,
   validationError,
 } from '@cyanheads/mcp-ts-core/errors';
@@ -34,8 +43,9 @@ import {
   defaultIsTransient,
   fetchWithTimeout,
   requestContextService,
-  withRetry,
 } from '@cyanheads/mcp-ts-core/utils';
+import { type BudgetedAttempt, withCallBudget } from '@/services/call-budget.js';
+import { type BodyCapture, DocumentBodyCache } from './document-body-cache.js';
 import { createStreamingExtractor, type ExtractedWindow } from './extract-text-stream.js';
 import type { DocumentContent, FetchDocumentParams } from './types.js';
 
@@ -45,15 +55,25 @@ import type { DocumentContent, FetchDocumentParams } from './types.js';
  * 6,790,482 bytes as Formatted Text and 9,812,888 as XML — and both formats of a
  * document have to clear it, since a caller sent to the other one by a recovery
  * hint would hit the same refusal. This clears the largest by better than a
- * factor of two; the request deadline is what a runaway response meets first.
+ * factor of two; the per-attempt timeout is what a runaway response meets first.
  */
 export const MAX_DOCUMENT_BYTES = 25_000_000;
 
-/** Bounds the whole exchange, headers and body — a megabyte-scale body needs the room. */
+/**
+ * Bounds one attempt's whole exchange, headers and body — a megabyte-scale body
+ * needs the room. Clamped to what is left of the call's budget.
+ */
 export const REQUEST_TIMEOUT_MS = 30_000;
 
 const MAX_ATTEMPTS = 3;
 const BASE_BACKOFF_MS = 500;
+
+/**
+ * Largest piece of a cached body replayed between macrotask yields. Replaying
+ * from memory has no network waits, so without the yields a large document's
+ * whole parse would hold the event loop in one block.
+ */
+const REPLAY_SLICE_BYTES = 128 * 1024;
 
 /** Every format URL these tools resolve points here; nothing else is fetched. */
 const ALLOWED_HOSTS = new Set(['www.congress.gov']);
@@ -70,6 +90,12 @@ const DOCUMENT_UNAVAILABLE = 'document_unavailable';
 const DOCUMENT_FETCH_FAILED = 'document_fetch_failed';
 const DOCUMENT_TOO_LARGE = 'document_too_large';
 const OFFSET_PAST_END = 'offset_past_end';
+
+/** One fetched read: its window, and the body captured for the cache along the way. */
+interface FetchedWindow {
+  body: BodyCapture;
+  window: ExtractedWindow;
+}
 
 function isNativeAbortSignal(value: unknown): value is AbortSignal {
   if (
@@ -88,7 +114,10 @@ function isNativeAbortSignal(value: unknown): value is AbortSignal {
 }
 
 export class CongressDocumentsService {
-  constructor(private readonly maxDocumentBytes: number = MAX_DOCUMENT_BYTES) {}
+  constructor(
+    private readonly maxDocumentBytes: number = MAX_DOCUMENT_BYTES,
+    private readonly bodyCache: DocumentBodyCache = new DocumentBodyCache(),
+  ) {}
 
   /**
    * Fetch one document and return the requested character window of its text.
@@ -97,15 +126,26 @@ export class CongressDocumentsService {
    * one — and is still checked against {@link ALLOWED_HOSTS} before any request
    * goes out, so a redirected or malformed upstream link cannot turn this into a
    * general-purpose fetcher.
+   *
+   * A document whose body is cached is replayed from it with no request at all.
+   * Otherwise the fetch spends what is left of the tool call's budget
+   * (`call-budget.ts`): running out throws `Timeout` (`upstream_timeout`), and a
+   * caller abort ends the call at once.
    */
   async fetchDocument(params: FetchDocumentParams, ctx: Context): Promise<DocumentContent> {
     this.assertAllowedHost(params.url);
 
+    const signal = this.getAbortSignal(ctx);
+    const cached = this.bodyCache.get(params.url);
+    if (cached) return this.describeWindow(await this.replayWindow(cached, params, signal), params);
+
     const operation = 'CongressDocumentsService GET document';
     const requestContext = this.getRequestContext(ctx, operation);
-    const signal = this.getAbortSignal(ctx);
-
-    const window = await withRetry(() => this.doFetch(params, requestContext, signal), {
+    const read = await withCallBudget((attempt) => this.doFetch(params, requestContext, attempt), {
+      call: ctx,
+      attemptTimeoutMs: REQUEST_TIMEOUT_MS,
+      upstream: 'Congress.gov',
+      request: 'the document',
       operation,
       context: requestContext,
       baseDelayMs: BASE_BACKOFF_MS,
@@ -114,7 +154,35 @@ export class CongressDocumentsService {
       ...(signal ? { signal } : {}),
     });
 
-    return this.describeWindow(window, params);
+    const content = this.describeWindow(read.window, params);
+    /** A document the window covers to its end is never retained. */
+    if (content.nextOffset !== null) this.bodyCache.insert(params.url, read.body);
+    return content;
+  }
+
+  /**
+   * Serve a window from a cached body: the decoder and extractor a fetch feeds,
+   * given the body in slices with a macrotask between them, checking the
+   * caller's signal at each one.
+   */
+  private async replayWindow(
+    body: Uint8Array,
+    params: FetchDocumentParams,
+    signal?: AbortSignal,
+  ): Promise<ExtractedWindow> {
+    const decoder = new TextDecoder('utf-8');
+    const extractor = createStreamingExtractor({
+      characterLimit: params.characterLimit,
+      characterOffset: params.characterOffset,
+    });
+    for (let start = 0; start < body.byteLength; start += REPLAY_SLICE_BYTES) {
+      if (start > 0) await new Promise<void>((resolve) => setImmediate(resolve));
+      if (signal?.aborted) throw requestCancelled('The document read was cancelled.');
+      const slice = body.subarray(start, start + REPLAY_SLICE_BYTES);
+      extractor.push(decoder.decode(slice, { stream: true }));
+    }
+    extractor.push(decoder.decode());
+    return extractor.finish();
   }
 
   /** Describe the extracted `[offset, offset + limit)` window and what remains. */
@@ -165,17 +233,21 @@ export class CongressDocumentsService {
     }
   }
 
+  /**
+   * One attempt. `attempt.signal` carries both the caller's abort and the call
+   * budget, so either ends an exchange already in flight, body included.
+   */
   private async doFetch(
     params: FetchDocumentParams,
     requestContext: RequestContext,
-    signal?: AbortSignal,
-  ): Promise<ExtractedWindow> {
+    attempt: BudgetedAttempt,
+  ): Promise<FetchedWindow> {
     let response: Response;
     try {
-      response = await fetchWithTimeout(params.url, REQUEST_TIMEOUT_MS, requestContext, {
+      response = await fetchWithTimeout(params.url, attempt.timeoutMs, requestContext, {
         headers: { Accept: 'text/html, application/xml, text/plain, */*' },
         expectedStatuses: [404],
-        ...(signal ? { signal } : {}),
+        signal: attempt.signal,
       });
     } catch (error) {
       throw this.classifyFetchError(error);
@@ -243,23 +315,26 @@ export class CongressDocumentsService {
    * Extract the requested character window as the body streams, under a hard
    * byte budget that cancels the stream the moment it is exceeded.
    *
-   * Nothing but the window is retained: the decoder carries a partial character
-   * across a chunk boundary and the extractor carries its parse state, so the
-   * live set stays near the window's own size however large the document is.
-   * Transient allocation still scales with the body — peak RSS is higher than a
-   * buffered read of the same document — but it is garbage, not live, so it is
-   * concurrent reads rather than one large read that the ceiling has to survive.
+   * Only the window is extracted into memory: the decoder carries a partial
+   * character across a chunk boundary and the extractor carries its parse
+   * state. The raw chunks are also captured for the body cache, up to its entry
+   * ceiling and no further, so a body past that ceiling keeps the read's live
+   * set near the window's own size. Transient allocation still scales with the
+   * body — peak RSS is higher than a buffered read of the same document — but
+   * it is garbage, not live, so it is concurrent reads rather than one large
+   * read that the ceiling has to survive.
    */
   private async readWindow(
     response: Response,
     params: FetchDocumentParams,
-  ): Promise<ExtractedWindow> {
+  ): Promise<FetchedWindow> {
     const reader = response.body?.getReader();
     const decoder = new TextDecoder('utf-8');
     const extractor = createStreamingExtractor({
       characterLimit: params.characterLimit,
       characterOffset: params.characterOffset,
     });
+    const body = this.bodyCache.capture();
     let bytes = 0;
 
     if (reader) {
@@ -272,6 +347,7 @@ export class CongressDocumentsService {
           await reader.cancel().catch(() => undefined);
           throw this.tooLarge({ bytesRead: bytes });
         }
+        body.add(value);
         extractor.push(decoder.decode(value, { stream: true }));
       }
     }
@@ -284,12 +360,13 @@ export class CongressDocumentsService {
     }
 
     extractor.push(decoder.decode());
-    return extractor.finish();
+    return { window: extractor.finish(), body };
   }
 
   /**
    * A body that dies partway through is the transport failing, not a malformed
-   * document — the same classification a connection that never opened gets.
+   * document — the same classification a connection that never opened gets. A
+   * caller abort mid-body stays the cancellation it is.
    */
   private async readChunk(
     reader: ReadableStreamDefaultReader<Uint8Array>,
@@ -297,6 +374,9 @@ export class CongressDocumentsService {
     try {
       return await reader.read();
     } catch (error) {
+      if (error instanceof McpError && error.code === JsonRpcErrorCode.RequestCancelled) {
+        throw error;
+      }
       throw serviceUnavailable(
         'The document body from Congress.gov ended before it was complete.',
         { reason: DOCUMENT_FETCH_FAILED },

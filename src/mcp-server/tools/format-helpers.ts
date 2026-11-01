@@ -343,8 +343,8 @@ function renderGenericItem(item: Record<string, unknown>, index: number): string
   return lines.join('\n');
 }
 
-/** Fields of a `latestAction` object the curated line names — `actionTime` is not one. */
-const LATEST_ACTION_KEYS = new Set(['actionDate', 'text']);
+/** Fields of a `latestAction` object the curated lines name — `actionTime` is not one. */
+const LATEST_ACTION_KEYS = new Set(['actionDate', 'text', 'rollVote']);
 
 /**
  * The `**Latest Action:** date — text` line, followed by any sub-field that
@@ -352,7 +352,9 @@ const LATEST_ACTION_KEYS = new Set(['actionDate', 'text']);
  * shows it the same lossy way, so the fall-through lives here rather than in
  * each caller's key set — upstream carries `actionTime` on bill rows reached
  * through `member_lookup sponsored`, and it reached no `content[]` client.
- * Returns undefined when the row carries no latest action at all.
+ * A nomination's latest action that cites its Senate vote adds the
+ * `rollVoteLine` beneath. Returns undefined when the row carries no latest
+ * action at all.
  */
 function latestActionLine(item: Record<string, unknown>): string | undefined {
   const action = item.latestAction;
@@ -360,8 +362,23 @@ function latestActionLine(item: Record<string, unknown>): string | undefined {
   const record = action as Record<string, unknown>;
   const curated = [s(record, 'actionDate'), s(record, 'text')].filter(Boolean).join(' — ');
   const line = withUnnamedFields(record, curated, LATEST_ACTION_KEYS);
-  return line ? `**Latest Action:** ${line.replace(/^ — /, '')}` : undefined;
+  const latest = line ? `**Latest Action:** ${line.replace(/^ — /, '')}` : undefined;
+  return [latest, rollVoteLine(record.rollVote)].filter(Boolean).join('\n') || undefined;
 }
+
+/**
+ * The `congressgov_roll_votes` call a nomination action's `rollVote` names, as one
+ * line. `congressgov_senate_nominations` derives `rollVote` from an action that cites
+ * its own Senate record vote; Congress.gov publishes none, so a bill action (which
+ * carries `recordedVotes` instead) never reaches this line.
+ */
+function rollVoteLine(rollVote: unknown): string | undefined {
+  if (!rollVote || typeof rollVote !== 'object' || Array.isArray(rollVote)) return;
+  const args = ROLL_VOTE_ARGUMENTS.map((key) => `${key}=${s(rollVote, key)}`).join(', ');
+  return `**Senate Roll Vote:** congressgov_roll_votes ${args}`;
+}
+
+const ROLL_VOTE_ARGUMENTS = ['chamber', 'congress', 'session', 'voteNumber'];
 
 /**
  * Compact one-line render of a small object. Compact but never lossy: values are
@@ -837,11 +854,21 @@ function renderBillActionItem(item: Record<string, unknown>, i: number): string 
     if (names.length > 0) lines.push(`**Committees:** ${names.join(', ')}`);
   }
 
+  const rollVote = rollVoteLine(item.rollVote);
+  if (rollVote) lines.push(rollVote);
+
   return withRowRest(item, lines, BILL_ACTION_ROW_KEYS);
 }
 
 /** `committees` is absent: the name list drops each committee's `systemCode`. */
-const BILL_ACTION_ROW_KEYS = new Set(['actionDate', 'text', 'type', 'actionCode', 'sourceSystem']);
+const BILL_ACTION_ROW_KEYS = new Set([
+  'actionDate',
+  'text',
+  'type',
+  'actionCode',
+  'sourceSystem',
+  'rollVote',
+]);
 
 /** Committee report text — items wrap a `formats` array of {type, url, isErrata}. */
 function renderCommitteeReportTextItem(item: Record<string, unknown>, i: number): string {
@@ -2206,6 +2233,9 @@ export function formatVotes(result: Record<string, unknown>): TextBlock[] {
 
 /** Presidential nominations and Senate confirmation pipeline. */
 export function formatNominations(result: Record<string, unknown>): TextBlock[] {
+  /** Each root renders on its own presence: a response carries one, and a result
+   * carrying both (the linter's parity sample) renders both rather than dropping one. */
+  const sections: string[] = [];
   if (Array.isArray(result.data)) {
     const first = result.data[0];
     const firstRecord =
@@ -2213,9 +2243,9 @@ export function formatNominations(result: Record<string, unknown>): TextBlock[] 
     const renderer = firstRecord
       ? pickNominationListRenderer(firstRecord)
       : renderNominationListItem;
-    return tb(renderList(result, renderer));
+    sections.push(renderList(result, renderer));
   }
   if (result.nomination != null)
-    return tb(renderNominationDetail(result.nomination as Record<string, unknown>));
-  return tb(renderDetail(result));
+    sections.push(renderNominationDetail(result.nomination as Record<string, unknown>));
+  return tb(sections.length > 0 ? sections.join('\n\n') : renderDetail(result));
 }

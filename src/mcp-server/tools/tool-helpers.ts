@@ -456,11 +456,11 @@ export const documentErrorContracts = [
 
 /**
  * Shared `errors[]` contract for every Congress.gov API tool. Every tool except
- * the mirror-backed `congressgov_search_bills` reaches the same `CongressApiService` fetch path, so they surface the same five
+ * the mirror-backed `congressgov_search_bills` reaches the same `CongressApiService` fetch path, so they surface the same six
  * upstream failure modes. The service raises each with a matching `data.reason`
  * and `data.recovery.hint` (see `classifyUpstreamError`), making the failures
  * machine-readable; declaring them here advertises the contract in `tools/list`.
- * Resolves cyanheads/congressgov-mcp-server#32 and #34.
+ * Resolves cyanheads/congressgov-mcp-server#32, #34, and #84.
  */
 export const congressErrorContracts = [
   {
@@ -491,11 +491,20 @@ export const congressErrorContracts = [
       'Check parameter formats: dates must be ISO 8601 like 2026-05-01T00:00:00Z and identifiers must match their documented shape.',
   },
   {
+    code: JsonRpcErrorCode.ConfigurationError,
+    reason: 'api_key_rejected',
+    thrownBy: 'service',
+    retryable: false,
+    when: "The api.data.gov gateway rejected the server's configured CONGRESS_API_KEY (missing, invalid, disabled, unauthorized, or unverified); the gateway code is in data.upstreamCode. No change to the call's arguments can fix it.",
+    recovery:
+      'This is a server configuration problem, not a request problem: the operator must replace CONGRESS_API_KEY with a valid api.data.gov key (https://api.data.gov/signup/) or unset it to fall back to the rate-limited DEMO_KEY, then restart the server.',
+  },
+  {
     code: JsonRpcErrorCode.ServiceUnavailable,
     reason: 'upstream_error',
     thrownBy: 'service',
     retryable: true,
-    when: 'Congress.gov returned an unexpected error (5xx or another non-2xx status).',
+    when: 'Congress.gov returned an unexpected error (5xx or another non-2xx status) or could not be reached, or the Senate LIS feed failed (5xx, a timeout, or a senate.gov HTTP 403 refusal, which carries retryable: false).',
     recovery:
       'Retry after a short delay; if the failure persists the Congress.gov service may be temporarily degraded.',
   },
@@ -504,7 +513,7 @@ export const congressErrorContracts = [
     reason: 'upstream_timeout',
     thrownBy: 'service',
     retryable: true,
-    when: 'The Congress.gov request deadline expired or the upstream returned an HTTP timeout response.',
+    when: "A Congress.gov request or a congress.gov document fetch timed out or returned an HTTP timeout response, or the call's upstream requests could not finish inside its 50-second budget.",
     recovery:
       'Retry after a short delay; if the failure persists the Congress.gov service may be temporarily degraded.',
   },

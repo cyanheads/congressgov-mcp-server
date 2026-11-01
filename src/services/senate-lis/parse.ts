@@ -10,6 +10,10 @@
  * a nested `<measure>`, empty self-closing elements, single-element collapse) that
  * are easy to get wrong and worth pinning with tests.
  *
+ * The feed's calendar facts live here too: the congress it starts at
+ * (`SENATE_VOTE_FIRST_CONGRESS`) and the session a dated vote falls in
+ * (`senateSessionForDate`), shared by the service and by tools that point at it.
+ *
  * Parser config notes:
  * - `isArray` forces `<vote>` and `<member>` to arrays so a session/vote with a
  *   single entry doesn't collapse to an object.
@@ -20,6 +24,7 @@
  */
 
 import { XMLParser } from 'fast-xml-parser';
+import { congressFirstYear, FIRST_CONGRESS_YEAR, ordinal } from '@/utils/congress-calendar.js';
 import type {
   ParsedRollCallVote,
   SenateMemberVote,
@@ -87,8 +92,11 @@ const MENU_DATE_RE = /^(\d{1,2})-([A-Za-z]{3})$/;
 /** Indexed by calendar order — the index is the month the walk compares. */
 const MONTH_ABBREVIATIONS = 'jan feb mar apr may jun jul aug sep oct nov dec'.split(' ');
 
-/** The first Congress sat in 1789, and each one since has opened two years later. */
-const FIRST_CONGRESS_YEAR = 1789;
+/**
+ * The first congress whose roll call votes the LIS feed publishes. Nothing points a
+ * caller at a Senate vote from an earlier congress.
+ */
+export const SENATE_VOTE_FIRST_CONGRESS = 101;
 
 /** Day and 0-based month of a `DD-Mon` menu date, or `undefined` when it is neither. */
 function parseMenuDate(value: string | undefined): { day: number; month: number } | undefined {
@@ -107,11 +115,47 @@ function isoDate(year: number, month: number, day: number): string | undefined {
   return `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
 }
 
+/** The calendar year a congress opens in, or `undefined` when `congress` is not a positive integer. */
+function openingYear(congress: number): number | undefined {
+  if (!Number.isInteger(congress) || congress < 1) return;
+  return congressFirstYear(congress);
+}
+
+/** The feed's coverage, as the Senate "no votes" messages state it. */
+export const SENATE_VOTE_COVERAGE = `the Senate publishes roll call votes from the ${ordinal(SENATE_VOTE_FIRST_CONGRESS)} Congress (${congressFirstYear(SENATE_VOTE_FIRST_CONGRESS)}) onward`;
+
 /** The calendar year a congress's session opens in — the 118th's first session opened in 2023. */
 function nominalSessionYear(congress: number, session: number): number | undefined {
-  if (!Number.isInteger(congress) || congress < 1) return;
-  if (session !== 1 && session !== 2) return;
-  return FIRST_CONGRESS_YEAR + 2 * (congress - 1) + (session - 1);
+  const firstYear = openingYear(congress);
+  if (firstYear === undefined || (session !== 1 && session !== 2)) return;
+  return firstYear + (session - 1);
+}
+
+/** `YYYY-MM-DD`, the shape of a Congress.gov `actionDate`. */
+const ISO_DATE_RE = /^(\d{4})-\d{2}-\d{2}$/;
+
+/**
+ * The session of `congress` a vote dated `date` (`YYYY-MM-DD`) was cast in, or
+ * `undefined` when the date has another shape or falls outside the congress.
+ *
+ * The congress's first year is session 1 and its second year session 2. A second
+ * session can also sit through January 1–3 of the year after, until the next
+ * congress convenes: the 116th's second session voted on 2021-01-01, and the 115th's
+ * opened on 2018-01-03 with vote 1. The calendar parity of the year alone misses that
+ * tail. No Senate vote from the 101st Congress onward was cast by a first session in
+ * those January days, so they always read as session 2.
+ */
+export function senateSessionForDate(congress: number, date: string): 1 | 2 | undefined {
+  const firstYear = openingYear(congress);
+  const match = ISO_DATE_RE.exec(date);
+  if (firstYear === undefined || !match) return;
+  const year = Number(match[1]);
+  if (year === firstYear) return 1;
+  if (year === firstYear + 1) return 2;
+  /** `MM-DD` is fixed-width, so string order is calendar order. */
+  const monthDay = date.slice(5);
+  if (year === firstYear + 2 && monthDay >= '01-01' && monthDay <= '01-03') return 2;
+  return;
 }
 
 /** The year the menu's own dates start in: its `<congress_year>`, else the nominal one. */

@@ -3,8 +3,15 @@
  * @module tests/mcp-server/tools/definitions/roll-votes.tool.test
  */
 
-import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  CLIENT_TIMEOUT_MS,
+  expectBudgetTimeout,
+  scriptedCongressApi,
+  track,
+  useFakeClock,
+} from '../../../helpers/budget-fixtures.js';
 
 vi.mock('@/services/congress-api/congress-api-service.js', () => ({
   getCongressApi: vi.fn(),
@@ -19,6 +26,11 @@ vi.mock('@/services/senate-lis/senate-vote-service.js', () => ({
 import { rollVotesTool } from '@/mcp-server/tools/definitions/roll-votes.tool.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 import { getSenateVoteService } from '@/services/senate-lis/senate-vote-service.js';
+
+/** The real API client, for the case where the call budget across chained requests is under test. */
+const { CongressApiService } = await vi.importActual<
+  typeof import('@/services/congress-api/congress-api-service.js')
+>('@/services/congress-api/congress-api-service.js');
 
 describe('rollVotesTool', () => {
   const mockApi = {
@@ -244,5 +256,50 @@ describe('rollVotesTool — Senate chamber', () => {
     });
     await expect(rollVotesTool.handler(input, ctx)).rejects.toThrow(/voteNumber/);
     expect(mockSenate.getVoteMembers).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * House `list` in recent order chains a first page and then a parallel stage
+ * for the rest. Both stages spend the call's one budget.
+ */
+describe('rollVotesTool — call budget across the recent-order stages', () => {
+  const upstream = scriptedCongressApi({
+    /** The first page answers on its third attempt, after two full 10 s stalls. */
+    '/v3/house-vote/118/1?offset=0': {
+      stalls: 2,
+      body: {
+        houseRollCallVotes: [{ rollCallNumber: 1, updateDate: '2024-01-02T00:00:00Z' }],
+        pagination: { count: 500, next: 'https://api.congress.gov/v3/house-vote/118/1' },
+      },
+    },
+    /** The parallel stage never answers. */
+    '/v3/house-vote/118/1?offset=250': { stalls: 0 },
+  });
+
+  beforeEach(() => {
+    useFakeClock();
+    vi.stubGlobal('fetch', upstream.fetch);
+    vi.mocked(getCongressApi).mockReturnValue(new CongressApiService());
+    for (const key of Object.keys(upstream.hits)) delete upstream.hits[key];
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it('settles inside the budget when the parallel stage stalls after a slow first page', async () => {
+    const start = Date.now();
+    const call = track(
+      runToolContract(rollVotesTool, { operation: 'list', congress: 118, session: 1 }),
+    );
+    await vi.advanceTimersByTimeAsync(CLIENT_TIMEOUT_MS);
+
+    expectBudgetTimeout(call, start);
+    /** The first page took ~22 s; the parallel page got two full attempts and a clamped third. */
+    expect(upstream.hits).toEqual({
+      '/v3/house-vote/118/1?offset=0': 3,
+      '/v3/house-vote/118/1?offset=250': 3,
+    });
   });
 });

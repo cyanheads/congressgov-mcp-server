@@ -17,11 +17,24 @@ vi.mock('@/config/server-config.js', () => ({
 import { getServerConfig } from '@/config/server-config.js';
 import { billLookupTool } from '@/mcp-server/tools/definitions/bill-lookup.tool.js';
 import { formatBills } from '@/mcp-server/tools/format-helpers.js';
+import { congressErrorContracts } from '@/mcp-server/tools/tool-helpers.js';
 import {
   CongressApiService,
   getCongressApi,
   initCongressApi,
 } from '@/services/congress-api/congress-api-service.js';
+import { createCongressBillIngester } from '@/services/congress-mirror/ingest.js';
+import {
+  CALL_BUDGET_MS,
+  CLIENT_TIMEOUT_MS,
+  contentText,
+  expectBudgetTimeout,
+  jsonResponse,
+  retryAfterResponse,
+  stalledHeadersFetch,
+  track,
+  useFakeClock,
+} from '../../helpers/budget-fixtures.js';
 
 function okJson(data: unknown) {
   return {
@@ -220,6 +233,154 @@ describe('CongressApiService', () => {
       expect(error.code).toBe(JsonRpcErrorCode.InvalidParams);
       expect(error.data?.reason).toBe('invalid_request');
       expect(error.message).not.toContain('api.congress.gov');
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
+    describe('api.data.gov key rejection (#84)', () => {
+      /** The gateway's error envelope, as api.congress.gov returns it for a rejected key. */
+      const gatewayBody = (code: string, message = 'An invalid api_key was supplied.') =>
+        JSON.stringify({ error: { code, message } });
+
+      it.each([
+        [403, 'API_KEY_MISSING'],
+        [403, 'API_KEY_INVALID'],
+        [403, 'API_KEY_DISABLED'],
+        [403, 'API_KEY_UNAUTHORIZED'],
+        [403, 'API_KEY_UNVERIFIED'],
+        [401, 'API_KEY_INVALID'],
+      ])(
+        'classifies HTTP %i with gateway code %s as api_key_rejected on one attempt',
+        async (status, code) => {
+          mockFetch.mockResolvedValue(errorResponse(status, gatewayBody(code), 'Forbidden'));
+          const error = (await service
+            .getCurrentCongress(createMockContext())
+            .catch((e: unknown) => e)) as McpError;
+          expect(error.code).toBe(JsonRpcErrorCode.ConfigurationError);
+          expect(error.data).toMatchObject({
+            reason: 'api_key_rejected',
+            upstreamCode: code,
+            retryable: false,
+            status,
+          });
+          expect(error.message).toContain(code);
+          expect(error.message).not.toContain('api.congress.gov');
+          expect((error.data?.recovery as { hint: string } | undefined)?.hint).toContain(
+            'CONGRESS_API_KEY',
+          );
+          expect(mockFetch).toHaveBeenCalledTimes(1);
+        },
+      );
+
+      it('keeps a 403 whose gateway code is not a key rejection as invalid_request', async () => {
+        mockFetch.mockResolvedValue(
+          errorResponse(
+            403,
+            gatewayBody('HTTPS_REQUIRED', 'Requests must be made over HTTPS.'),
+            'Forbidden',
+          ),
+        );
+        const error = (await service
+          .getCurrentCongress(createMockContext())
+          .catch((e: unknown) => e)) as McpError;
+        expect(error.code).toBe(JsonRpcErrorCode.InvalidParams);
+        expect(error.data?.reason).toBe('invalid_request');
+        expect(error.data?.upstreamCode).toBeUndefined();
+        expect(mockFetch).toHaveBeenCalledTimes(1);
+      });
+
+      it('declares api_key_rejected on the shared contract as a non-retryable service configuration error', () => {
+        expect(
+          congressErrorContracts.find((entry) => entry.reason === 'api_key_rejected'),
+        ).toMatchObject({
+          code: JsonRpcErrorCode.ConfigurationError,
+          thrownBy: 'service',
+          retryable: false,
+        });
+      });
+
+      it('keeps a 400 UserInputException body as invalid_request', async () => {
+        mockFetch.mockResolvedValue(
+          errorResponse(
+            400,
+            JSON.stringify({
+              error:
+                "time data '2025-13-45T00:00:00Z' does not match format '%Y-%m-%dT%H:%M:%SZ' (UserInputException)",
+              request: { contentType: 'application/json', format: 'json' },
+            }),
+            'Bad Request',
+          ),
+        );
+        const error = (await service
+          .listBills({ congress: 118, fromDateTime: '2025-13-45T00:00:00Z' }, createMockContext())
+          .catch((e: unknown) => e)) as McpError;
+        expect(error.code).toBe(JsonRpcErrorCode.InvalidParams);
+        expect(error.data?.reason).toBe('invalid_request');
+        expect(error.data?.upstreamCode).toBeUndefined();
+      });
+
+      it('keeps a 429 OVER_RATE_LIMIT body as rate_limited', async () => {
+        mockFetch.mockResolvedValue(
+          errorResponse(
+            429,
+            gatewayBody('OVER_RATE_LIMIT', 'You have exceeded your rate limit.'),
+            'Too Many Requests',
+          ),
+        );
+        const error = (await service
+          .getCurrentCongress(createMockContext())
+          .catch((e: unknown) => e)) as McpError;
+        expect(error.code).toBe(JsonRpcErrorCode.RateLimited);
+        expect(error.data?.reason).toBe('rate_limited');
+        expect(error.data?.upstreamCode).toBeUndefined();
+        expect(mockFetch).toHaveBeenCalledTimes(1);
+      });
+
+      it('renders the operator hint on both tool surfaces without echoing the configured key', async () => {
+        const sentinel = 'sentinel-key-7Qx9-must-not-echo';
+        vi.mocked(getServerConfig).mockReturnValue({
+          apiKey: sentinel,
+          baseUrl: 'https://api.congress.gov/v3',
+        } as ReturnType<typeof getServerConfig>);
+        initCongressApi();
+        mockFetch.mockResolvedValue(
+          errorResponse(
+            403,
+            gatewayBody(
+              'API_KEY_INVALID',
+              'An invalid api_key was supplied. Get one at https://api.congress.gov:443',
+            ),
+            'Forbidden',
+          ),
+        );
+        const result = await runToolContract(billLookupTool, {
+          operation: 'get',
+          congress: 118,
+          billType: 's',
+          billNumber: 3764,
+        });
+        const init = mockFetch.mock.calls[0]![1] as RequestInit;
+        expect((init.headers as Record<string, string>)['X-Api-Key']).toBe(sentinel);
+        expect(mockFetch).toHaveBeenCalledTimes(1);
+        expect(result.structuredContent).toMatchObject({
+          error: {
+            code: JsonRpcErrorCode.ConfigurationError,
+            message: expect.stringContaining('API_KEY_INVALID'),
+            data: {
+              reason: 'api_key_rejected',
+              upstreamCode: 'API_KEY_INVALID',
+              retryable: false,
+              recovery: { hint: expect.stringContaining('CONGRESS_API_KEY') },
+            },
+          },
+        });
+        const rendered = contentText(result);
+        expect(rendered).toContain('API_KEY_INVALID');
+        expect(rendered).toContain('Recovery:');
+        expect(rendered).toContain('CONGRESS_API_KEY');
+        expect(rendered).toContain('reason api_key_rejected');
+        expect(rendered).toContain('not retryable');
+        expect(JSON.stringify(result)).not.toContain(sentinel);
+      });
     });
 
     it('attaches a machine-readable reason and recovery hint on 404 (#32)', async () => {
@@ -739,6 +900,116 @@ describe('CongressApiService', () => {
       );
       const url = new URL(mockFetch.mock.calls[0]![0]);
       expect(url.pathname).toBe('/v3/member/congress/118/CA/12');
+    });
+  });
+
+  /**
+   * Every request a call makes spends one budget counted from the call's start.
+   * The mechanism is tabled in tests/services/call-budget.test.ts; these cases
+   * prove this service's wiring and the paths where no budget applies.
+   */
+  describe('call budget', () => {
+    /** The service's hint for every transient upstream failure. */
+    const CONGRESS_RETRY_HINT =
+      'Retry after a short delay; the Congress.gov service may be temporarily degraded.';
+
+    beforeEach(() => useFakeClock());
+
+    it('gives an attempt its full 10 s and retries into a success while the budget has room', async () => {
+      mockFetch
+        .mockImplementationOnce(stalledHeadersFetch)
+        .mockResolvedValueOnce(jsonResponse({ congress: { number: 119 } }));
+      const start = Date.now();
+      const call = track(service.getCurrentCongress(createMockContext()));
+      await vi.advanceTimersByTimeAsync(CLIENT_TIMEOUT_MS);
+
+      expect(call.state.error).toBeUndefined();
+      expect(call.state.value).toEqual({ number: 119 });
+      /** The first attempt ran its own 10 s timeout, then one backoff preceded the success. */
+      expect((call.state.settledAt as number) - start).toBeGreaterThanOrEqual(10_000);
+      expect((call.state.settledAt as number) - start).toBeLessThan(12_000);
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+    });
+
+    it('clamps the attempt to what the call has left and settles at the budget', async () => {
+      mockFetch.mockImplementation(stalledHeadersFetch);
+      const ctx = createMockContext();
+      const start = Date.now();
+      /** Earlier requests in the same call spent 45 s. */
+      await vi.advanceTimersByTimeAsync(45_000);
+      const call = track(service.getCurrentCongress(ctx));
+      await vi.advanceTimersByTimeAsync(CLIENT_TIMEOUT_MS);
+
+      expect(call.state.settledAt).toBe(start + CALL_BUDGET_MS);
+      expect(call.state.error).toMatchObject({
+        code: JsonRpcErrorCode.Timeout,
+        data: {
+          reason: 'upstream_timeout',
+          budgetMs: CALL_BUDGET_MS,
+          retryAttempts: 1,
+          recovery: { hint: CONGRESS_RETRY_HINT },
+        },
+      });
+      expect((call.state.error as McpError).message).toBe(
+        "Congress.gov did not deliver the API response within this call's 50-second budget for upstream requests (1 attempt).",
+      );
+      expect(mockFetch).toHaveBeenCalledOnce();
+    });
+
+    it('settles a one-request tool call inside the budget when Retry-After and stalls would carry it past', async () => {
+      initCongressApi();
+      mockFetch
+        .mockResolvedValueOnce(retryAfterResponse(503, 30))
+        .mockImplementation(stalledHeadersFetch);
+      const start = Date.now();
+      const call = track(
+        runToolContract(billLookupTool, {
+          operation: 'get',
+          congress: 118,
+          billType: 'hr',
+          billNumber: 1,
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(CLIENT_TIMEOUT_MS);
+
+      expectBudgetTimeout(call, start, { hint: CONGRESS_RETRY_HINT });
+      const text = contentText(call.state.value as { content: unknown[] });
+      expect(text).toContain("this call's 50-second budget for upstream requests (3 attempts)");
+      expect(text).toContain(CONGRESS_RETRY_HINT);
+      /** The honored 30 s wait, a full 10 s attempt, a backoff, then a clamped third attempt. */
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+    });
+
+    it('runs the mirror ingester unbudgeted, past the 50 s a call would get', async () => {
+      let summaryAttempts = 0;
+      mockFetch.mockImplementation((url: string | URL) => {
+        const { pathname } = new URL(String(url));
+        if (pathname === '/v3/summaries/119') {
+          summaryAttempts++;
+          return Promise.resolve(
+            summaryAttempts < 3 ? retryAfterResponse(503, 30) : jsonResponse({ summaries: [] }),
+          );
+        }
+        return Promise.resolve(jsonResponse({ bills: [] }));
+      });
+      const sync = createCongressBillIngester(() => service, [119]);
+      const start = Date.now();
+      const run = track(
+        (async () => {
+          const pages = [];
+          for await (const page of sync({ mode: 'init', signal: new AbortController().signal })) {
+            pages.push(page);
+          }
+          return pages;
+        })(),
+      );
+      await vi.advanceTimersByTimeAsync(2 * CLIENT_TIMEOUT_MS);
+
+      expect(run.state.error).toBeUndefined();
+      expect(run.state.value).toEqual([]);
+      /** Two honored 30 s waits: a tool call's budget would have ended this at 50 s. */
+      expect((run.state.settledAt as number) - start).toBeGreaterThanOrEqual(60_000);
+      expect(summaryAttempts).toBe(3);
     });
   });
 });

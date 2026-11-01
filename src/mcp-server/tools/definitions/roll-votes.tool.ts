@@ -19,6 +19,7 @@ import {
   notifyIfNoMatches,
 } from '@/mcp-server/tools/tool-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
+import { SENATE_VOTE_COVERAGE } from '@/services/senate-lis/parse.js';
 import { getSenateVoteService } from '@/services/senate-lis/senate-vote-service.js';
 
 export const rollVotesTool = tool('congressgov_roll_votes', {
@@ -40,7 +41,9 @@ export const rollVotesTool = tool('congressgov_roll_votes', {
       .int()
       .min(1)
       .max(2)
-      .describe('Session number (1 or 2). Odd years are session 1, even years session 2.'),
+      .describe(
+        "Session number (1 or 2). A congress's first year is session 1 and its second year session 2; a second session can run into January 1–3 of the following year (the 116th Congress's second session voted on 2021-01-01).",
+      ),
     voteNumber: z
       .number()
       .int()
@@ -195,7 +198,7 @@ async function handleSenateVotes(input: SenateVoteInput, ctx: Context) {
     notifyIfNoMatches(
       ctx,
       result,
-      'No Senate votes found. Verify the congress and session — the Senate publishes roll call votes from the 101st Congress (1989) onward.',
+      `No Senate votes found. Verify the congress and session — ${SENATE_VOTE_COVERAGE}.`,
     );
     return result;
   }
