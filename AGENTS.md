@@ -74,7 +74,7 @@ Tailor suggestions to what's actually missing or stale — don't recite the full
 | `congressgov_member_lookup` | Discover members by state/district/congress, retrieve legislative portfolios |
 | `congressgov_committee_lookup` | Browse committees and retrieve legislation, reports, nominations |
 | `congressgov_roll_votes` | Retrieve House and Senate roll call votes and member voting positions |
-| `congressgov_senate_nominations` | Browse presidential nominations, track Senate confirmation pipeline |
+| `congressgov_senate_nominations` | Browse presidential nominations, track Senate confirmation pipeline; an action citing its own Senate record vote (`actions` rows, `latestAction` on `list`/`get`) carries `rollVote`, the `congressgov_roll_votes` arguments for it, from the 101st Congress on |
 | `congressgov_bill_summaries` | Browse recent CRS bill summaries — the "what's happening" feed, bounded by the shared summary page budget and per-row text window |
 | `congressgov_crs_reports` | Browse and retrieve nonpartisan CRS policy analysis reports |
 | `congressgov_committee_reports` | Browse and retrieve committee reports accompanying legislation + bounded report text via `content` |
@@ -111,11 +111,13 @@ src/
   config/
     server-config.ts                    # CONGRESS_API_KEY, base URL (Zod schema)
   services/
+    call-budget.ts                      # One 50 s upstream budget per tool call / resource read, shared by the three HTTP services
     congress-api/
       congress-api-service.ts           # API client — auth, pagination, rate limiting
       types.ts                          # API response types
     congress-documents/
-      congress-documents-service.ts     # www.congress.gov document fetch — host allowlist, byte ceiling, character window
+      congress-documents-service.ts     # www.congress.gov document fetch — host allowlist, byte ceiling, call budget, character window
+      document-body-cache.ts            # Process-local LRU of decompressed bodies — one fetch per document per TTL
       document-formats.ts               # Format label → URL resolution over upstream format lists
       extract-text.ts                   # GPO `<pre>` / XML body → deterministic plain text
       extract-text-stream.ts            # Incremental twin of extract-text.ts — one character window, constant memory
@@ -128,7 +130,7 @@ src/
       types.ts                          # Mirror row, search filters, search page types
     senate-lis/
       senate-vote-service.ts            # Senate LIS XML client — fetch, retry, not-found
-      parse.ts                          # pure XML → domain parsers (fast-xml-parser)
+      parse.ts                          # pure XML → domain parsers (fast-xml-parser); Senate vote coverage, session for a date
       types.ts                          # Senate vote domain types
   mcp-server/
     tools/definitions/
@@ -154,6 +156,7 @@ src/
       legislative-research.prompt.ts   # congressgov_legislative_research
   utils/
     character-references.ts             # Single-pass HTML/XML character-reference decoding
+    congress-calendar.ts                # ordinal(), congressFirstYear(), currentCongressNumber() — congress numbering arithmetic
 scripts/
   _mirror-context.ts                    # Shared bootstrap for the mirror lifecycle CLI scripts
   congress-mirror-init.ts               # mirror:init — full out-of-band mirror build
@@ -167,6 +170,12 @@ scripts/
 
 Four services. `CongressApiService` backs nine tools and the House branch of `congressgov_roll_votes`; `SenateVoteService` backs only the Senate branch of `congressgov_roll_votes` (the Congress.gov API exposes no Senate vote namespace); `CongressMirrorService` backs `congressgov_search_bills` only; `CongressDocumentsService` backs the `content` operation on `congressgov_bill_lookup`, `congressgov_committee_reports`, and `congressgov_daily_record`.
 
+**Call budget** (`call-budget.ts`, `withCallBudget`) — every upstream request a tool call or resource read makes through `CongressApiService`, `SenateVoteService`, or `CongressDocumentsService` spends one 50 s budget (`CALL_BUDGET_MS`) counted from the call's start (`ctx.timestamp`), so chained and parallel requests (a roster paged four times, a `content` lookup and then its document) end together before the 60 s default MCP client timeout:
+- Each request's retry ladder gets what is left as `withRetry` `deadlineMs`; each attempt's timeout (10 s API, 12 s Senate, 30 s document) is clamped to the remainder and its I/O carries the budget's signal
+- A backoff the remainder cannot hold fails at once as the expiry; a `Retry-After` wait it cannot hold fails at once with the upstream's own error and `retryAfter`; a request the spent budget cannot cover is never sent
+- Running out is `Timeout`, reason `upstream_timeout`, with `budgetMs` and `retryAttempts`. A caller abort stays `RequestCancelled`, and a 429 is still never retried
+- Services read the budget from the handler's own `ctx` — pass it to every service call, never a context derived from it (that carries a later timestamp). A request with no `ctx` — the mirror ingester and the `mirror:*` scripts — runs the plain per-request ladder, unbudgeted
+
 **`CongressApiService`** — wraps the Congress.gov REST API v3:
 - API key via `X-Api-Key` header (never logged; kept out of the URL so it can't leak in upstream error messages)
 - Pagination: `offset` + `limit` query params, max 250 per request
@@ -179,18 +188,22 @@ Four services. `CongressApiService` backs nine tools and the House branch of `co
 - The whole session menu is one file; each vote's roster ships inline — pagination is client-side
 - The host returns HTTP 200 with an HTML page for unknown congress/session/vote, so "not found" is detected from the body, not the status code
 - Party totals are derived from the roster (the feed publishes none)
+- senate.gov's firewall answers automated clients with HTTP 403, and a retry meets the same refusal: a 403 fails on the first attempt as `upstream_error` with `retryable: false` and a hint that House votes are unaffected, while a 5xx or timeout is retried within the call budget
 
 **`CongressDocumentsService`** — reads the document bodies behind Congress.gov's format URLs (`www.congress.gov`):
 - A second host, so a sibling service rather than a method on `CongressApiService` — no API key, no JSON, and enrolled omnibus bills that run to ten megabytes
 - URLs are resolved from upstream format metadata and checked against a `www.congress.gov` allowlist; a caller never supplies one
-- The fetch is bounded: a 25 MB ceiling (refused on `Content-Length`, else mid-stream), a 30s deadline, and a content-type allowlist
-- The body is extracted as it streams and only the requested window is retained, so a read's live set is flat in the size of the document (transient allocation is not — peak RSS runs above a buffered read); the ceiling bounds how long a response may run, not how much of one fits in a buffer
+- The fetch is bounded: a 25 MB ceiling (refused on `Content-Length`, else mid-stream), a content-type allowlist, and the call budget (above) — the api.congress.gov format lookup the handler makes first spends from it, and the document attempts and backoff share what is left
+- The body is extracted as it streams and only the requested window is extracted into memory; the ceiling bounds how long a response may run, not how much of one fits in a buffer (transient allocation still scales with the body — peak RSS runs above a buffered read)
+- A document that runs past its window keeps its decompressed body in `DocumentBodyCache` — process-local, one cache for every tenant (each body is public and fetched without credentials), 64 MB LRU, 16 MB per body (a larger one is captured until it passes that and then dropped), 10-minute TTL from insert — and later windows replay those bytes through the same extractor in 128 KiB slices with a macrotask between them: one fetch per document per TTL, and a replay never spends the budget. A window that reaches the end of its document caches nothing, a cancelled read caches nothing, and concurrent cold reads each fetch (no single-flight)
 - The structured response is bounded by an exact character window — `structuredContent.content.text` and its offsets index the extracted plain text and are never snapped to section breaks, so feeding `nextOffset` back walks a document with no overlap and no gap; `content[]` wraps that unchanged window in a dynamically safe Markdown fence for presentation
 - `extract-text.ts` unwraps GPO's `<pre>` print output verbatim (whitespace is the document's structure), while no-`<pre>` XML gains one space only at an otherwise-unseparated sibling close→open element boundary; both readings decode character references through `src/utils/character-references.ts` — the one decoder every HTML/XML → text path in the server shares, single-pass so an escaped reference stays escaped — and `extract-text-stream.ts` is their incremental twin, pinned byte-for-byte against the whole-string extractor
 
 **`CongressMirrorService`** — local SQLite FTS5 mirror of bill title + CRS summary text, backing `congressgov_search_bills` only:
 - Opt-in via `CONGRESS_MIRROR_ENABLED` (off by default); built out-of-band via the `mirror:init`/`mirror:refresh` scripts, never on server startup
 - No live-API fallback — ingests through the existing `CongressApiService`, and a mirror that hasn't finished its initial build returns an empty result with a notice, not an error
+- Every sync re-walks each congress's whole summaries list, requested from January 1 of the congress's first year with no end date (without `fromDateTime`, Congress.gov returns only the last day's summaries); the `updateDate` checkpoint is persisted only once the whole walk finishes; store spec `version: 2` migrates an older store by clearing its checkpoint, so the next sync backfills
+- The `mirror:*` scripts initialize the framework logger: log lines go to stderr as JSON, stdout carries only the script's own output
 - `createApp({ teardown })` stops the refresh schedule, cancels and awaits an active refresh, then closes the SQLite mirror. With `MCP_SESSION_MODE` unset, HTTP defaults to stateless; an explicit `MCP_SESSION_MODE` value still overrides it. No handler uses `ctx.requestInput`.
 
 **Usage in tools:**
@@ -199,7 +212,7 @@ import { getCongressApi } from '@/services/congress-api/congress-api-service.js'
 
 async handler(input, ctx) {
   const api = getCongressApi();
-  const bills = await api.listBills({ congress: input.congress, limit: input.limit });
+  const bills = await api.listBills({ congress: input.congress, limit: input.limit }, ctx);
   ctx.log.info('Bills fetched', { congress: input.congress, count: bills.bills.length });
   return bills;
 }
@@ -216,11 +229,13 @@ All tools share these patterns. The service layer handles them uniformly:
 | Condition | Error |
 |:----------|:------|
 | Rate limit hit | `rateLimited(...)` with `rate_limited`, credential/shared-quota guidance and upstream `Retry-After` when supplied |
-| Deadline or HTTP timeout | `Timeout` (-32004), `upstream_timeout`; HTTP responses retain status |
-| API unavailable (5xx) | `serviceUnavailable('Congress.gov API returned HTTP {status}.')` |
+| Attempt timeout, call budget spent, or HTTP timeout response | `Timeout` (-32004), `upstream_timeout`; a spent budget names it (`{upstream} did not deliver {request} within this call's 50-second budget for upstream requests (N attempts).`) and carries `budgetMs`/`retryAttempts`; HTTP responses retain status |
+| API unavailable (5xx) | `ServiceUnavailable` (-32000), `upstream_error`: `Congress.gov returned an unexpected error (HTTP {status}).`; a 501 carries `retryable: false` |
 | Entity not found (404) | `notFound('{entity} not found', { ...identifiers })` |
+| Upstream rejects the request (400, 401, 402, 403, 422) | `invalidParams('Congress.gov rejected the request as malformed (HTTP {status}).')`, `invalid_request` |
+| Rejected API key (401/403 whose body carries an api.data.gov `API_KEY_*` code) | `configurationError(...)` (-32008), `api_key_rejected`, `retryable: false`, gateway code in `data.upstreamCode` and the message; the hint tells the operator to replace or unset `CONGRESS_API_KEY` and never echoes the key. Classified on the body code, since a malformed path segment is also a plain 403 (#34) |
 | Invalid params | `validationError('...', { field })` |
-| Network error | `serviceUnavailable('Unable to reach the Congress.gov API.')` |
+| Network error | `ServiceUnavailable` (-32000), `upstream_error`: `Congress.gov returned an unexpected error.` |
 
 The `content` operation adds `documentErrorContracts` (tool-helpers) on top: `document_unavailable`, `format_unavailable`, `document_fetch_failed`, `document_too_large`, and `offset_past_end` — the last of which `congressgov_bill_lookup` also raises from its `summaries` branch when `characterOffset` is past the end of every returned row's text. `CongressDocumentsService` raises each with a matching `data.reason`; the framework fills the declared `recovery` hint when the throw carries none, service throws included. Explicit recovery overrides win. A direct `definition.handler(...)` test sees the throw unchanged; retain `ctx.recoveryFor` where such a test asserts the hint, or assert the filled hint through `runToolContract`.
 

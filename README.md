@@ -107,8 +107,10 @@ Bill, member, and committee data is also reachable through `congressgov_bill_loo
 ### `congressgov_roll_votes` <sub>tool</sub>
 
 - `chamber` is `house` (default, Congress.gov API) or `senate` (the Senate's LIS feed); every call needs `congress` + `session` (1 or 2), and `get`/`members` add `voteNumber`, which resets each session and is specific to one chamber
+- A congress's first year is session 1 and its second year session 2, but a second session can run into January 1–3 of the following year (the 116th Congress's second session voted on 2021-01-01)
 - `list` is newest first unless `order: 'oldest'`; `get` returns the question, result, tallies, and party breakdown, and `members` returns each member's position
 - Senate votes start at the 101st Congress (1989), and Senate rows pair the feed's year-less `voteDate` with a derived `voteDateIso`
+- When senate.gov refuses the request (HTTP 403, which its firewall returns to automated clients), a Senate call fails on the first attempt with a non-retryable `upstream_error`; a 5xx or timeout from the feed is retried. House votes are unaffected
 
 ---
 
@@ -116,6 +118,7 @@ Bill, member, and committee data is also reachable through `congressgov_bill_loo
 
 - `list` browses one `congress`; `get`, `actions`, `committees`, `hearings`, and `nominees` need a `nominationNumber` (`1000` for PN1000), and `nominees` also needs an `ordinal` from the `nominees` array `get` returns
 - Multi-part nominations (e.g. PN851) keep their activity on partitioned children (`851-1`, `851-2`, …); an empty sub-resource call on the bare number returns a notice pointing there
+- An action whose text cites its own Senate record vote (`Record Vote Number: 225.`) carries `rollVote` — `{ chamber: 'senate', congress, session, voteNumber }`, the `congressgov_roll_votes` arguments for that vote. Every citing `actions` row gets one, cloture votes included, and so does `latestAction` on `list` rows and `get`; votes before the 101st Congress get none
 
 ---
 
@@ -212,7 +215,8 @@ Congress.gov-specific:
 
 - Type-safe client for the Congress.gov REST API v3, plus a client for the Senate's LIS XML feed that backs Senate roll votes
 - The Congress.gov API has no keyword search, so tools browse by congress, type, date range, chamber, state, and district; list operations page with `limit` 1–250 (default 20) and `offset`
-- `content` on bill text, committee reports, and Record articles reads `format` `text` (default) or `xml` in a `characterOffset`/`characterLimit` window (1–100,000 characters, default 25,000), fetched only from `www.congress.gov` under a 25 MB ceiling and a 30s deadline
+- `content` on bill text, committee reports, and Record articles reads `format` `text` (default) or `xml` in a `characterOffset`/`characterLimit` window (1–100,000 characters, default 25,000), fetched only from `www.congress.gov` under a 25 MB ceiling; a document longer than one window (up to 16 MB) is downloaded once and its later windows are served from a 10-minute in-memory cache
+- Each tool call or resource read gets 50 seconds for all of its upstream requests, retries and backoff included, whether it makes one request or chains several (a `content` call's metadata lookup and document fetch, a committee name resolved against the full roster). A stalled upstream ends the call before the 60-second default timeout of MCP clients: `upstream_timeout` from Congress.gov, the retryable `upstream_error` from the Senate LIS feed
 - Optional API key from [api.data.gov](https://api.data.gov/signup/): `DEMO_KEY` allows 30 requests/hour and 50/day per IP, registered keys 5,000/hour
 - Opt-in local SQLite FTS5 mirror (`CONGRESS_MIRROR_ENABLED`) adds keyword search over bill titles and CRS summaries
 
@@ -221,7 +225,7 @@ Agent-friendly output:
 - Every list response carries `effectiveQuery` and `totalCount`, with a `notice` when nothing matched
 - `list` rejects detail-only identifiers (`billNumber`, `voteNumber`, `nominationNumber`, `reportNumber`, `volumeNumber`) with an `incompatible_identity` error that names the operation to use instead
 - `content` returns `offset`, `truncated`, and `nextOffset`, so walking a multi-megabyte bill never skips or repeats a character
-- Typed failures (`document_unavailable`, `format_unavailable`, `document_fetch_failed`, `document_too_large`, `offset_past_end`, `not_found`, `rate_limited`, `invalid_request`, `upstream_error`, `upstream_timeout`), each with a recovery hint
+- Typed failures (`document_unavailable`, `format_unavailable`, `document_fetch_failed`, `document_too_large`, `offset_past_end`, `not_found`, `rate_limited`, `invalid_request`, `api_key_rejected`, `upstream_error`, `upstream_timeout`), each with a recovery hint
 
 ## Getting started
 
@@ -332,11 +336,12 @@ The image defaults to HTTP transport, stateless session mode, and logs to `/var/
 | `src/mcp-server/tools/` | Tool definitions (`definitions/*.tool.ts`) plus shared input, formatting, and summary-window helpers. |
 | `src/mcp-server/resources/definitions/` | Resource definitions (`*.resource.ts`). |
 | `src/mcp-server/prompts/definitions/` | Prompt definitions (`*.prompt.ts`). |
+| `src/services/call-budget.ts` | The 50-second budget every tool call's upstream requests share. |
 | `src/services/congress-api/` | Congress.gov API client: auth, pagination, rate limiting. |
-| `src/services/congress-documents/` | Bounded document-text fetch: host allowlist, byte ceiling, character window. |
+| `src/services/congress-documents/` | Bounded document-text fetch: host allowlist, byte ceiling, character window, and a 10-minute cache of document bodies. |
 | `src/services/congress-mirror/` | Local SQLite FTS5 bill-search mirror: ingest, normalize, schema. |
 | `src/services/senate-lis/` | Senate LIS XML client for Senate roll call votes. |
-| `src/utils/` | HTML/XML character-reference decoding. |
+| `src/utils/` | HTML/XML character-reference decoding and congress-number arithmetic. |
 | `scripts/` | Build, devcheck, and release tooling, plus the `mirror:init` / `mirror:refresh` / `mirror:verify` CLIs. |
 | `tests/` | Unit and integration tests, mirroring the `src/` structure. |
 

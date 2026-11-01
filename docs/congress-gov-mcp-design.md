@@ -320,7 +320,7 @@ operation: z.enum([
 | `operation` | all | Which data to retrieve. |
 | `congress` | all | Congress number. Required. |
 | `chamber` | all | `house` (default) or `senate`. Roll numbers are chamber-specific and reset each session. |
-| `session` | all | Session number (1 or 2). Required. Odd years are session 1, even years session 2. |
+| `session` | all | Session number (1 or 2). Required. A congress's first year is session 1 and its second year session 2; a second session can run into January 1–3 of the following year. |
 | `voteNumber` | get, members | Roll call vote number. Required for detail operations. |
 | `limit` | list, members | Results per page (1-250). |
 | `offset` | list, members | Pagination offset. |
@@ -343,9 +343,10 @@ Use 'list' to find votes by congress and session, 'get' for vote details
 **Format**: List → markdown table (vote#, date, question, result). Members → table grouped by vote position.
 
 **Error guidance:**
-- Missing session: "The 'session' parameter is required. Each congress has two sessions — session 1 for odd years, session 2 for even years."
+- Missing session: "The 'session' parameter is required. Each congress has two sessions — session 1 for its first year, session 2 for its second year (and January 1–3 after it)."
 - Vote not found: "No roll call vote {voteNumber} found in session {session} of the {congress}th Congress. Use 'list' to browse available votes."
 - Empty Senate list: verify the congress and session; the Senate publishes roll call votes from the 101st Congress (1989) onward.
+- Senate feed refused: "senate.gov refused the request for the Senate LIS feed (HTTP 403)." (`upstream_error`, `retryable: false`, failed on the first attempt — senate.gov's firewall refuses automated clients, so a retry meets the same answer; the hint says House votes are unaffected). A 5xx or timeout from the feed is still retried.
 
 ---
 
@@ -394,6 +395,7 @@ one nomination follow different confirmation paths.
 - **actions**: `actions[]` — `date`, `text`, `actionCode`
 - **committees**: `committees[]` — `systemCode`, `name`, `chamber`, `referralDate`
 - **hearings**: `hearings[]` — `date`, `committee`, `number`
+- **rollVote**: on an `actions` row, and on `latestAction` for `list` and `get`, when the action text cites its own Senate record vote (`Record Vote Number: 225.`) — `{ chamber: 'senate', congress, session, voteNumber }`, the `congressgov_roll_votes` arguments for that vote; none before the 101st Congress
 
 **Format**: List → markdown table (PN number, description, organization, latest action). Sub-resources → appropriate table format.
 
@@ -595,11 +597,14 @@ All tools share these error patterns. The service layer handles them uniformly.
 
 | Condition | Error Message |
 |:----------|:-------------|
-| Rate limit hit | "Congress.gov API rate limit reached (5,000 requests/hour). Wait before retrying — the limit resets hourly." |
-| API unavailable (5xx) | "Congress.gov API returned HTTP {status}. The service may be temporarily unavailable — retry after a brief wait." |
+| Rate limit hit | "Congress.gov API quota reached. Quotas are shared across clients using the same key or demo IP; this server only tracks its own attempts." (`rate_limited`) |
+| API unavailable (5xx) | "Congress.gov returned an unexpected error (HTTP {status})." (`upstream_error`) |
+| Malformed request (upstream 400, 401, 402, 403, 422) | "Congress.gov rejected the request as malformed (HTTP {status})." (`invalid_request`) |
+| Rejected API key (api.data.gov `API_KEY_*` code on 401/403) | "Congress.gov's api.data.gov gateway rejected the server's API key with {code} (HTTP {status})." (`api_key_rejected`, `ConfigurationError` -32008, not retryable). The hint tells the operator to replace or unset `CONGRESS_API_KEY` and restart, without echoing the key. The body code decides, not the status: a malformed path segment is also a plain 403. |
 | Empty results | "No {entity} found for the given filters. Try broadening the search — adjust the congress number, date range, or remove optional filters." |
 | Invalid congress number | "Congress {n} is not valid. The current congress is {current}. Congress numbers are positive integers starting at 1 (1789)." |
-| Network error | "Unable to reach the Congress.gov API. Check network connectivity and try again." |
+| Network error | "Congress.gov returned an unexpected error." (`upstream_error`) |
+| Upstream timeout | "Congress.gov did not complete the request within the 10000-millisecond deadline." for one attempt's own timeout, or "{upstream} did not deliver {request} within this call's 50-second budget for upstream requests ({n} attempts)." once the call's budget runs out (`upstream_timeout`, with `budgetMs` and `retryAttempts`). See "Every call runs on one time budget" below. |
 
 ---
 
@@ -693,9 +698,9 @@ class CongressApiService {
 
 The Congress.gov API's core limitation — no keyword search (see "Key API constraint" above) — can't be fixed at the API layer, so `congressgov_search_bills` closes the gap with a local mirror instead of a new upstream endpoint.
 
-**Architecture:** `CongressMirrorService` owns a SQLite + FTS5 index (`src/services/congress-mirror/`) built on the framework `MirrorService`. The ingester merges two existing `CongressApiService` endpoints per configured congress — the bill list (title, chamber, latest action) and `/summaries` (CRS summary text, HTML-stripped) — into one row per bill, keyed by the same `{congress}/{billType}/{billNumber}` id the `congress://bill/...` resource uses. `title` and `summary` are FTS-indexed; `congress`, `billType`, and `originChamber` back exact-match filters.
+**Architecture:** `CongressMirrorService` owns a SQLite + FTS5 index (`src/services/congress-mirror/`) built on the framework `MirrorService`. The ingester merges two existing `CongressApiService` endpoints per configured congress — the bill list (title, chamber, latest action) and `/summaries` (CRS summary text, HTML-stripped) — into one row per bill, keyed by the same `{congress}/{billType}/{billNumber}` id the `congress://bill/...` resource uses. `title` and `summary` are FTS-indexed; `congress`, `billType`, and `originChamber` back exact-match filters. Every sync re-walks a congress's whole `/summaries` list, newest first, requested from January 1 of the congress's first year with no end date: without `fromDateTime` the endpoint returns only the last day's summaries, and summaries are rewritten long after their congress ends. A bill a refresh re-emits therefore keeps its summary.
 
-**Lifecycle:** the mirror is never built or refreshed during server startup. `mirror:init` runs a full out-of-band build; `mirror:refresh` incrementally re-scans from the last `updateDate` checkpoint; `mirror:verify` reports readiness and runs a SQLite integrity check. Under HTTP transport, an in-process refresh can run on a cron via `CONGRESS_MIRROR_REFRESH_CRON`.
+**Lifecycle:** the mirror is never built or refreshed during server startup. `mirror:init` runs a full out-of-band build; `mirror:refresh` incrementally re-scans from the last `updateDate` checkpoint, which advances only when a run has walked every configured congress, so a refresh that fails partway re-scans the same window next time; `mirror:verify` reports readiness and runs a SQLite integrity check. The three scripts log JSON lines to stderr at the `MCP_LOG_LEVEL` floor and leave stdout empty. Under HTTP transport, an in-process refresh can run on a cron via `CONGRESS_MIRROR_REFRESH_CRON`. Store schema version 2 clears the checkpoint of a store built before the summaries window existed, so its next refresh re-walks every bill and fills in the summaries while search keeps serving.
 
 **`congressgov_search_bills`:** keyword-searches `title` + `summary` (BM25-ranked), optionally narrowed by `congress`, `billType`, and `originChamber`. Returns each match's derived bill id for a follow-up `congressgov_bill_lookup` call plus a truncated summary preview. No live-API fallback — a mirror that hasn't completed its initial build returns an empty result with a notice, not an error.
 
@@ -777,9 +782,31 @@ The Congress.gov API exposes House votes but no Senate vote namespace. `congress
 
 ### `content` bounds the fetch and the response separately
 
-A full enrolled bill's Formatted Text runs past a megabyte and its USLM XML past 2.6 MB, and the omnibus appropriations acts run far past that — 116th Congress H.R. 133 enrolled is 6,790,482 bytes as Formatted Text and 9,812,888 as XML. Bounding only the response would still pull the whole document into memory on every call, so the body is extracted as it streams and only the requested character window is retained: a read's live set is flat in the size of the document, so the largest bill ever enacted retains what a one-page report retains. Transient allocation is not flat — peak RSS on a single large read runs above a buffered read of the same document — but that memory is garbage rather than live, so what the bound actually buys is concurrent reads: a buffered read holds the whole document per in-flight request, and a streaming one does not. The fetch still carries a declared ceiling (25 MB, refused on `Content-Length` when one is advertised and mid-stream when it is not), a 30-second deadline covering headers and body, and a content-type allowlist — an upstream whose response size is not known in advance needs a limit even once memory no longer tracks it. Raising the ceiling alone would not have been enough: both published formats of an oversized document are oversized, so the `document_too_large` recovery hint points at the source URL rather than at the other format.
+A full enrolled bill's Formatted Text runs past a megabyte and its USLM XML past 2.6 MB, and the omnibus appropriations acts run far past that — 116th Congress H.R. 133 enrolled is 6,790,482 bytes as Formatted Text and 9,812,888 as XML. Bounding only the response would still pull the whole document into memory on every call, so the body is extracted as it streams and only the requested character window is extracted into memory. Transient allocation is not flat — peak RSS on a single large read runs above a buffered read of the same document — but the decoded text is garbage rather than live. The fetch still carries a declared ceiling (25 MB, refused on `Content-Length` when one is advertised and mid-stream when it is not), a per-attempt timeout covering headers and body, one time budget for the whole call, and a content-type allowlist — an upstream whose response size is not known in advance needs a limit even once memory no longer tracks it. Raising the ceiling alone would not have been enough: both published formats of an oversized document are oversized, so the `document_too_large` recovery hint points at the source URL rather than at the other format.
 
 The streaming extractor is a second implementation of an existing contract, since every `content` offset indexes into what the whole-string extractor produces. It is held to byte-for-byte equality with that function rather than to expectations of its own, and a differential test drives both over the real document shapes, over malformed markup, and over randomized bodies split at every chunk boundary.
+
+### Every call runs on one time budget, counted from its start
+
+MCP SDK clients give up on a request after 60 seconds by default. Each upstream request runs its own retry ladder of three attempts — 10 seconds each against api.congress.gov, 12 against the Senate LIS feed, 30 against a www.congress.gov document — and many calls chain requests: `content` looks up the document's format URL before fetching it, `congressgov_committee_lookup` pages the 818-row committee roster four times before filtering it or resolving a committee name and then makes one or two more requests, and `congressgov_roll_votes` House `list` in recent order fetches its first page and then the rest in parallel. Per-attempt timeouts bound none of that. One api.congress.gov request could take about 34 seconds, or about 90 when a 5xx carried a `Retry-After` the ladder honored, and a committee name resolved for `bills` in recent order chained six such requests. A client that had already given up never saw the server's classified error.
+
+Every upstream request a tool call or resource read makes through `CongressApiService`, `SenateVoteService`, or `CongressDocumentsService` therefore spends one 50-second budget (`src/services/call-budget.ts`) counted from the call's start, `ctx.timestamp`, which the framework stamps as the tool call or resource read begins. Each request's ladder gets what is left as `withRetry`'s `deadlineMs`, and each attempt's timeout is clamped to the remainder while its I/O carries the budget's signal. A backoff the remainder cannot hold fails at once as the expiry. A `Retry-After` wait it cannot hold fails at once with the upstream's own error, `retryAfter` intact, since waiting out that window is still the caller's move. A request the budget no longer covers is never sent, and requests issued in parallel share the same end instant. Running out is a `Timeout` with reason `upstream_timeout`, the reason a slow api.congress.gov attempt already carried, and its message names the budget and the attempts made. A caller abort keeps precedence and stays `RequestCancelled`.
+
+- **One module for three services.** Where the budget starts, how attempts are clamped, and how expiry reads cannot drift between the services. It replaced a private copy inside `CongressDocumentsService` that bounded only the document fetch and left the format lookup before it outside any total.
+- **Read from the context, not passed in.** The budget comes from the handler's own `ctx`, so no tool path can start it in the wrong place. A context derived from `ctx` carries a later timestamp and is never the one read, and tools pass `ctx` to every service call.
+- **No call, no budget.** The mirror ingester and the `mirror:*` scripts call `CongressApiService` without a context and keep the plain per-request ladder: a sync runs for minutes and has no client waiting on a 60-second clock.
+- **A clamped last attempt can end on its own timer.** The attempt's timer and the budget's clock are armed for the same instant, and the timer can fire first. That timeout is reported as the budget's expiry too, never as an exhausted ladder naming a per-attempt deadline the attempt never had.
+
+### A multi-window document is fetched once per TTL
+
+`totalCharacters` is known only at the end of the extracted text, so every window streams its whole document; walking the 1.5 MB-gzipped H.R. 133 at the default window would download it 272 times. The first read of a document that runs past its window therefore keeps its decompressed body in `DocumentBodyCache`, and later windows replay those bytes through the unchanged streaming extractor — the same input to the same function, so a cached window cannot differ from a fetched one.
+
+- **Bytes, not extracted text.** Cached text would need a capture mode the extractor lacks, holds XML text at two bytes per character, and pins its whole parent with every slice served from it. A body is stored as one buffer it owns, counted by its `byteLength`.
+- **Bounds.** 64 MB in total with LRU eviction; 16 MB per body, which clears the largest known (H.R. 133 as XML, 9,812,888 bytes) — a larger body is captured until it passes the ceiling, then dropped and read as before; a 10-minute TTL from insert, inside congress.gov's own `max-age=1800`. While a cold read streams, it holds the body's chunks up to that ceiling, and inserting copies them into the one owned buffer.
+- **What is inserted.** Only a read whose window stops short of the end (`nextOffset !== null`), so a single-window document is never retained, and never a cancelled or failed read.
+- **Replay.** 128 KiB slices with a macrotask between them, so a large document never holds the event loop for its whole parse, and the caller's signal is checked at each one. A replay makes no request and never spends the call's time budget.
+- **No single-flight.** The first window inserts before it returns, so a walk's later windows hit whether they arrive in sequence or in parallel; concurrent cold reads each fetch, as they always did, and one caller's cancellation never touches another's read.
+- **One cache for every tenant.** Keys are the server-resolved, allowlisted URL; every body is public and fetched without credentials. `ctx.state` was rejected: its in-memory provider bounds entry count only and JSON-parses the whole value on every read. Conditional requests and byte ranges were rejected too — bodies are versioned by URL, and offsets index extracted text while bodies arrive gzipped with no `Content-Length`.
 
 ### `content` offsets are exact, never snapped to section breaks
 

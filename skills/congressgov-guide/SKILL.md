@@ -21,7 +21,7 @@ Carry identifiers from returned records across tool calls:
 | Member | `bioguideId` from member discovery or a bill's sponsors and cosponsors |
 | Committee | `systemCode` from committee discovery; resolve a committee name and inspect the candidates before following its legislation |
 | Enacted law | `laws[].number` on an enacted-law row; the row's own bill number identifies the origin bill |
-| Roll call | Chamber, congress, session, and roll number from vote discovery; retain the complete identity when reading detail and positions |
+| Roll call | Chamber, congress, session, and roll number from vote discovery, or a nomination action's `rollVote` (the Senate vote that action cites, ready to pass to `congressgov_roll_votes`); retain the complete identity when reading detail and positions. A second session can run into January 1–3 of the following year, so an odd/even reading of the vote's calendar year misplaces those votes |
 | Record article | Volume and issue from Record discovery, then the article's absolute position within the issue |
 
 ## Gates
