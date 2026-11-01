@@ -9,11 +9,14 @@
  * Merge order matters: the framework upsert writes every declared column for each
  * record, so a partial (summary-only) upsert would null the title. The summaries
  * are therefore loaded into a per-congress map first, then attached as each full
- * bill row is emitted. Summaries are fully re-walked every sync (not date-filtered)
- * so a re-emitted bill never loses a previously-stored summary. The durable
- * checkpoint is the bills' `updateDate` high-water mark; refresh re-scans bills
- * from it inclusively (`sort=updateDate asc`), and the upsert makes the overlap
- * harmless.
+ * bill row is emitted. Every sync re-walks a congress's whole summaries list, so a
+ * re-emitted bill never loses a previously-stored summary: the list is requested
+ * from the congress's first day with no end, because without `fromDateTime`
+ * Congress.gov returns only the last day's summaries, and summaries keep being
+ * rewritten long after their congress ends. The durable checkpoint is the bills'
+ * `updateDate` high-water mark across every congress, persisted only once the
+ * whole walk finishes; refresh re-scans bills from it inclusively
+ * (`sort=updateDate asc`), and the upsert makes the overlap harmless.
  * @module services/congress-mirror/ingest
  */
 
@@ -25,6 +28,7 @@ import type {
 } from '@cyanheads/mcp-ts-core/mirror';
 import { logger } from '@cyanheads/mcp-ts-core/utils';
 import type { CongressApiService } from '@/services/congress-api/congress-api-service.js';
+import { congressFirstYear } from '@/utils/congress-calendar.js';
 import { htmlToPlainText } from './normalize.js';
 
 /** Congress.gov list endpoints cap the page size at 250 (confirmed live). */
@@ -77,10 +81,19 @@ function toFromDateTime(checkpoint: string): string {
   return /^\d{4}-\d{2}-\d{2}$/.test(checkpoint) ? `${checkpoint}T00:00:00Z` : checkpoint;
 }
 
+/** January 1 of a congress's first year as a `fromDateTime` that no summary of its bills predates. */
+function congressStartDateTime(congress: number): string {
+  return `${congressFirstYear(congress)}-01-01T00:00:00Z`;
+}
+
 /**
  * Page the CRS summaries list for one congress into a `billId → plain-text
  * summary` map, keeping the latest version per bill (by summary update/action
- * stamp). Summaries ship as HTML and are stripped to plain text before storage.
+ * stamp). The window opens on the congress's first day with no end. The walk
+ * keeps the upstream newest-first order: a summary updated mid-walk moves to the
+ * front and at worst repeats a row, where oldest-first it would move to the end
+ * and the row crossing the next page boundary would be skipped. Summaries ship as
+ * HTML and are stripped to plain text before storage.
  */
 async function buildSummaryMap(
   api: MirrorApi,
@@ -88,9 +101,10 @@ async function buildSummaryMap(
   signal: AbortSignal,
 ): Promise<Map<string, string>> {
   const latest = new Map<string, { text: string; stamp: string }>();
+  const fromDateTime = congressStartDateTime(congress);
   let offset = 0;
   while (!signal.aborted) {
-    const result = await api.listSummaries({ congress, limit: PAGE_SIZE, offset });
+    const result = await api.listSummaries({ congress, limit: PAGE_SIZE, offset, fromDateTime });
     const rows = result.data;
     if (rows.length === 0) break;
     for (const raw of rows) {
@@ -144,8 +158,11 @@ function toBillRow(
 /**
  * Build the Congress bill ingester. The returned generator walks the configured
  * congresses; for each, it loads the summary map, then streams bill pages
- * (`sort=updateDate asc`) as full merged rows, advancing the durable checkpoint
- * to the max `updateDate` seen.
+ * (`sort=updateDate asc`) as full merged rows. The durable checkpoint — the max
+ * `updateDate` seen across every congress — rides only the final page, so a run
+ * that fails partway leaves the stored checkpoint where it started: a mid-walk
+ * checkpoint could already sit past the unvisited updates of a later congress,
+ * and the next refresh would skip them.
  *
  * @param getApi - Accessor for the Congress API service (injectable for tests).
  * @param congresses - Congress numbers to mirror.
@@ -158,6 +175,8 @@ export function createCongressBillIngester(
     const api = getApi();
     const fromDateTime = mode === 'refresh' && checkpoint ? toFromDateTime(checkpoint) : undefined;
     let maxUpdate: string | undefined = checkpoint;
+    // Each page is yielded one fetch late, so the last one can carry the checkpoint.
+    let held: MirrorRow[] | undefined;
     logger.info(
       `Congress bill mirror sync starting (mode=${mode}, congresses=${congresses.join(',')}${
         fromDateTime ? `, since=${fromDateTime}` : ''
@@ -192,12 +211,16 @@ export function createCongressBillIngester(
           if (updated && (maxUpdate === undefined || updated > maxUpdate)) maxUpdate = updated;
         }
         billsMirrored += records.length;
-        yield { records, ...(maxUpdate ? { checkpoint: maxUpdate } : {}) };
+        if (held) yield { records: held };
+        held = records;
 
         if (rows.length < PAGE_SIZE || result.pagination.nextOffset == null) break;
         offset += PAGE_SIZE;
       }
       logger.info(`Congress ${congress}: ${billsMirrored} bills mirrored`);
+    }
+    if (held && !signal.aborted) {
+      yield { records: held, ...(maxUpdate ? { checkpoint: maxUpdate } : {}) };
     }
   };
 }
