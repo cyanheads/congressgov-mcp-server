@@ -7,10 +7,11 @@
  * @module scripts/congress-mirror-verify
  */
 
-import { logger } from '@cyanheads/mcp-ts-core/utils';
+import { logger, requestContextService } from '@cyanheads/mcp-ts-core/utils';
 import { getMirror } from './_mirror-context.js';
 
-const mirror = getMirror();
+const mirror = await getMirror();
+const context = requestContextService.createRequestContext({ operation: 'mirror:verify' });
 const status = await mirror.status();
 
 logger.info(
@@ -19,14 +20,14 @@ logger.info(
 if (status.error) logger.warning(`Last sync error: ${status.error}`);
 
 if (!status.ready) {
-  logger.error('Mirror is NOT ready — run mirror:init to build the index.');
+  logger.error('Mirror is NOT ready — run mirror:init to build the index.', context);
   await mirror.close();
   process.exit(1);
 }
 
 const integrity = await mirror.store.integrityCheck();
 if (!integrity.ok) {
-  logger.error(`SQLite integrity check FAILED: ${integrity.results.join('; ')}`);
+  logger.error(`SQLite integrity check FAILED: ${integrity.results.join('; ')}`, context);
   await mirror.close();
   process.exit(1);
 }

@@ -12,7 +12,7 @@
 import { logger } from '@cyanheads/mcp-ts-core/utils';
 import { getMirror } from './_mirror-context.js';
 
-const mirror = getMirror();
+const mirror = await getMirror();
 logger.info('Starting Congress bill mirror refresh');
 
 const result = await mirror.runSync({ mode: 'refresh', signal: AbortSignal.timeout(3_600_000) });
