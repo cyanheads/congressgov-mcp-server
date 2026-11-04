@@ -1,6 +1,6 @@
 # congressgov-mcp-server - Directory Structure
 
-Generated on: 2026-11-01 12:43:54
+Generated on: 2026-11-04 03:20:52
 
 ```text
 congressgov-mcp-server/
@@ -168,6 +168,7 @@ congressgov-mcp-server/
 │   │   │       └── member.resource.ts
 │   │   └── tools/
 │   │       ├── definitions/
+│   │       │   ├── amendment-lookup.tool.ts
 │   │       │   ├── bill-lookup.tool.ts
 │   │       │   ├── bill-summaries.tool.ts
 │   │       │   ├── committee-lookup.tool.ts
@@ -180,6 +181,7 @@ congressgov-mcp-server/
 │   │       │   ├── search-bills.tool.ts
 │   │       │   └── senate-nominations.tool.ts
 │   │       ├── format-helpers.ts
+│   │       ├── roll-vote-pointer.ts
 │   │       ├── summary-window.ts
 │   │       └── tool-helpers.ts
 │   ├── services/
@@ -200,9 +202,12 @@ congressgov-mcp-server/
 │   │   │   ├── schema.ts
 │   │   │   └── types.ts
 │   │   ├── senate-lis/
+│   │   │   ├── csv.ts
 │   │   │   ├── parse.ts
 │   │   │   ├── senate-vote-service.ts
-│   │   │   └── types.ts
+│   │   │   ├── types.ts
+│   │   │   ├── voteview-parse.ts
+│   │   │   └── voteview-source.ts
 │   │   └── call-budget.ts
 │   ├── utils/
 │   │   ├── character-references.ts
@@ -227,9 +232,11 @@ congressgov-mcp-server/
 │   │   │       └── member.resource.test.ts
 │   │   └── tools/
 │   │       ├── definitions/
+│   │       │   ├── amendment-lookup.tool.test.ts
 │   │       │   ├── bill-lookup.tool.test.ts
 │   │       │   ├── bill-summaries.tool.test.ts
 │   │       │   ├── committee-lookup.tool.test.ts
+│   │       │   ├── committee-report-parts.test.ts
 │   │       │   ├── committee-reports.tool.test.ts
 │   │       │   ├── crs-reports.tool.test.ts
 │   │       │   ├── daily-record.tool.test.ts
@@ -249,6 +256,7 @@ congressgov-mcp-server/
 │   │       ├── format-helpers-fidelity.test.ts
 │   │       ├── format-helpers-list-fidelity.test.ts
 │   │       ├── format-helpers.test.ts
+│   │       ├── roll-vote-pointer.test.ts
 │   │       ├── senate-votes.format.test.ts
 │   │       ├── summary-window.test.ts
 │   │       └── tool-helpers.test.ts
@@ -266,18 +274,34 @@ congressgov-mcp-server/
 │   │   │   └── extract-text.test.ts
 │   │   ├── congress-mirror/
 │   │   │   ├── congress-mirror-service.test.ts
+│   │   │   ├── fake-bill-list.ts
 │   │   │   ├── mirror-cli.test.ts
 │   │   │   └── normalize.test.ts
 │   │   ├── senate-lis/
 │   │   │   ├── fixtures/
+│   │   │   │   ├── voteview-2026-11-04/
+│   │   │   │   │   ├── lis-403-firewall-2026-11-04.html.txt
+│   │   │   │   │   ├── S101_members.csv
+│   │   │   │   │   ├── S101_rollcalls.csv
+│   │   │   │   │   ├── S101_votes.csv
+│   │   │   │   │   ├── S118_members.csv
+│   │   │   │   │   ├── S118_rollcalls.csv
+│   │   │   │   │   ├── S118_votes.csv
+│   │   │   │   │   ├── S119_members.csv
+│   │   │   │   │   ├── S119_rollcalls.csv
+│   │   │   │   │   ├── S119_votes.csv
+│   │   │   │   │   └── voteview-404-2026-11-04.html.txt
 │   │   │   │   ├── menu-112-2-rollover.xml
 │   │   │   │   ├── menu-116-2-rollover.xml
 │   │   │   │   ├── menu-118-1-december.xml
 │   │   │   │   ├── menu.xml
 │   │   │   │   ├── vote-amendment.xml
 │   │   │   │   └── vote-cloture.xml
+│   │   │   ├── csv.test.ts
 │   │   │   ├── parse.test.ts
-│   │   │   └── senate-vote-service.test.ts
+│   │   │   ├── senate-vote-service.test.ts
+│   │   │   ├── voteview-fixtures.ts
+│   │   │   └── voteview.test.ts
 │   │   └── call-budget.test.ts
 │   ├── utils/
 │   │   ├── character-references.test.ts

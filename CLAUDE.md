@@ -65,23 +65,24 @@ Tailor suggestions to what's actually missing or stale — don't recite the full
 
 ## MCP Surface
 
-### Tools (11)
+### Tools (12)
 
 | Name | Description |
 |:-----|:------------|
-| `congressgov_bill_lookup` | Browse, filter, and retrieve bill data (actions, sponsors, summaries, text, related bills) + bounded document text via `content`; `summaries` takes `versionCode` and the shared `characterOffset`/`characterLimit` window |
+| `congressgov_bill_lookup` | Browse, filter, and retrieve bill data (actions, sponsors, summaries, text, related bills) + bounded document text via `content`; `summaries` takes `versionCode` and the shared `characterOffset`/`characterLimit` window; `fromDateTime`/`toDateTime` apply to `list` only; an `actions` row recording exactly one roll call carries `rollVote` (House from the 115th Congress, Senate from the 101st) |
+| `congressgov_amendment_lookup` | Browse and retrieve amendments (`list`, `get`, `actions`, `cosponsors`, `amendments`, `text`, `content`) keyed by `congress` + `amendmentType` (`hamdt`/`samdt`/`suamdt`, any letter case; `suamdt` only in the 97th–98th) + `amendmentNumber` (number or digit string); `list` takes `fromDateTime`/`toDateTime` on update date and `order`; an `actions` row recording exactly one roll call carries `rollVote`; `content` reads one text version (`textVersionIndex`) as a character window — the Congressional Record page that prints the amendment, often far longer than the amendment |
 | `congressgov_enacted_laws` | Browse enacted public and private laws by congress |
 | `congressgov_member_lookup` | Discover members by state/district/congress, retrieve legislative portfolios |
-| `congressgov_committee_lookup` | Browse committees and retrieve legislation, reports, nominations |
-| `congressgov_roll_votes` | Retrieve House and Senate roll call votes and member voting positions |
-| `congressgov_senate_nominations` | Browse presidential nominations, track Senate confirmation pipeline; an action citing its own Senate record vote (`actions` rows, `latestAction` on `list`/`get`) carries `rollVote`, the `congressgov_roll_votes` arguments for it, from the 101st Congress on |
-| `congressgov_bill_summaries` | Browse recent CRS bill summaries — the "what's happening" feed, bounded by the shared summary page budget and per-row text window |
-| `congressgov_crs_reports` | Browse and retrieve nonpartisan CRS policy analysis reports |
-| `congressgov_committee_reports` | Browse and retrieve committee reports accompanying legislation + bounded report text via `content` |
+| `congressgov_committee_lookup` | Browse committees and retrieve legislation, reports, nominations; a name passed as `committeeCode` resolves among the committees of `chamber` when it is set (all chambers otherwise), and the resolved committee is fetched in the chamber its roster row names |
+| `congressgov_roll_votes` | Retrieve House and Senate roll call votes and member voting positions; `chamber` in any letter case; `members` filters `bioguideId` (House only; Senate fails `unsupported_filter`), `stateCode`, `party` at the tool layer before paging (`pagination.count` counts matches, `memberFilter.rosterCount` is the roster size); House votes from the 115th Congress (`get`/`members` below it fail `not_found` before any request, pointing at the Clerk vote XML in bill actions' `recordedVotes`); Senate calls the LIS feed can't answer are served from Voteview, with `source` (name, url, `latestVote`, citation) on both surfaces |
+| `congressgov_senate_nominations` | Browse presidential nominations, track Senate confirmation pipeline; `nominationNumber` accepts `PN730-2` / `pn730-2` / `730-2`; `list` takes `fromDateTime`/`toDateTime` on update date; an action citing its own Senate record vote (`actions` rows, `latestAction` on `list`/`get`) carries `rollVote`, the `congressgov_roll_votes` arguments for it, from the 101st Congress on |
+| `congressgov_bill_summaries` | Browse recent CRS bill summaries — the "what's happening" feed; `limit` rows per page, each row's text bounded by the per-row window |
+| `congressgov_crs_reports` | Browse and retrieve nonpartisan CRS policy analysis reports; IDs are letters then digits (`R40097`) or two digit groups joined by a hyphen (`96-548`), case-insensitive; `list` takes `fromDateTime`/`toDateTime` on update date; `content` reads the report's HTML as text in character windows (PDF-only fails `format_unavailable` naming its URL) |
+| `congressgov_committee_reports` | Browse and retrieve committee reports accompanying legislation + bounded report text via `content`; `list` takes `fromDateTime`/`toDateTime` and `conference`; `part` (default 1) selects one part of a multi-part report on `get`/`text`/`content`, and `parts` lists them when there is more than one |
 | `congressgov_daily_record` | Browse daily Congressional Record — floor speeches, debates, proceedings + bounded article text via `content` |
-| `congressgov_search_bills` | Keyword-search bill titles/summaries via the opt-in local FTS mirror — off by default |
+| `congressgov_search_bills` | Keyword-search bill titles/summaries via the opt-in local FTS mirror — off by default; every response names the searchable congresses in `mirroredCongresses`, and a `congress` outside them returns an empty result with a notice pointing at `congressgov_bill_lookup` |
 
-**Summary bounding** (`src/mcp-server/tools/summary-window.ts`, constants in `tool-helpers.ts`). Both summary surfaces enforce two limits. `SUMMARY_PAGE_CHARACTERS` stops a page once its serialized rows reach the budget — the first row always returns, `pagination.nextOffset` counts the rows actually returned, and an enrichment notice discloses the stop. `DEFAULT_SUMMARY_TEXT_CHARACTERS` bounds one row's upstream `text`; a windowed row gains `textTotalCharacters` / `textTruncated` / `textNextOffset`, and its window end is retracted off any HTML tag or character reference it would otherwise split (unless the construct is wider than the whole window, where the requested limit wins). A row inside both limits is returned untouched, so an unbounded page stays byte-identical. `congressgov_bill_lookup` `summaries` overrides the row window with `characterOffset`/`characterLimit` and selects one version with `versionCode` — Congress.gov publishes no version filter, so selection reads the bill's whole summary list and matches client-side.
+**Summary bounding** (`src/mcp-server/tools/summary-window.ts`, constant in `tool-helpers.ts`). Both summary surfaces enforce one limit: `DEFAULT_SUMMARY_TEXT_CHARACTERS` bounds one row's upstream `text`; a windowed row gains `textTotalCharacters` / `textTruncated` / `textNextOffset`, and its window end is retracted off any HTML tag or character reference it would otherwise split (unless the construct is wider than the whole window, where the requested limit wins). The page and upstream pagination pass through untouched, so `limit` rows return and `pagination.nextOffset` is the upstream's; a row inside the window is returned untouched, so an unbounded page stays byte-identical. `congressgov_bill_lookup` `summaries` overrides the row window with `characterOffset`/`characterLimit` and selects one version with `versionCode` — Congress.gov publishes no version filter, so selection reads the bill's whole summary list and matches client-side.
 
 ### Resources (6)
 
@@ -109,7 +110,7 @@ Tailor suggestions to what's actually missing or stale — don't recite the full
 src/
   index.ts                              # createApp() entry point
   config/
-    server-config.ts                    # CONGRESS_API_KEY, base URL (Zod schema)
+    server-config.ts                    # CONGRESS_API_KEY, base URL (Zod schema); loads ./.env before the first parse
   services/
     call-budget.ts                      # One 50 s upstream budget per tool call / resource read, shared by the three HTTP services
     congress-api/
@@ -119,7 +120,7 @@ src/
       congress-documents-service.ts     # www.congress.gov document fetch — host allowlist, byte ceiling, call budget, character window
       document-body-cache.ts            # Process-local LRU of decompressed bodies — one fetch per document per TTL
       document-formats.ts               # Format label → URL resolution over upstream format lists
-      extract-text.ts                   # GPO `<pre>` / XML body → deterministic plain text
+      extract-text.ts                   # GPO `<pre>`/XML and HTML readings → deterministic plain text
       extract-text-stream.ts            # Incremental twin of extract-text.ts — one character window, constant memory
       types.ts                          # Document format + content window types
     congress-mirror/
@@ -129,11 +130,17 @@ src/
       schema.ts                         # SQLite mirror store spec (bills table, FTS index)
       types.ts                          # Mirror row, search filters, search page types
     senate-lis/
-      senate-vote-service.ts            # Senate LIS XML client — fetch, retry, not-found
+      senate-vote-service.ts            # Senate LIS XML client — fetch, retry, not-found; falls back to Voteview when the feed can't answer
       parse.ts                          # pure XML → domain parsers (fast-xml-parser); Senate vote coverage, session for a date
+      voteview-source.ts                # Voteview fallback source — per-congress file fetch, 1 h cache bounded in bytes, shared load, latest-vote not-found
+      voteview-parse.ts                 # pure Voteview CSV → Senate vote shapes (rollcalls, votes, members); drops the President's positions
+      csv.ts                            # one-pass RFC 4180 CSV reader
       types.ts                          # Senate vote domain types
   mcp-server/
+    tools/
+      roll-vote-pointer.ts             # congressgov_roll_votes arguments for a recorded vote — House 115th / Senate 101st floors
     tools/definitions/
+      amendment-lookup.tool.ts         # congressgov_amendment_lookup
       bill-lookup.tool.ts              # congressgov_bill_lookup
       enacted-laws.tool.ts             # congressgov_enacted_laws
       member-lookup.tool.ts            # congressgov_member_lookup
@@ -168,7 +175,7 @@ scripts/
 
 ## Services
 
-Four services. `CongressApiService` backs nine tools and the House branch of `congressgov_roll_votes`; `SenateVoteService` backs only the Senate branch of `congressgov_roll_votes` (the Congress.gov API exposes no Senate vote namespace); `CongressMirrorService` backs `congressgov_search_bills` only; `CongressDocumentsService` backs the `content` operation on `congressgov_bill_lookup`, `congressgov_committee_reports`, and `congressgov_daily_record`.
+Four services. `CongressApiService` backs ten tools and the House branch of `congressgov_roll_votes`; `SenateVoteService` backs only the Senate branch of `congressgov_roll_votes` (the Congress.gov API exposes no Senate vote namespace); `CongressMirrorService` backs `congressgov_search_bills` only; `CongressDocumentsService` backs the `content` operation on `congressgov_bill_lookup`, `congressgov_committee_reports`, `congressgov_daily_record`, `congressgov_crs_reports`, and `congressgov_amendment_lookup`.
 
 **Call budget** (`call-budget.ts`, `withCallBudget`) — every upstream request a tool call or resource read makes through `CongressApiService`, `SenateVoteService`, or `CongressDocumentsService` spends one 50 s budget (`CALL_BUDGET_MS`) counted from the call's start (`ctx.timestamp`), so chained and parallel requests (a roster paged four times, a `content` lookup and then its document) end together before the 60 s default MCP client timeout:
 - Each request's retry ladder gets what is left as `withRetry` `deadlineMs`; each attempt's timeout (10 s API, 12 s Senate, 30 s document) is clamped to the remainder and its I/O carries the budget's signal
@@ -178,6 +185,7 @@ Four services. `CongressApiService` backs nine tools and the House branch of `co
 
 **`CongressApiService`** — wraps the Congress.gov REST API v3:
 - API key via `X-Api-Key` header (never logged; kept out of the URL so it can't leak in upstream error messages)
+- Every path value is percent-encoded as one segment (the `apiPath` tag), and `buildUrl` refuses empty and dot segments before any request
 - Pagination: `offset` + `limit` query params, max 250 per request
 - Rate limiting: rolling process-local attempt budgets, reserved before every dispatch (failures, retries, concurrent calls included). Credential fallbacks are demo 30/hour + 50/day and registered 5,000/hour; valid upstream hourly headers override the fallback. Observed remaining is a conservative shared-quota bound, expires one local hour after observation, and never claims an upstream reset time. Other clients are outside local accounting
 - Response normalization: request `format=json`, return typed data
@@ -188,7 +196,11 @@ Four services. `CongressApiService` backs nine tools and the House branch of `co
 - The whole session menu is one file; each vote's roster ships inline — pagination is client-side
 - The host returns HTTP 200 with an HTML page for unknown congress/session/vote, so "not found" is detected from the body, not the status code
 - Party totals are derived from the roster (the feed publishes none)
-- senate.gov's firewall answers automated clients with HTTP 403, and a retry meets the same refusal: a 403 fails on the first attempt as `upstream_error` with `retryable: false` and a hint that House votes are unaffected, while a 5xx or timeout is retried within the call budget
+- senate.gov's firewall answers automated clients with HTTP 403 (or a firewall page — "Senate.gov - Unauthorized" or "Access Denied" — with a 200; `REFUSAL_PAGE_RE`), and a retry meets the same refusal: a 403 ends the LIS attempt at once, with no retry, and hands the call to the Voteview fallback below, while a 5xx or timeout is retried within the call budget first. A 403 the call falls back from is an expected status for `fetchWithTimeout` (logged at debug, never with the page body) and is noted once by the service. Before the 101st Congress, which has no fallback, the 403 is logged at error and surfaces as `upstream_error` with `retryable: false`
+- **Voteview fallback** (`voteview-source.ts`, `voteview-parse.ts`, `csv.ts`): when the LIS feed can't answer — that refusal, another 4xx, a 5xx or timeout after its retries, an empty body (every `ServiceUnavailable` the feed raises) — `list`/`get`/`members` are served from Voteview's per-congress files (`rollcalls`, `votes`, `members` CSVs under `voteview.com/static/data/out/`) under the same call budget, and the result carries `source` (`name`, `url`, `congress`, `latestVote`, `citation`; `VOTEVIEW_CITATION` is the citation Voteview asks for). The LIS feed's own not-found page, a caller cancellation, a spent call budget, and any congress before the 101st never fall back
+- The three files of a congress load together (`FILE_TIMEOUT_MS` 20 s each, 2 attempts), parse once, and are cached 1 hour (`CACHE_TTL_MS`) in a cache bounded by the bytes each parsed congress retains (`VOTEVIEW_CACHE_MAX_BYTES`, 16 MiB, LRU). Concurrent calls share one load; each waits under its own call budget and cancellation, and the load aborts only when no caller is left waiting. A failed load is not cached
+- Voteview's `session` and `clerk_rollnumber` columns carry the Senate's own numbering, so a vote is addressed the same way on both sources. Roster rows carry `bioguideId` from the members file; the President's positions in the votes file are dropped. Voteview adds votes after the Senate takes them: a vote past its latest is `not_found` naming that vote, never a guessed record. Both sources failing is `upstream_error` (`ServiceUnavailable`); a Voteview body that breaks off mid-read is a transient failure, retried once. A Voteview 429 is never retried: it reaches the caller as `rate_limited` (`RateLimited`) naming Voteview, with `retryAfter` when Voteview sent one. A cancellation stays `RequestCancelled`
+- The `bioguideId` filter on a Senate `members` call stays rejected whichever source answers, so a filter's acceptance never depends on which upstream served the call
 
 **`CongressDocumentsService`** — reads the document bodies behind Congress.gov's format URLs (`www.congress.gov`):
 - A second host, so a sibling service rather than a method on `CongressApiService` — no API key, no JSON, and enrolled omnibus bills that run to ten megabytes
@@ -197,12 +209,15 @@ Four services. `CongressApiService` backs nine tools and the House branch of `co
 - The body is extracted as it streams and only the requested window is extracted into memory; the ceiling bounds how long a response may run, not how much of one fits in a buffer (transient allocation still scales with the body — peak RSS runs above a buffered read)
 - A document that runs past its window keeps its decompressed body in `DocumentBodyCache` — process-local, one cache for every tenant (each body is public and fetched without credentials), 64 MB LRU, 16 MB per body (a larger one is captured until it passes that and then dropped), 10-minute TTL from insert — and later windows replay those bytes through the same extractor in 128 KiB slices with a macrotask between them: one fetch per document per TTL, and a replay never spends the budget. A window that reaches the end of its document caches nothing, a cancelled read caches nothing, and concurrent cold reads each fetch (no single-flight)
 - The structured response is bounded by an exact character window — `structuredContent.content.text` and its offsets index the extracted plain text and are never snapped to section breaks, so feeding `nextOffset` back walks a document with no overlap and no gap; `content[]` wraps that unchanged window in a dynamically safe Markdown fence for presentation
-- `extract-text.ts` unwraps GPO's `<pre>` print output verbatim (whitespace is the document's structure), while no-`<pre>` XML gains one space only at an otherwise-unseparated sibling close→open element boundary; both readings decode character references through `src/utils/character-references.ts` — the one decoder every HTML/XML → text path in the server shares, single-pass so an escaped reference stays escaped — and `extract-text-stream.ts` is their incremental twin, pinned byte-for-byte against the whole-string extractor
+- The caller names the reading (`reading`, no default): `gpo` for GPO publications (bill text, amendment text, committee reports, Record articles), `html` for CRS pages; the body never decides, and the cache holds bytes and replays them with each call's reading
+- `extract-text.ts` unwraps GPO's `<pre>` print output verbatim under the `gpo` reading (whitespace is the document's structure), while no-`<pre>` XML gains one space only at an otherwise-unseparated sibling close→open element boundary; the `html` reading drops tags with script, style, and comments, lays out blocks, and renders table rows as tab-separated cells. All readings decode character references through `src/utils/character-references.ts` — the one decoder every HTML/XML → text path in the server shares, single-pass so an escaped reference stays escaped — and `extract-text-stream.ts` is their incremental twin, pinned byte-for-byte against the whole-string extractor
 
 **`CongressMirrorService`** — local SQLite FTS5 mirror of bill title + CRS summary text, backing `congressgov_search_bills` only:
 - Opt-in via `CONGRESS_MIRROR_ENABLED` (off by default); built out-of-band via the `mirror:init`/`mirror:refresh` scripts, never on server startup
-- No live-API fallback — ingests through the existing `CongressApiService`, and a mirror that hasn't finished its initial build returns an empty result with a notice, not an error
-- Every sync re-walks each congress's whole summaries list, requested from January 1 of the congress's first year with no end date (without `fromDateTime`, Congress.gov returns only the last day's summaries); the `updateDate` checkpoint is persisted only once the whole walk finishes; store spec `version: 2` migrates an older store by clearing its checkpoint, so the next sync backfills
+- No live-API fallback — ingests through the existing `CongressApiService`, and a mirror that hasn't finished its initial build returns an empty result with a notice, not an error; a `congress` outside the mirrored window returns an empty result with a notice too, and every response names the window in `mirroredCongresses`
+- Every sync re-walks each congress's whole summaries list, requested from January 1 of the congress's first year with no end date (without `fromDateTime`, Congress.gov returns only the last day's summaries)
+- The bill list is walked without offset paging (offset 0, limit 250, `sort=updateDate asc`; a cursor day with `fromDateTime` one second before it); a full page of one date walks that UTC day in halved exclusive-bound windows, and a one-second window over 250 fails the sync
+- The checkpoint is `YYYY-MM-DD|congresses` (descending, zero-padded), persisted only when a run finishes; refresh walks covered congresses from the checkpoint day and uncovered configured congresses from their start; store spec `version: 3` clears the checkpoint so the next refresh re-walks every congress
 - The `mirror:*` scripts initialize the framework logger: log lines go to stderr as JSON, stdout carries only the script's own output
 - `createApp({ teardown })` stops the refresh schedule, cancels and awaits an active refresh, then closes the SQLite mirror. With `MCP_SESSION_MODE` unset, HTTP defaults to stateless; an explicit `MCP_SESSION_MODE` value still overrides it. No handler uses `ctx.requestInput`.
 
@@ -222,7 +237,9 @@ async handler(input, ctx) {
 
 ## Error Patterns
 
-`identityErrorContracts` declares `incompatible_identity` (`ValidationError`, -32007) only on bill lookup, roll votes, nominations, CRS reports, committee reports, and daily record. Their `list` handlers reject meaningful entity identifiers before any service call, preserving the explicit operation and harmless pagination/defaulted selectors. Optional blank string identities remain unset. Bill `type`/`number` and CRS `id`/`reportId`/`report_id` aliases normalize before that check; collisions retain the framework's rejection policy. Bill types and `relatedbills` values normalize through schema-preserving preprocessors.
+`identityErrorContracts` declares `incompatible_identity` (`ValidationError`, -32007) on ten tools: bill lookup, amendment lookup, roll votes, nominations, CRS reports, committee reports, daily record, member lookup, enacted laws, and committee lookup. Their `list` handlers reject meaningful entity identifiers before any service call (bill `billNumber`, amendment `amendmentNumber`, vote `voteNumber`, member `bioguideId`, law `lawNumber`, committee `committeeCode` — a name is pointed at `filter` — nomination `nominationNumber`, CRS and committee report `reportNumber`, committee report `part`, Record `volumeNumber`), preserving the explicit operation and harmless pagination/defaulted selectors. Optional blank string identities remain unset. Bill `type`/`number` and CRS `id`/`reportId`/`report_id` aliases normalize before that check, CRS `reportNumber` is trimmed and upper-cased, and `nominationNumber` has `PN` stripped; collisions retain the framework's rejection policy. Bill types and `relatedbills` values normalize through schema-preserving preprocessors. `committeeCode` must contain a letter or digit.
+
+Inputs an operation doesn't use (member `congress`/`stateCode`/`district`/`currentMember`, committee `congress`/`filter`, bill_lookup `fromDateTime`/`toDateTime`, roll_votes `bioguideId`/`stateCode`/`party` on `list`/`get`, the date pair on CRS, nomination, and committee-report detail operations) are served with a composed notice via `noticeIgnoredInputs`/`addNotice`. `ctx.enrich.notice` is last-wins, so every notice in a handler goes through `addNotice`. `unsupported_filter` (`ValidationError`) is raised by a Senate `members` call that filters by `bioguideId`, whichever source answers (the LIS feed identifies senators by its own member IDs). A House `get`/`members` below `HOUSE_VOTE_FIRST_CONGRESS` (115) fails `not_found` before any request, naming the coverage and pointing at the Clerk vote XML in bill actions' `recordedVotes`.
 
 All tools share these patterns. The service layer handles them uniformly:
 
@@ -237,7 +254,7 @@ All tools share these patterns. The service layer handles them uniformly:
 | Invalid params | `validationError('...', { field })` |
 | Network error | `ServiceUnavailable` (-32000), `upstream_error`: `Congress.gov returned an unexpected error.` |
 
-The `content` operation adds `documentErrorContracts` (tool-helpers) on top: `document_unavailable`, `format_unavailable`, `document_fetch_failed`, `document_too_large`, and `offset_past_end` — the last of which `congressgov_bill_lookup` also raises from its `summaries` branch when `characterOffset` is past the end of every returned row's text. `CongressDocumentsService` raises each with a matching `data.reason`; the framework fills the declared `recovery` hint when the throw carries none, service throws included. Explicit recovery overrides win. A direct `definition.handler(...)` test sees the throw unchanged; retain `ctx.recoveryFor` where such a test asserts the hint, or assert the filled hint through `runToolContract`.
+The `content` operation adds `documentErrorContracts` (tool-helpers) on top, on all five `content` tools: `document_unavailable`, `format_unavailable`, `document_fetch_failed`, `document_too_large`, and `offset_past_end` — the last of which `congressgov_bill_lookup` also raises from its `summaries` branch when `characterOffset` is past the end of every returned row's text. `CongressDocumentsService` raises each with a matching `data.reason`; the framework fills the declared `recovery` hint when the throw carries none, service throws included. Explicit recovery overrides win. A direct `definition.handler(...)` test sees the throw unchanged; retain `ctx.recoveryFor` where such a test asserts the hint, or assert the filled hint through `runToolContract`.
 
 Service-only contract reasons carry `thrownBy: 'service'`; handler-local reasons remain checked by `error-contract-unthrown`. `RequestCancelled` is a baseline code and needs no contract entry. Retry predicates compose `defaultIsTransient` with the existing exclusion of `RateLimited` codes and preserve upstream `retryable: false`.
 
