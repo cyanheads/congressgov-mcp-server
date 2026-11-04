@@ -5,7 +5,7 @@
  * client sees. The detail-view half of this invariant is covered by
  * `format-helpers-fidelity.test.ts`.
  *
- * Resolves cyanheads/congressgov-mcp-server#55.
+ * Resolves cyanheads/congressgov-mcp-server#55, #100.
  *
  * @module tests/mcp-server/tools/format-helpers-list-fidelity.test
  */
@@ -13,6 +13,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  formatAmendments,
   formatBills,
   formatCommitteeReports,
   formatCommittees,
@@ -645,6 +646,21 @@ const listRenderers: Array<{
     render: formatSearchBills,
     row: { billId: '119/hr/1', billType: 'hr', billNumber: 1, congress: 119, title: 'Act' },
   },
+  {
+    name: 'amendment list',
+    render: formatAmendments,
+    row: { type: 'HAMDT', number: '549', congress: 118, purpose: 'To strike a definition.' },
+  },
+  {
+    name: 'amendment action',
+    render: formatAmendments,
+    row: { actionDate: '2023-07-14', text: 'Amendment (A040) offered by Mr. Roy.', type: 'Floor' },
+  },
+  {
+    name: 'amendment text version',
+    render: formatAmendments,
+    row: { type: 'Submitted', formats: [{ type: 'HTML', url: 'https://example.gov/a.htm' }] },
+  },
 ];
 
 describe('#55 — every hand-built list renderer falls through to unnamed fields', () => {
@@ -740,6 +756,7 @@ describe('#55 — boundaries hold for the touched list renderers', () => {
     ['votes', formatVotes],
     ['nominations', formatNominations],
     ['bill search', formatSearchBills],
+    ['amendments', formatAmendments],
   ];
 
   for (const [name, format] of formatters) {

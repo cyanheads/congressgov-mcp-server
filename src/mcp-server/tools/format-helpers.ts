@@ -28,6 +28,7 @@
  */
 
 import { decodeCharacterReferences } from '@/utils/character-references.js';
+import { ordinal } from '@/utils/congress-calendar.js';
 
 type TextBlock = { type: 'text'; text: string };
 type ItemRenderer = (item: Record<string, unknown>, index: number) => string;
@@ -367,15 +368,20 @@ function latestActionLine(item: Record<string, unknown>): string | undefined {
 }
 
 /**
- * The `congressgov_roll_votes` call a nomination action's `rollVote` names, as one
- * line. `congressgov_senate_nominations` derives `rollVote` from an action that cites
- * its own Senate record vote; Congress.gov publishes none, so a bill action (which
- * carries `recordedVotes` instead) never reaches this line.
+ * The `congressgov_roll_votes` call an action's `rollVote` names, as one line labeled
+ * with the vote's chamber. Congress.gov publishes no `rollVote`:
+ * `congressgov_senate_nominations` derives it from an action that cites its own
+ * Senate record vote, and `congressgov_bill_lookup` from the one vote a bill
+ * action's `recordedVotes` holds (which still renders beneath, whole).
  */
 function rollVoteLine(rollVote: unknown): string | undefined {
   if (!rollVote || typeof rollVote !== 'object' || Array.isArray(rollVote)) return;
+  const chamber = s(rollVote, 'chamber');
+  const label = chamber
+    ? `${chamber.charAt(0).toUpperCase()}${chamber.slice(1)} Roll Vote`
+    : 'Roll Vote';
   const args = ROLL_VOTE_ARGUMENTS.map((key) => `${key}=${s(rollVote, key)}`).join(', ');
-  return `**Senate Roll Vote:** congressgov_roll_votes ${args}`;
+  return `**${label}:** congressgov_roll_votes ${args}`;
 }
 
 const ROLL_VOTE_ARGUMENTS = ['chamber', 'congress', 'session', 'voteNumber'];
@@ -840,7 +846,10 @@ function renderBillActionItem(item: Record<string, unknown>, i: number): string 
   const text = s(item, 'text') ?? 'No text';
   const type = s(item, 'type');
   const actionCode = s(item, 'actionCode');
-  const source = s(item, 'sourceSystem', 'name');
+  const sourceName = s(item, 'sourceSystem', 'name');
+  const sourceCode = s(item, 'sourceSystem', 'code');
+  const source =
+    sourceCode === undefined ? sourceName : `${sourceName ?? 'Source system'} (code ${sourceCode})`;
 
   const heading = actionDate ? `${actionDate} — ${text}` : text;
   const lines = [`### ${i + 1}. ${heading}`];
@@ -903,12 +912,12 @@ function renderAmendmentItem(item: Record<string, unknown>, i: number): string {
   const number = s(item, 'amendmentNumber');
   const url = s(item, 'url') ?? '';
   /** URL path carries the chamber prefix (samdt / hamdt) we need for a readable type label. */
-  const amdMatch = url.match(/\/amendment\/(\d+)\/(samdt|hamdt|suamdt|huamdt)\//i);
+  const amdMatch = url.match(/\/amendment\/(\d+)\/(samdt|hamdt|suamdt)\//i);
   const typeCode = amdMatch?.[2]?.toLowerCase();
   const chamber =
     typeCode === 'samdt' || typeCode === 'suamdt'
       ? 'Senate Amendment'
-      : typeCode === 'hamdt' || typeCode === 'huamdt'
+      : typeCode === 'hamdt'
         ? 'House Amendment'
         : 'Amendment';
   const heading = number ? `${chamber} ${number}` : 'Amendment';
@@ -1285,10 +1294,54 @@ function renderMemberVoteRow(r: Record<string, unknown>): string {
 const MEMBER_VOTE_ROW_KEYS = ['firstName', 'lastName', 'voteParty', 'voteState', 'voteCast'];
 
 /**
- * Member voting positions for one roll call — vote-context header, the
- * `pagination`-derived range footer, then the paginated roster from `data[]`.
- * The `vote` sibling carries the vote record (sans the roster); `get` adds party
- * totals this `/members` endpoint omits.
+ * "117th Congress, session 1" for a members header. A congress that isn't an
+ * integer renders as published rather than as an ordinal it can't be.
+ */
+function rosterScope(congress: string | undefined, session: string | undefined): string {
+  const congressNumber = Number(congress);
+  const congressLabel = congress
+    ? `${Number.isSafeInteger(congressNumber) ? ordinal(congressNumber) : congress} Congress`
+    : undefined;
+  return join([congressLabel, session ? `session ${session}` : undefined], ', ');
+}
+
+/** The `memberFilter` terms `congressgov_roll_votes` echoes, in its order. */
+const MEMBER_FILTER_TERMS = ['bioguideId', 'stateCode', 'party'];
+
+/**
+ * The `**Filter:**` line a filtered roster leads with — its terms, and how many of
+ * the vote's recorded positions (`rosterCount`) they match — or undefined on an
+ * unfiltered roster, which carries no `memberFilter`.
+ */
+function rosterFilterLine(result: Record<string, unknown>, matched: number): string | undefined {
+  const filter = result.memberFilter;
+  if (!filter || typeof filter !== 'object' || Array.isArray(filter)) return;
+  const terms = MEMBER_FILTER_TERMS.flatMap((key) => {
+    const value = s(filter, key);
+    return value ? [`${key}=${value}`] : [];
+  });
+  const rosterCount = s(filter, 'rosterCount');
+  return `**Filter:** ${terms.join(', ')} — matches ${matched} of ${rosterCount} member position${rosterCount !== '1' ? 's' : ''}`;
+}
+
+/**
+ * The line an empty roster page renders: a page past the end of the (matching)
+ * positions, a filter that matched none of them, or a vote with none recorded.
+ */
+function emptyRosterLine(total: number, filtered: boolean): string {
+  if (total > 0) {
+    return `_Page is empty — offset is past the end of ${total} ${filtered ? 'matching ' : ''}member position${total !== 1 ? 's' : ''}._`;
+  }
+  return filtered
+    ? '_No member position on this roll call matches the filter._'
+    : '_No member positions recorded for this roll call._';
+}
+
+/**
+ * Member voting positions for one roll call — vote-context header, the filter a
+ * filtered roster applied, the `pagination`-derived range footer, then the
+ * paginated roster from `data[]`. The `vote` sibling carries the vote record (sans
+ * the roster); `get` adds party totals this `/members` endpoint omits.
  */
 function renderVoteMembers(result: Record<string, unknown>): string {
   const vote = (result.vote ?? {}) as Record<string, unknown>;
@@ -1298,13 +1351,8 @@ function renderVoteMembers(result: Record<string, unknown>): string {
   const nextOffset = pagination?.nextOffset as number | null | undefined;
 
   const roll = s(vote, 'rollCallNumber');
-  const congress = s(vote, 'congress');
-  const session = s(vote, 'sessionNumber');
   const rollLabel = roll ? `Roll ${roll}` : 'Roll call';
-  const scope = join(
-    [congress ? `${congress}th Congress` : undefined, session ? `session ${session}` : undefined],
-    ', ',
-  );
+  const scope = rosterScope(s(vote, 'congress'), s(vote, 'sessionNumber'));
   const lines = [`# ${scope ? `${rollLabel} — ${scope}` : rollLabel}`];
 
   const context = join(
@@ -1319,13 +1367,11 @@ function renderVoteMembers(result: Record<string, unknown>): string {
   const voteRest = renderDetailRest(vote, VOTE_CONTEXT_KEYS);
   if (voteRest) lines.push('', voteRest);
 
+  const filterLine = rosterFilterLine(result, total);
+  if (filterLine) lines.push('', filterLine);
+
   if (rows.length === 0) {
-    lines.push(
-      '',
-      total > 0
-        ? `_Page is empty — offset is past the end of ${total} member position${total !== 1 ? 's' : ''}._`
-        : '_No member positions recorded for this roll call._',
-    );
+    lines.push('', emptyRosterLine(total, filterLine !== undefined));
     return lines.join('\n');
   }
 
@@ -1356,10 +1402,10 @@ const VOTE_CONTEXT_KEYS = new Set([
   'legislationNumber',
 ]);
 
-// ── Senate roll call votes (LIS feed) ───────────────────────────────
+// ── Senate roll call votes (LIS feed or Voteview) ───────────────────
 
 /**
- * Senate vote payloads come from the LIS XML feed, not the Congress.gov JSON API,
+ * Senate vote payloads come from the LIS XML feed or Voteview's CSV files, not the Congress.gov JSON API,
  * so they carry a distinct field set (and a `chamber: 'senate'` marker). These
  * renderers handle that shape; `formatVotes` routes to them via `isSenateResult`.
  */
@@ -1431,8 +1477,11 @@ function renderSenateMemberRow(r: Record<string, unknown>): string {
   const named = new Set([...SENATE_MEMBER_ROW_KEYS, 'firstName', 'lastName', 'party', 'state']);
   const first = s(r, 'firstName');
   const last = s(r, 'lastName');
+  /** `name` is Voteview's surname-first form ("BALDWIN, Tammy"); LIS rows carry first and last. */
   const name =
-    (first && last ? `${first} ${last}` : (last ?? first)) ?? pick(r, named, 'lisMemberId') ?? '?';
+    (first && last ? `${first} ${last}` : (last ?? first)) ??
+    pick(r, named, 'name', 'lisMemberId') ??
+    '?';
   const party = s(r, 'party');
   const state = s(r, 'state');
   const loc =
@@ -1466,8 +1515,9 @@ function renderSenateVoteDetail(item: Record<string, unknown>): string {
   const meta = join([
     f('Congress', s(item, 'congress')),
     f('Session', s(item, 'session')),
-    f('Date', s(item, 'voteDate')),
+    f('Date', senateVoteDate(item)),
     f('Majority Required', s(item, 'majorityRequirement')),
+    f('Issue', s(item, 'issue')),
   ]);
   if (meta) lines.push(meta);
 
@@ -1531,7 +1581,8 @@ function renderSenateVoteDetail(item: Record<string, unknown>): string {
 /**
  * `chamber` is implicit in the "Senate Vote" heading; `voteResult` / `question`
  * are the short forms of `voteResultText` / `voteQuestionText`, one of which the
- * header always renders.
+ * header always renders. `voteDateIso` and `issue` are what a Voteview-served
+ * vote carries in place of the LIS timestamp and document.
  */
 const HEADER_SENATE_VOTE_KEYS = new Set([
   'chamber',
@@ -1544,6 +1595,8 @@ const HEADER_SENATE_VOTE_KEYS = new Set([
   'congress',
   'session',
   'voteDate',
+  'voteDateIso',
+  'issue',
   'majorityRequirement',
   'count',
   'partyTotals',
@@ -1561,13 +1614,8 @@ function renderSenateVoteMembers(result: Record<string, unknown>): string {
   const nextOffset = pagination?.nextOffset as number | null | undefined;
 
   const num = s(vote, 'voteNumber');
-  const congress = s(vote, 'congress');
-  const session = s(vote, 'session');
   const label = num ? `Senate Vote ${num}` : 'Senate roll call';
-  const scope = join(
-    [congress ? `${congress}th Congress` : undefined, session ? `session ${session}` : undefined],
-    ', ',
-  );
+  const scope = rosterScope(s(vote, 'congress'), s(vote, 'session'));
   const lines = [`# ${scope ? `${label} — ${scope}` : label}`];
 
   const context = join(
@@ -1586,13 +1634,11 @@ function renderSenateVoteMembers(result: Record<string, unknown>): string {
   const voteRest = renderDetailRest(vote, SENATE_VOTE_CONTEXT_KEYS);
   if (voteRest) lines.push('', voteRest);
 
+  const filterLine = rosterFilterLine(result, total);
+  if (filterLine) lines.push('', filterLine);
+
   if (rows.length === 0) {
-    lines.push(
-      '',
-      total > 0
-        ? `_Page is empty — offset is past the end of ${total} member position${total !== 1 ? 's' : ''}._`
-        : '_No member positions recorded for this roll call._',
-    );
+    lines.push('', emptyRosterLine(total, filterLine !== undefined));
     return lines.join('\n');
   }
 
@@ -2048,6 +2094,11 @@ const BILL_SUMMARY_SUBRESOURCE_ROW_KEYS = [
   ...SUMMARY_WINDOW_KEYS,
 ];
 
+/** Actions always ship a `text` body; most also carry actionDate/actionCode/sourceSystem. */
+function isActionRow(row: Record<string, unknown>): boolean {
+  return 'text' in row && ('actionDate' in row || 'actionCode' in row || 'sourceSystem' in row);
+}
+
 function pickBillListRenderer(first: Record<string, unknown>): ItemRenderer | undefined {
   if ('title' in first && 'number' in first) return renderBillItem;
   /** Bill text versions: `type` + `formats[]`, no `actionDate`. */
@@ -2056,13 +2107,121 @@ function pickBillListRenderer(first: Record<string, unknown>): ItemRenderer | un
   if ('text' in first && ('actionDesc' in first || 'versionCode' in first)) {
     return renderBillSubresourceSummaryItem;
   }
-  /** Actions always ship a `text` body; most also carry actionDate/actionCode/sourceSystem. */
-  if (
-    'text' in first &&
-    ('actionDate' in first || 'actionCode' in first || 'sourceSystem' in first)
-  )
-    return renderBillActionItem;
+  if (isActionRow(first)) return renderBillActionItem;
   return;
+}
+
+/**
+ * One amendment as a browse row or a row of amendments to an amendment: the
+ * `type` + `number` congressgov_amendment_lookup takes, then its purpose (House
+ * and proposed Senate amendments) and description (House only), each when present.
+ */
+function renderAmendmentListItem(item: Record<string, unknown>, i: number): string {
+  const type = s(item, 'type')?.toUpperCase();
+  const number = s(item, 'number');
+  const lines = [`### ${i + 1}. ${type && number ? `${type} ${number}` : 'Amendment'}`];
+
+  const meta = join([f('Congress', s(item, 'congress')), f('Updated', s(item, 'updateDate'))]);
+  if (meta) lines.push(meta);
+  const purpose = s(item, 'purpose');
+  if (purpose) lines.push(`**Purpose:** ${purpose}`);
+  const description = s(item, 'description');
+  if (description) lines.push(`**Description:** ${description}`);
+  const latestAction = latestActionLine(item);
+  if (latestAction) lines.push(latestAction);
+  const url = s(item, 'url');
+  if (url) lines.push(`**URL:** ${url}`);
+
+  return withRowRest(item, lines, AMENDMENT_LIST_ROW_KEYS);
+}
+
+const AMENDMENT_LIST_ROW_KEYS = new Set([
+  'type',
+  'number',
+  'congress',
+  'updateDate',
+  'purpose',
+  'description',
+  'latestAction',
+  'url',
+]);
+
+/**
+ * Amendment detail — identity, dates, purpose, description, and latest action,
+ * then every other field (sponsors, the amended bill or amendment, sub-resource
+ * counts) through the detail fall-through.
+ */
+function renderAmendmentDetail(item: Record<string, unknown>): string {
+  const type = s(item, 'type')?.toUpperCase();
+  const number = s(item, 'number');
+  const lines = [`# ${type && number ? `${type} ${number}` : 'Amendment'}`];
+
+  const meta = join([
+    f('Congress', s(item, 'congress')),
+    f('Chamber', s(item, 'chamber')),
+    f('Submitted', s(item, 'submittedDate')),
+    f('Proposed', s(item, 'proposedDate')),
+    f('Updated', s(item, 'updateDate')),
+  ]);
+  if (meta) lines.push(meta);
+  const purpose = s(item, 'purpose');
+  if (purpose) lines.push(`**Purpose:** ${purpose}`);
+  const description = s(item, 'description');
+  if (description) lines.push(`**Description:** ${description}`);
+  const latestAction = latestActionLine(item);
+  if (latestAction) lines.push(latestAction);
+
+  const rest = renderDetailRest(item, HEADER_AMENDMENT_KEYS);
+  if (rest) lines.push('', rest);
+  return lines.join('\n');
+}
+
+const HEADER_AMENDMENT_KEYS = new Set([
+  'type',
+  'number',
+  'congress',
+  'chamber',
+  'submittedDate',
+  'proposedDate',
+  'updateDate',
+  'purpose',
+  'description',
+  'latestAction',
+]);
+
+/**
+ * Amendment sub-resource rows: text versions (`formats[]`) and actions read the
+ * way the bill's do; browse rows and amendments to an amendment carry
+ * `type` + `number`. Cosponsors render through the generic row.
+ */
+function pickAmendmentListRenderer(first: Record<string, unknown>): ItemRenderer | undefined {
+  if ('formats' in first) return renderBillTextItem;
+  if (isActionRow(first)) return renderBillActionItem;
+  if ('type' in first && 'number' in first) return renderAmendmentListItem;
+  return;
+}
+
+/**
+ * Amendment browse, detail, sub-resources, and `content`. Each root renders on
+ * its own presence: a response carries one, and a result carrying several
+ * renders them all rather than dropping one.
+ */
+export function formatAmendments(result: Record<string, unknown>): TextBlock[] {
+  const sections: string[] = [];
+  if (Array.isArray(result.data)) {
+    const first = result.data[0];
+    const renderer =
+      typeof first === 'object' && first !== null
+        ? pickAmendmentListRenderer(first as Record<string, unknown>)
+        : undefined;
+    sections.push(renderList(result, renderer));
+  }
+  if (result.amendment != null && typeof result.amendment === 'object') {
+    sections.push(renderAmendmentDetail(result.amendment as Record<string, unknown>));
+  }
+  const content = documentContentOf(result);
+  if (content) sections.push(renderDocumentContent(content));
+  return tb(sections.length > 0 ? sections.join('\n\n') : renderDetail(result));
 }
 
 /** CRS bill summaries — "what's happening in Congress". */
@@ -2168,23 +2327,36 @@ export function formatCommittees(result: Record<string, unknown>): TextBlock[] {
   return tb(renderDetail(result));
 }
 
-/** Committee reports — list, detail, and text. */
-export function formatCommitteeReports(result: Record<string, unknown>): TextBlock[] {
-  if (Array.isArray(result.data)) return tb(renderList(result, renderCommitteeReportListItem));
+/** One committee report response's body: a list, a document window, its text formats, or its record. */
+function renderCommitteeReportBody(result: Record<string, unknown>): string {
+  if (Array.isArray(result.data)) return renderList(result, renderCommitteeReportListItem);
   const content = documentContentOf(result);
-  if (content) return tb(renderDocumentContent(content));
+  if (content) return renderDocumentContent(content);
   if (Array.isArray(result.text)) {
     const textResult = { data: result.text, pagination: { count: result.text.length } };
-    return tb(renderList(textResult, renderCommitteeReportTextItem));
+    return renderList(textResult, renderCommitteeReportTextItem);
   }
-  if (result.report != null) return tb(renderDetail(result.report));
-  if (result.text != null) return tb(renderDetail(result.text));
-  return tb(renderDetail(result));
+  if (result.report != null) return renderDetail(result.report);
+  if (result.text != null) return renderDetail(result.text);
+  return renderDetail(result);
 }
 
-/** CRS policy analysis reports. */
+/**
+ * Committee reports — list, detail, text, and content. A multi-part report's
+ * `get`, `text`, and `content` responses carry its part numbers, rendered after
+ * whichever body the response holds.
+ */
+export function formatCommitteeReports(result: Record<string, unknown>): TextBlock[] {
+  const body = renderCommitteeReportBody(result);
+  const parts = Array.isArray(result.parts) ? result.parts : [];
+  return tb(parts.length > 0 ? `${body}\n\n**Parts:** ${parts.join(', ')}` : body);
+}
+
+/** CRS policy analysis reports — list, detail, and content. */
 export function formatCrsReports(result: Record<string, unknown>): TextBlock[] {
   if (Array.isArray(result.data)) return tb(renderList(result, renderCrsReportItem));
+  const content = documentContentOf(result);
+  if (content) return tb(renderDocumentContent(content));
   if (result.report != null)
     return tb(renderCrsReportDetail(result.report as Record<string, unknown>));
   return tb(renderDetail(result));
@@ -2212,8 +2384,8 @@ export const formatLaws = makeFormatter(['law'], renderBillItem, renderBillDetai
 
 /**
  * Roll call votes and member voting positions for both chambers. House payloads
- * come from the Congress.gov JSON API; Senate payloads from the LIS XML feed and
- * carry a `chamber: 'senate'` marker — dispatch to the matching renderer set.
+ * come from the Congress.gov JSON API; Senate payloads from the LIS XML feed or
+ * Voteview's CSV files and carry a `chamber: 'senate'` marker — dispatch to the matching renderer set.
  */
 export function formatVotes(result: Record<string, unknown>): TextBlock[] {
   const senate = isSenateResult(result);

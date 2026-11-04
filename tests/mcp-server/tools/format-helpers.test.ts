@@ -372,6 +372,103 @@ describe('formatVotes (issue #4)', () => {
     expect(text).not.toContain('next offset');
     expect(text).toContain('- Buck (R-CO) → Nay');
   });
+
+  it('writes the congress as an English ordinal in the members header (issue #94)', () => {
+    const text = textOf(
+      formatVotes({
+        data: [{ bioguideId: 'B001297', lastName: 'Buck', voteCast: 'Nay' }],
+        pagination: { count: 1, nextOffset: null },
+        vote: { rollCallNumber: 5, congress: 121, sessionNumber: 1, result: 'Passed' },
+      }),
+    );
+    expect(text).toContain('# Roll 5 — 121st Congress, session 1');
+    expect(text).not.toContain('121th');
+  });
+});
+
+describe('formatVotes — filtered House rosters (issue #102)', () => {
+  /** Real /house-vote/117/1/369/members context and Jayapal's row, as the service normalizes it. */
+  const vote = {
+    rollCallNumber: 369,
+    congress: 117,
+    sessionNumber: 1,
+    voteQuestion: 'On Motion to Concur in the Senate Amendment',
+    result: 'Passed',
+    legislationType: 'HR',
+    legislationNumber: '3684',
+  };
+  const jayapal = {
+    bioguideId: 'J000298',
+    firstName: 'Pramila',
+    lastName: 'Jayapal',
+    voteCast: 'Yea',
+    voteParty: 'D',
+    voteState: 'WA',
+  };
+
+  it('renders an unfiltered roster with no filter line', () => {
+    const text = textOf(
+      formatVotes({ data: [jayapal], pagination: { count: 434, nextOffset: 1 }, vote }),
+    );
+    expect(text).toContain('**Members 1–1 of 434** · next offset: 1');
+    expect(text).not.toContain('Filter');
+  });
+
+  it('names the filter and how many of the roster’s positions it matched', () => {
+    const text = textOf(
+      formatVotes({
+        data: [jayapal],
+        pagination: { count: 1, nextOffset: null },
+        vote,
+        memberFilter: { bioguideId: 'J000298', rosterCount: 434 },
+      }),
+    );
+    expect(text).toContain('**Filter:** bioguideId=J000298 — matches 1 of 434 member positions');
+    expect(text).toContain('**Members 1–1 of 1**');
+    expect(text).toContain('- Pramila Jayapal (D-WA) → Yea');
+  });
+
+  it('lists every filter term in a fixed order', () => {
+    const text = textOf(
+      formatVotes({
+        data: [jayapal],
+        pagination: { count: 7, nextOffset: 1 },
+        vote,
+        memberFilter: { party: 'D', stateCode: 'WA', rosterCount: 434 },
+      }),
+    );
+    expect(text).toContain('**Filter:** stateCode=WA, party=D — matches 7 of 434 member positions');
+    expect(text).toContain('**Members 1–1 of 7** · next offset: 1');
+  });
+
+  it('says no position matched — not that none was recorded — when the filter matches nothing', () => {
+    const text = textOf(
+      formatVotes({
+        data: [],
+        pagination: { count: 0, nextOffset: null },
+        vote,
+        memberFilter: { stateCode: 'ZZ', rosterCount: 434 },
+      }),
+    );
+    expect(text).toContain('**Filter:** stateCode=ZZ — matches 0 of 434 member positions');
+    expect(text).toContain('_No member position on this roll call matches the filter._');
+    expect(text).not.toContain('No member positions recorded');
+  });
+
+  it('counts the matching positions when a filtered page runs past its end', () => {
+    const text = textOf(
+      formatVotes({
+        data: [],
+        pagination: { count: 10, nextOffset: null },
+        vote,
+        memberFilter: { stateCode: 'WA', rosterCount: 434 },
+      }),
+    );
+    expect(text).toContain(
+      '_Page is empty — offset is past the end of 10 matching member positions._',
+    );
+    expect(text).not.toContain('No member position');
+  });
 });
 
 describe('formatBills — actions sub-resource (issue #5)', () => {
@@ -403,7 +500,7 @@ describe('formatBills — actions sub-resource (issue #5)', () => {
     );
     expect(text).toContain('**Type:** Committee');
     expect(text).toContain('**Action Code:** H11000');
-    expect(text).toContain('**Source:** House committee actions');
+    expect(text).toContain('**Source:** House committee actions (code 1)');
     expect(text).toContain('**Committees:** Agriculture Committee');
     expect(text).not.toMatch(/###\s*1\.\s*Item/);
   });
@@ -520,6 +617,89 @@ describe('formatCommitteeReports — text operation (issue #6)', () => {
       }),
     );
     expect(detailText).toContain('**title:** Detail Title');
+  });
+});
+
+describe('formatCommitteeReports — a multi-part report (#95)', () => {
+  const window = {
+    text: 'PART TWO BODY',
+    totalCharacters: 13,
+    offset: 0,
+    truncated: false,
+    nextOffset: null,
+    format: 'text',
+    sourceUrl: 'https://www.congress.gov/117/crpt/hrpt70/generated/CRPT-117hrpt70-pt2.htm',
+    documentTitle: 'Committee Report HRPT 117-70, Part 2',
+  };
+
+  it.each([
+    ['get', { report: { citation: 'H. Rept. 117-70,Part 2', part: 2 } }, 'H. Rept. 117-70,Part 2'],
+    [
+      'text',
+      {
+        text: [
+          {
+            formats: [
+              {
+                isErrata: 'N',
+                type: 'Formatted Text',
+                url: 'https://www.congress.gov/117/crpt/hrpt70/generated/CRPT-117hrpt70-pt2.htm',
+              },
+            ],
+          },
+        ],
+      },
+      'CRPT-117hrpt70-pt2.htm',
+    ],
+    ['content', { content: window }, '# Committee Report HRPT 117-70, Part 2'],
+  ])("renders parts after the '%s' body", (_operation, result, bodyMarker) => {
+    const text = textOf(formatCommitteeReports({ ...result, parts: [1, 2] }));
+    expect(text).toContain(bodyMarker);
+    expect(text.endsWith('\n\n**Parts:** 1, 2')).toBe(true);
+    expect(text.indexOf(bodyMarker)).toBeLessThan(text.indexOf('**Parts:**'));
+  });
+
+  it('renders a single-part response exactly as without the field', () => {
+    for (const result of [{ report: { citation: 'H. Rept. 118-1' } }, { content: window }]) {
+      const text = textOf(formatCommitteeReports(result));
+      expect(text).not.toContain('**Parts:**');
+      expect(textOf(formatCommitteeReports({ ...result, parts: [] }))).toBe(text);
+    }
+  });
+});
+
+describe('formatCrsReports — content (#101)', () => {
+  it('renders the window under the report title with its source and offsets', () => {
+    const text = textOf(
+      formatCrsReports({
+        content: {
+          text: 'Voter Registration\n\nContents',
+          totalCharacters: 4_663,
+          offset: 25,
+          truncated: true,
+          nextOffset: 53,
+          format: 'html',
+          sourceUrl: 'https://www.congress.gov/crs_external_products/R/HTML/R46406.html',
+          documentTitle: 'CRS Report R46406',
+        },
+      }),
+    );
+    expect(text).toContain('# CRS Report R46406');
+    expect(text).toContain('**Format:** html');
+    expect(text).toContain('**Characters 26–53 of 4,663**');
+    expect(text).toContain('next offset: 53');
+    expect(text).toContain(
+      '**Source:** https://www.congress.gov/crs_external_products/R/HTML/R46406.html',
+    );
+    expect(text).toContain('```\nVoter Registration\n\nContents\n```');
+  });
+
+  it('keeps rendering a report record as the detail view', () => {
+    const text = textOf(
+      formatCrsReports({ report: { id: 'R46406', title: 'Voter Registration' } }),
+    );
+    expect(text).toContain('Voter Registration');
+    expect(text).not.toContain('**Format:**');
   });
 });
 
@@ -832,7 +1012,11 @@ describe('empty paginated pages (issue #28)', () => {
 });
 
 describe('Senate roll vote pointer rendering (issue #62)', () => {
-  /** Real row from /bill/117/hr/3684/actions — its text cites a Senate vote, but bill rows carry `recordedVotes`, never `rollVote`. */
+  /**
+   * Real row from /bill/117/hr/3684/actions as Congress.gov serves it — `recordedVotes`
+   * only. `congressgov_bill_lookup` adds `rollVote` before rendering; a row without one
+   * renders exactly as it did before pointers existed.
+   */
   const billSenateAction = {
     actionDate: '2021-08-10',
     recordedVotes: [
@@ -957,5 +1141,56 @@ describe('Senate roll vote pointer rendering (issue #62)', () => {
       `**Latest Action:** 2026-08-07 — ${confirmed.text} — actionTime: 16:42:00\n${pointerLine}`,
     );
     expect(text).not.toContain('rollVote');
+  });
+});
+
+describe('bill action roll vote pointer rendering (issue #102)', () => {
+  /** Real row from /bill/117/hr/3684/actions — House passage, Roll no. 369. */
+  const houseAction = {
+    actionCode: 'H41610',
+    actionDate: '2021-11-05',
+    actionTime: '23:27:28',
+    recordedVotes: [
+      {
+        chamber: 'House',
+        congress: 117,
+        date: '2021-11-06T03:27:28Z',
+        rollNumber: 369,
+        sessionNumber: 1,
+        url: 'https://clerk.house.gov/evs/2021/roll369.xml',
+      },
+    ],
+    sourceSystem: { code: 2, name: 'House floor actions' },
+    text: 'On motion that the House agree to the Senate amendment Agreed to by the Yeas and Nays: 228 - 206 (Roll no. 369). (consideration: CR H6230-6231)',
+    type: 'ResolvingDifferences',
+    rollVote: { chamber: 'house', congress: 117, session: 1, voteNumber: 369 },
+  };
+
+  it('labels a House pointer with its chamber and keeps the recorded vote beneath', () => {
+    expect(
+      textOf(formatBills({ data: [houseAction], pagination: { count: 101, nextOffset: 1 } })),
+    ).toBe(
+      '**101 results** | next offset: 1\n\n### 1. 2021-11-05 — On motion that the House agree to the Senate amendment Agreed to by the Yeas and Nays: 228 - 206 (Roll no. 369). (consideration: CR H6230-6231)\n**Type:** ResolvingDifferences | **Action Code:** H41610 | **Source:** House floor actions (code 2)\n**House Roll Vote:** congressgov_roll_votes chamber=house, congress=117, session=1, voteNumber=369\n\n**actionTime:** 23:27:28\n\n**recordedVotes** (1):\n- chamber: House, congress: 117, date: 2021-11-06T03:27:28Z, rollNumber: 369, sessionNumber: 1, url: https://clerk.house.gov/evs/2021/roll369.xml',
+    );
+  });
+
+  it('labels a Senate pointer on a bill action as a Senate roll vote', () => {
+    const text = textOf(
+      formatBills({
+        data: [
+          {
+            actionDate: '2021-08-10',
+            text: 'Passed Senate with an amendment by Yea-Nay Vote. 69 - 30. Record Vote Number: 314.',
+            type: 'Floor',
+            rollVote: { chamber: 'senate', congress: 117, session: 1, voteNumber: 314 },
+          },
+        ],
+        pagination: { count: 1, nextOffset: null },
+      }),
+    );
+    expect(text).toContain(
+      '**Senate Roll Vote:** congressgov_roll_votes chamber=senate, congress=117, session=1, voteNumber=314',
+    );
+    expect(text).not.toContain('House Roll Vote');
   });
 });
