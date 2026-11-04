@@ -32,6 +32,28 @@ describe('billAnalysisPrompt', () => {
     expect(text).toContain('118');
   });
 
+  it.each([
+    ['102', '102nd Congress'],
+    ['121', '121st Congress'],
+    ['113', '113th Congress'],
+  ])('spells congress %s as the %s', async (congress, expected) => {
+    const args = billAnalysisPrompt.args!.parse({ congress, billType: 'hr', billNumber: '1' });
+    const messages = await billAnalysisPrompt.generate(args);
+    expect((messages[0]!.content as { text: string }).text).toContain(`HR 1 from the ${expected}.`);
+  });
+
+  it('keeps a congress written as an ordinal as written', async () => {
+    const args = billAnalysisPrompt.args!.parse({
+      congress: '118th',
+      billType: 'hr',
+      billNumber: '1',
+    });
+    const messages = await billAnalysisPrompt.generate(args);
+    expect((messages[0]!.content as { text: string }).text).toContain(
+      'HR 1 from the 118th Congress.',
+    );
+  });
+
   it('uppercases the bill type', async () => {
     const args = billAnalysisPrompt.args!.parse({
       congress: '119',

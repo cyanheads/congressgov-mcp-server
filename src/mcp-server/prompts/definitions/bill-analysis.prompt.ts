@@ -4,6 +4,7 @@
  */
 
 import { prompt, z } from '@cyanheads/mcp-ts-core';
+import { congressOrdinal } from '@/utils/congress-calendar.js';
 
 export const billAnalysisPrompt = prompt('congressgov_bill_analysis', {
   description:
@@ -18,7 +19,7 @@ export const billAnalysisPrompt = prompt('congressgov_bill_analysis', {
       role: 'user',
       content: {
         type: 'text',
-        text: `Analyze bill ${args.billType.toUpperCase()} ${args.billNumber} from the ${args.congress}th Congress. Use the congressgov_bill_lookup tool to gather data, then provide:
+        text: `Analyze bill ${args.billType.toUpperCase()} ${args.billNumber} from the ${congressOrdinal(args.congress)} Congress. Use the congressgov_bill_lookup tool to gather data, then provide:
 
 1. **Summary** — What does this bill do? Use the CRS summary if available, otherwise summarize from the bill text.
 2. **Sponsors & Cosponsors** — Who introduced it? How many cosponsors? Bipartisan support?

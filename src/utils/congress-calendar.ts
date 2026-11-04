@@ -24,6 +24,11 @@ export function ordinal(n: number): string {
   }
 }
 
+/** A digit string reads as its ordinal ("102" → "102nd"); any other value ("118th") is kept as written. */
+export function congressOrdinal(congress: string): string {
+  return /^\d+$/.test(congress) ? ordinal(Number(congress)) : congress;
+}
+
 /** The calendar year a congress opens in — the 118th opened in 2023. Takes a positive integer. */
 export function congressFirstYear(congress: number): number {
   return FIRST_CONGRESS_YEAR + 2 * (congress - 1);

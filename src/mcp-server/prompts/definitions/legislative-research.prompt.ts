@@ -14,6 +14,7 @@
 
 import { prompt, z } from '@cyanheads/mcp-ts-core';
 import { getServerConfig } from '@/config/server-config.js';
+import { congressOrdinal } from '@/utils/congress-calendar.js';
 
 /** Shared closing framework — the synthesis half is configuration-independent. */
 const SYNTHESIS = `Synthesize findings into:
@@ -64,7 +65,7 @@ export const legislativeResearchPrompt = prompt('congressgov_legislative_researc
   }),
   generate: (args) => {
     const congressNote = args.congress
-      ? `Focus on the ${args.congress}th Congress.`
+      ? `Focus on the ${congressOrdinal(args.congress)} Congress.`
       : 'Start with the current congress (use the congress://current resource to find the number).';
 
     const plan = getServerConfig().mirrorEnabled ? mirrorPlan(args.topic) : NO_MIRROR_PLAN;

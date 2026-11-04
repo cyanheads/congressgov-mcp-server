@@ -74,6 +74,29 @@ describe('legislativeResearchPrompt — shared shape', () => {
     expect((messages[0]!.content as { text: string }).text).toContain('118th Congress');
   });
 
+  it.each([
+    ['103', '103rd'],
+    ['121', '121st'],
+    ['112', '112th'],
+  ])('spells congress %s as the %s', async (congress, expected) => {
+    const args = legislativeResearchPrompt.args!.parse({ topic: 'climate policy', congress });
+    const messages = await legislativeResearchPrompt.generate(args);
+    expect((messages[0]!.content as { text: string }).text).toContain(
+      `Focus on the ${expected} Congress.`,
+    );
+  });
+
+  it('keeps a congress written as an ordinal as written', async () => {
+    const args = legislativeResearchPrompt.args!.parse({
+      topic: 'climate policy',
+      congress: '102nd',
+    });
+    const messages = await legislativeResearchPrompt.generate(args);
+    expect((messages[0]!.content as { text: string }).text).toContain(
+      'Focus on the 102nd Congress.',
+    );
+  });
+
   it('defaults to current congress when congress is omitted', async () => {
     const args = legislativeResearchPrompt.args!.parse({ topic: 'healthcare' });
     const messages = await legislativeResearchPrompt.generate(args);
