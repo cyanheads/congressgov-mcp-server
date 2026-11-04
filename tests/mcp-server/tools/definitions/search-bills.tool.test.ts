@@ -10,7 +10,7 @@
 import { existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { searchBillsTool } from '@/mcp-server/tools/definitions/search-bills.tool.js';
 import {
@@ -43,9 +43,10 @@ const SUMMARIES: Record<string, unknown>[] = [
 function makeApi(): MirrorApi {
   return {
     async listBills(params) {
+      const rows = BILLS.filter((b) => b.congress === params.congress);
       return (params.offset ?? 0) > 0
-        ? { data: [], pagination: { count: BILLS.length, nextOffset: null } }
-        : { data: BILLS, pagination: { count: BILLS.length, nextOffset: null } };
+        ? { data: [], pagination: { count: rows.length, nextOffset: null } }
+        : { data: rows, pagination: { count: rows.length, nextOffset: null } };
     },
     async listSummaries(params) {
       return (params.offset ?? 0) > 0
@@ -179,6 +180,155 @@ describe('congressgov_search_bills', () => {
     const text = (blocks[0] as { text: string }).text;
     expect(text).toContain('Semiconductor Export Control Act');
     expect(text).toContain('119/hr/1');
+  });
+
+  it('keeps the keyword no-match notice for a congress the mirror holds', async () => {
+    await getCongressMirror().mirrorInstance.runSync({
+      mode: 'init',
+      signal: AbortSignal.timeout(60_000),
+    });
+
+    const ctx = createMockContext();
+    const input = searchBillsTool.input.parse({ query: 'zzznomatchzzz', congress: 119 });
+    const result = await searchBillsTool.handler(input, ctx);
+
+    expect(result.pagination.count).toBe(0);
+    expect(getEnrichment(ctx).notice).toBe(
+      'No bills matched "zzznomatchzzz". Try broader or fewer keywords, or remove the congress/billType/originChamber filters.',
+    );
+  });
+
+  describe('mirroredCongresses (#99)', () => {
+    /** The text of every `content[]` block, joined. */
+    const contentText = (result: Awaited<ReturnType<typeof runToolContract>>) =>
+      result.content.map((block) => (block.type === 'text' ? block.text : '')).join('\n');
+
+    it('answers a congress outside the mirrored window with an empty result and a notice naming the window', async () => {
+      await getCongressMirror().mirrorInstance.runSync({
+        mode: 'init',
+        signal: AbortSignal.timeout(60_000),
+      });
+
+      const result = await runToolContract(searchBillsTool, {
+        query: 'semiconductor',
+        congress: 117,
+      });
+
+      expect(result.isError).toBeFalsy();
+      const structured = result.structuredContent as Record<string, unknown>;
+      expect(structured).toMatchObject({
+        data: [],
+        pagination: { count: 0, nextOffset: null },
+        totalCount: 0,
+        mirroredCongresses: [119],
+      });
+      const notice = String(structured.notice);
+      expect(notice).toBe(
+        "The bill search mirror holds the 119th Congress only, so it can't search the 117th Congress. Browse that congress's bills with congressgov_bill_lookup (operation 'list', congress 117), which reads Congress.gov live but has no keyword search.",
+      );
+      expect(notice).not.toMatch(/No bills matched/);
+
+      const text = contentText(result);
+      expect(text).toContain(`> ${notice}`);
+      expect(text).toContain('**Mirrored congresses:** 119');
+    });
+
+    it('names every mirrored congress when a configured congress has no stored rows', async () => {
+      await getCongressMirror().mirrorInstance.close();
+      resetCongressMirror();
+      initCongressMirror({ mirrorPath: dbPath, congresses: [118, 119], getApi: makeApi });
+      await getCongressMirror().mirrorInstance.runSync({
+        mode: 'init',
+        signal: AbortSignal.timeout(60_000),
+      });
+
+      const ctx = createMockContext();
+      const input = searchBillsTool.input.parse({ query: 'semiconductor', congress: 118 });
+      const result = await searchBillsTool.handler(input, ctx);
+
+      expect(result).toEqual({ data: [], pagination: { count: 0, nextOffset: null } });
+      const enrichment = getEnrichment(ctx);
+      expect(enrichment.mirroredCongresses).toEqual([119]);
+      expect(String(enrichment.notice)).toMatch(
+        /^The bill search mirror holds the 119th Congress only, so it can't search the 118th Congress\./,
+      );
+    });
+
+    it.each([
+      { stored: [], held: 'no bills' },
+      { stored: [118, 119], held: 'the 118th and 119th Congresses only' },
+      { stored: [116, 118, 119], held: 'the 116th, 118th, and 119th Congresses only' },
+    ])(
+      'names a window of $stored.length stored congresses in the out-of-window notice',
+      async ({ stored, held }) => {
+        await getCongressMirror().mirrorInstance.close();
+        resetCongressMirror();
+        const rows = stored.map((congress, i) => ({ ...BILLS[0], congress, number: 10 + i }));
+        initCongressMirror({
+          mirrorPath: dbPath,
+          congresses: stored.length > 0 ? stored : [119],
+          getApi: () => ({
+            ...makeApi(),
+            async listBills(params) {
+              const data = rows.filter((row) => row.congress === params.congress);
+              return { data, pagination: { count: data.length, nextOffset: null } };
+            },
+          }),
+        });
+        await getCongressMirror().mirrorInstance.runSync({
+          mode: 'init',
+          signal: AbortSignal.timeout(60_000),
+        });
+
+        const ctx = createMockContext();
+        const input = searchBillsTool.input.parse({ query: 'semiconductor', congress: 117 });
+        await searchBillsTool.handler(input, ctx);
+
+        const enrichment = getEnrichment(ctx);
+        expect(enrichment.mirroredCongresses).toEqual(stored);
+        expect(String(enrichment.notice)).toMatch(
+          new RegExp(
+            `^The bill search mirror holds ${held}, so it can't search the 117th Congress\\.`,
+          ),
+        );
+      },
+    );
+
+    it('adds the field to an in-window hit and leaves its results and notices as they were', async () => {
+      await getCongressMirror().mirrorInstance.runSync({
+        mode: 'init',
+        signal: AbortSignal.timeout(60_000),
+      });
+
+      const result = await runToolContract(searchBillsTool, {
+        query: 'semiconductor',
+        congress: 119,
+      });
+
+      const structured = result.structuredContent as Record<string, unknown>;
+      expect(structured).toMatchObject({
+        pagination: { count: 1, nextOffset: null },
+        totalCount: 1,
+        mirroredCongresses: [119],
+      });
+      expect(structured.notice).toBeUndefined();
+      expect((structured.data as Record<string, unknown>[])[0]?.billId).toBe('119/hr/1');
+      const text = contentText(result);
+      expect(text).toContain('119/hr/1');
+      expect(text).toContain('**Mirrored congresses:** 119');
+    });
+
+    it('reports an empty window while the mirror is not ready, keeping the build notice', async () => {
+      const result = await runToolContract(searchBillsTool, {
+        query: 'semiconductor',
+        congress: 117,
+      });
+
+      const structured = result.structuredContent as Record<string, unknown>;
+      expect(structured).toMatchObject({ totalCount: 0, mirroredCongresses: [] });
+      expect(String(structured.notice)).toMatch(/has not finished its initial build/);
+      expect(contentText(result)).toContain('**Mirrored congresses:** none');
+    });
   });
 
   /** Every accepted filter is declared, so a stray key is a typo to name, not to strip. */

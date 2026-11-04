@@ -14,6 +14,7 @@ import { disabledTool, tool, z } from '@cyanheads/mcp-ts-core';
 import { getServerConfig } from '@/config/server-config.js';
 import { formatSearchBills } from '@/mcp-server/tools/format-helpers.js';
 import {
+  addNotice,
   buildEffectiveQuery,
   listEnrichment,
   listOutput,
@@ -21,10 +22,24 @@ import {
 } from '@/mcp-server/tools/tool-helpers.js';
 import { BILL_TYPE_CODES } from '@/services/congress-api/types.js';
 import { getCongressMirror } from '@/services/congress-mirror/congress-mirror-service.js';
+import { ordinal } from '@/utils/congress-calendar.js';
+
+/**
+ * The congresses a mirror holds, as a notice phrase: "the 119th Congress only",
+ * "the 118th and 119th Congresses only", or "no bills".
+ */
+function heldCongresses(congresses: readonly number[]): string {
+  const names = congresses.map(ordinal);
+  const last = names.at(-1);
+  if (last === undefined) return 'no bills';
+  if (names.length === 1) return `the ${last} Congress only`;
+  const rest = names.slice(0, -1);
+  return `the ${rest.join(', ')}${rest.length > 1 ? ',' : ''} and ${last} Congresses only`;
+}
 
 const searchBillsDef = tool('congressgov_search_bills', {
   title: 'Congress.gov Bill Search',
-  description: `Keyword-search U.S. bills by title and CRS summary text — the discovery path the Congress.gov API itself lacks (it has no keyword search). Backed by a local full-text index over a bounded congress window; title and summary are indexed, but policy area and full bill text are not. Returns BM25-ranked matches, each with the bill's derived id (congress/billType/billNumber) for follow-up congressgov_bill_lookup calls and a truncated summary preview. Narrow with the optional congress, billType, and originChamber filters. Searches the local mirror, not the live API — if the mirror has not finished its initial build it returns an empty result with a notice, not an error.`,
+  description: `Keyword-search U.S. bills by title and CRS summary text — the discovery path the Congress.gov API itself lacks (it has no keyword search). Backed by a local full-text index over a bounded window of congresses, which every response names in mirroredCongresses; title and summary are indexed, but policy area and full bill text are not. Returns BM25-ranked matches, each with the bill's derived id (congress/billType/billNumber) for follow-up congressgov_bill_lookup calls and a truncated summary preview. Narrow with the optional congress, billType, and originChamber filters; a congress outside mirroredCongresses returns an empty result with a notice, not a no-match. Searches the local mirror, not the live API — if the mirror has not finished its initial build it returns an empty result with a notice, not an error.`,
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   input: z.object({
     query: z
@@ -39,7 +54,7 @@ const searchBillsDef = tool('congressgov_search_bills', {
       .positive()
       .optional()
       .describe(
-        'Restrict to a single congress (e.g. 119). Omit to search the whole mirrored window.',
+        'Restrict to a single congress (e.g. 119), one of the mirroredCongresses every response reports. Omit to search the whole mirrored window.',
       ),
     billType: z
       .enum(BILL_TYPE_CODES)
@@ -59,7 +74,20 @@ const searchBillsDef = tool('congressgov_search_bills', {
     offset: z.number().int().min(0).default(0).describe('Pagination offset.'),
   }),
   output: listOutput,
-  enrichment: listEnrichment,
+  enrichment: {
+    ...listEnrichment,
+    mirroredCongresses: z
+      .array(z.number().int().positive())
+      .describe(
+        'Congress numbers the local mirror holds bills for, ascending — the congresses this tool can search. Empty while the mirror has not finished its initial build.',
+      ),
+  },
+  enrichmentTrailer: {
+    mirroredCongresses: {
+      render: (congresses) =>
+        `**Mirrored congresses:** ${congresses.length > 0 ? congresses.join(', ') : 'none'}`,
+    },
+  },
   format: formatSearchBills,
 
   async handler(input, ctx) {
@@ -72,15 +100,30 @@ const searchBillsDef = tool('congressgov_search_bills', {
         originChamber: input.originChamber,
       }),
     );
+    const empty = { data: [], pagination: { count: 0, nextOffset: null } };
 
     /** No live-API fallback — a mirror that never completed an initial sync is an
      * empty result plus a notice pointing at the refresh, never a throw. */
     if (!(await service.ready())) {
+      ctx.enrich({ mirroredCongresses: [] });
       ctx.enrich.total(0);
-      ctx.enrich.notice(
+      addNotice(
+        ctx,
         'The bill search mirror has not finished its initial build yet, so no results are available. Build it with the mirror:init script (or wait for the scheduled refresh) and retry.',
       );
-      return { data: [], pagination: { count: 0, nextOffset: null } };
+      return empty;
+    }
+
+    /** Read from the store, not the configuration — the store is what search reads. */
+    const mirroredCongresses = await service.mirroredCongresses();
+    ctx.enrich({ mirroredCongresses });
+    if (input.congress !== undefined && !mirroredCongresses.includes(input.congress)) {
+      ctx.enrich.total(0);
+      addNotice(
+        ctx,
+        `The bill search mirror holds ${heldCongresses(mirroredCongresses)}, so it can't search the ${ordinal(input.congress)} Congress. Browse that congress's bills with congressgov_bill_lookup (operation 'list', congress ${input.congress}), which reads Congress.gov live but has no keyword search.`,
+      );
+      return empty;
     }
 
     const page = await service.search(
