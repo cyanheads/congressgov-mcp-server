@@ -3,7 +3,9 @@
  * @module tests/mcp-server/tools/definitions/senate-nominations.tool.test
  */
 
-import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
+import { z } from '@cyanheads/mcp-ts-core';
+import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/services/congress-api/congress-api-service.js', () => ({
@@ -20,6 +22,16 @@ import { getCongressApi } from '@/services/congress-api/congress-api-service.js'
 /** Join a formatter's blocks into the single string a content-only client sees. */
 function joinText(blocks: Array<{ type: string; text?: string }>): string {
   return blocks.map((b) => b.text ?? '').join('\n');
+}
+
+/** Join a contract result's text blocks the same way. */
+function contentText(result: { content: Array<{ type: string; text?: string }> }): string {
+  return joinText(result.content);
+}
+
+/** A page for a query that matched nothing upstream. */
+function emptyPage() {
+  return { data: [], pagination: { count: 0, nextOffset: null } };
 }
 
 /** Real `latestAction` / `S05310` text from /nomination/119/730-2 (vote 225, 119th Congress, session 2). */
@@ -115,6 +127,392 @@ describe('senateNominationsTool', () => {
       expect.objectContaining({ subResource: 'actions' }),
       ctx,
     );
+  });
+
+  // ── #96: the nomination number grammar ──
+
+  describe('nomination number grammar', () => {
+    /** Every raw form the tool accepts: bare, partitioned, cited, either case, padded, and blank. */
+    const ACCEPTED = [
+      '730',
+      '730-2',
+      '0730-2',
+      '730-02',
+      'PN730-2',
+      'pn730-2',
+      'Pn1000',
+      ' 730-2 ',
+      '\tPN851\n',
+      '',
+      '   ',
+    ];
+    const REJECTED = [
+      '..',
+      '.',
+      '../../bill/119/hr/1',
+      '730/2',
+      '730-2/actions',
+      '%2e%2e',
+      'PN',
+      'PN 730',
+      'P730',
+      '730-',
+      '-2',
+      '730-2-1',
+      'abc',
+    ];
+
+    const advertised = () =>
+      (
+        z.toJSONSchema(senateNominationsTool.input, { io: 'input' }) as {
+          properties: Record<
+            string,
+            { pattern?: string; maxLength?: number; description?: string }
+          >;
+        }
+      ).properties.nominationNumber;
+
+    it('accepts every raw form at the schema, and so does the advertised pattern', () => {
+      const pattern = advertised()?.pattern;
+      expect(pattern).toEqual(expect.any(String));
+      const jsonSchemaPattern = new RegExp(pattern as string);
+      for (const nominationNumber of ACCEPTED) {
+        expect(
+          senateNominationsTool.input.safeParse({
+            operation: 'get',
+            congress: 119,
+            nominationNumber,
+          }).success,
+          JSON.stringify(nominationNumber),
+        ).toBe(true);
+        expect(jsonSchemaPattern.test(nominationNumber), JSON.stringify(nominationNumber)).toBe(
+          true,
+        );
+      }
+    });
+
+    it('rejects every other shape at the schema, and so does the advertised pattern', () => {
+      const jsonSchemaPattern = new RegExp(advertised()?.pattern as string);
+      for (const nominationNumber of REJECTED) {
+        expect(
+          senateNominationsTool.input.safeParse({
+            operation: 'get',
+            congress: 119,
+            nominationNumber,
+          }).success,
+          JSON.stringify(nominationNumber),
+        ).toBe(false);
+        expect(jsonSchemaPattern.test(nominationNumber), JSON.stringify(nominationNumber)).toBe(
+          false,
+        );
+      }
+    });
+
+    it.each(['get', 'actions'] as const)(
+      "fails a path-shaped value on '%s' as invalid arguments before any request",
+      async (operation) => {
+        const result = await runToolContract(senateNominationsTool, {
+          operation,
+          congress: 119,
+          nominationNumber: '../../bill/119/hr/1',
+        });
+        expect(result.isError).toBe(true);
+        expect(result.structuredContent).toMatchObject({
+          error: { code: JsonRpcErrorCode.InvalidParams },
+        });
+        expect(contentText(result)).toContain('nominationNumber');
+        expect(mockApi.getNomination).not.toHaveBeenCalled();
+        expect(mockApi.getNominationSubResource).not.toHaveBeenCalled();
+      },
+    );
+
+    it('accepts a padded value of any length, and still browses on a whitespace-only list value', () => {
+      expect(advertised()?.maxLength).toBeUndefined();
+      for (const operation of ['get', 'list'] as const) {
+        const nominationNumber = operation === 'get' ? 'PN730-2'.padStart(200) : ' '.repeat(200);
+        expect(
+          senateNominationsTool.input.safeParse({ operation, congress: 119, nominationNumber })
+            .success,
+          operation,
+        ).toBe(true);
+      }
+    });
+
+    it.each(['730', '730-2', '0730-2', '730-02'])(
+      'requests %s unchanged and echoes it as a PN citation',
+      async (nominationNumber) => {
+        mockApi.getNomination.mockResolvedValue({ nomination: { citation: 'PN730-2' } });
+        const result = await runToolContract(senateNominationsTool, {
+          operation: 'get',
+          congress: 119,
+          nominationNumber,
+        });
+        expect(result.isError).not.toBe(true);
+        expect(mockApi.getNomination).toHaveBeenCalledWith(
+          119,
+          nominationNumber,
+          expect.anything(),
+        );
+        expect(result.structuredContent).toMatchObject({
+          effectiveQuery: `nomination PN${nominationNumber} in the 119th Congress`,
+        });
+      },
+    );
+
+    it('requests an integer nominationNumber as its digits', async () => {
+      mockApi.getNomination.mockResolvedValue({ nomination: { citation: 'PN1064' } });
+      /** A raw client argument the schema types as a string; the framework repairs it before parsing. */
+      const integerArgument: Record<string, unknown> = {
+        operation: 'get',
+        congress: 118,
+        nominationNumber: 1064,
+      };
+      const result = await runToolContract(
+        senateNominationsTool as Parameters<typeof runToolContract>[0],
+        integerArgument,
+      );
+      expect(result.isError).not.toBe(true);
+      expect(mockApi.getNomination).toHaveBeenCalledWith(118, '1064', expect.anything());
+    });
+
+    it.each(['PN730-2', 'pn730-2', ' 730-2 ', '\tPn730-2\n'])(
+      'requests %j as 730-2 and echoes PN730-2 on both surfaces, never a doubled prefix',
+      async (nominationNumber) => {
+        mockApi.getNomination.mockResolvedValue({ nomination: { citation: 'PN730-2' } });
+        const result = await runToolContract(senateNominationsTool, {
+          operation: 'get',
+          congress: 119,
+          nominationNumber,
+        });
+        expect(result.isError).not.toBe(true);
+        expect(mockApi.getNomination).toHaveBeenCalledWith(119, '730-2', expect.anything());
+        const echo = 'nomination PN730-2 in the 119th Congress';
+        expect(result.structuredContent).toMatchObject({ effectiveQuery: echo });
+        expect(contentText(result)).toContain(echo);
+        expect(contentText(result)).not.toContain('PNPN');
+      },
+    );
+
+    it('normalizes the cited form on every detail operation and echoes the citation', async () => {
+      mockApi.getNominationSubResource.mockResolvedValue({
+        data: [{ name: 'Judiciary Committee' }],
+        pagination: { count: 1, nextOffset: null },
+      });
+      mockApi.getNominee.mockResolvedValue({
+        data: [{ lastName: 'Doe' }],
+        pagination: { count: 1, nextOffset: null },
+      });
+      const committees = await runToolContract(senateNominationsTool, {
+        operation: 'committees',
+        congress: 119,
+        nominationNumber: 'pn730-2',
+      });
+      expect(mockApi.getNominationSubResource).toHaveBeenCalledWith(
+        {
+          congress: 119,
+          nominationNumber: '730-2',
+          subResource: 'committees',
+          limit: 20,
+          offset: 0,
+        },
+        expect.anything(),
+      );
+      expect(committees.structuredContent).toMatchObject({
+        effectiveQuery: 'committees for nomination PN730-2',
+      });
+      const nominees = await runToolContract(senateNominationsTool, {
+        operation: 'nominees',
+        congress: 119,
+        nominationNumber: ' PN730-2 ',
+        ordinal: 1,
+      });
+      expect(mockApi.getNominee).toHaveBeenCalledWith(
+        119,
+        '730-2',
+        1,
+        { limit: 20, offset: 0 },
+        expect.anything(),
+      );
+      expect(nominees.structuredContent).toMatchObject({
+        effectiveQuery: 'nominees for nomination PN730-2, ordinal 1',
+      });
+    });
+
+    it('suggests the partitioned children of a cited parent in their bare form', async () => {
+      mockApi.getNominationSubResource.mockResolvedValue(emptyPage());
+      const ctx = createMockContext({ errors: senateNominationsTool.errors });
+      await senateNominationsTool.handler(
+        senateNominationsTool.input.parse({
+          operation: 'actions',
+          congress: 119,
+          nominationNumber: 'PN851',
+        }),
+        ctx,
+      );
+      expect(mockApi.getNominationSubResource).toHaveBeenCalledWith(
+        expect.objectContaining({ nominationNumber: '851' }),
+        ctx,
+      );
+      const notice = getEnrichment(ctx).notice as string;
+      expect(notice).toContain('`851-1`');
+      expect(notice).not.toContain('PN851');
+    });
+
+    it.each(['get', 'actions', 'nominees'])(
+      "answers a whitespace-only nominationNumber on '%s' with the requires error, before any request",
+      async (operation) => {
+        const ctx = createMockContext({ errors: senateNominationsTool.errors });
+        const input = senateNominationsTool.input.parse({
+          operation,
+          congress: 119,
+          nominationNumber: '   ',
+          ordinal: 1,
+        });
+        await expect(senateNominationsTool.handler(input, ctx)).rejects.toMatchObject({
+          code: JsonRpcErrorCode.ValidationError,
+          message: expect.stringContaining('requires nominationNumber'),
+          data: { field: 'nominationNumber' },
+        });
+        expect(mockApi.getNomination).not.toHaveBeenCalled();
+        expect(mockApi.getNominee).not.toHaveBeenCalled();
+        expect(mockApi.getNominationSubResource).not.toHaveBeenCalled();
+      },
+    );
+
+    it('names the cited form in the field description', () => {
+      expect(advertised()?.description).toContain('PN730-2');
+    });
+  });
+
+  // ── #94: the get echo's ordinal ──
+
+  it.each([
+    [101, '101st'],
+    [102, '102nd'],
+    [103, '103rd'],
+    [111, '111th'],
+    [112, '112th'],
+    [113, '113th'],
+    [119, '119th'],
+  ])('echoes congress %i on get as the %s Congress', async (congress, ordinalText) => {
+    mockApi.getNomination.mockResolvedValue({ nomination: { citation: 'PN1' } });
+    const ctx = createMockContext({ errors: senateNominationsTool.errors });
+    await senateNominationsTool.handler(
+      senateNominationsTool.input.parse({ operation: 'get', congress, nominationNumber: '1' }),
+      ctx,
+    );
+    expect(getEnrichment(ctx).effectiveQuery).toBe(`nomination PN1 in the ${ordinalText} Congress`);
+  });
+
+  // ── #103: the update-date filters ──
+
+  describe('update-date filters', () => {
+    const FROM = '2026-10-01T00:00:00Z';
+    const TO = '2026-10-31T23:59:59Z';
+    const page = {
+      data: [{ citation: 'PN1001', updateDate: '2026-10-20T04:10:11Z' }],
+      pagination: { count: 76, nextOffset: 1 },
+    };
+
+    it('sends both bounds on list and echoes them on both surfaces', async () => {
+      mockApi.listNominations.mockResolvedValue(structuredClone(page));
+      const result = await runToolContract(senateNominationsTool, {
+        operation: 'list',
+        congress: 119,
+        fromDateTime: FROM,
+        toDateTime: TO,
+        limit: 1,
+      });
+      expect(result.isError).not.toBe(true);
+      expect(mockApi.listNominations).toHaveBeenCalledWith(
+        { congress: 119, limit: 1, offset: 0, fromDateTime: FROM, toDateTime: TO },
+        expect.anything(),
+      );
+      const echo = `nominations (congress=119, fromDateTime=${FROM}, toDateTime=${TO})`;
+      expect(result.structuredContent).toMatchObject({
+        ...page,
+        effectiveQuery: echo,
+        totalCount: 76,
+      });
+      expect(contentText(result)).toContain(echo);
+      expect(contentText(result)).toContain('PN1001');
+    });
+
+    it('sends no bound when both are omitted', async () => {
+      mockApi.listNominations.mockResolvedValue(structuredClone(page));
+      const ctx = createMockContext({ errors: senateNominationsTool.errors });
+      await senateNominationsTool.handler(
+        senateNominationsTool.input.parse({ operation: 'list', congress: 119 }),
+        ctx,
+      );
+      const params = mockApi.listNominations.mock.calls[0]?.[0] as Record<string, unknown>;
+      expect(params.fromDateTime).toBeUndefined();
+      expect(params.toDateTime).toBeUndefined();
+      expect(getEnrichment(ctx).effectiveQuery).toBe('nominations (congress=119)');
+    });
+
+    it.each(['list', 'get', 'actions'])(
+      "refuses a malformed or reversed window on '%s' before any request",
+      async (operation) => {
+        for (const window of [
+          { fromDateTime: '2026-13-01T00:00:00Z' },
+          { toDateTime: '2026-10-31' },
+          { fromDateTime: TO, toDateTime: FROM },
+        ]) {
+          const ctx = createMockContext({ errors: senateNominationsTool.errors });
+          const input = senateNominationsTool.input.parse({
+            operation,
+            congress: 119,
+            nominationNumber: operation === 'list' ? undefined : '730-2',
+            ...window,
+          });
+          await expect(senateNominationsTool.handler(input, ctx)).rejects.toMatchObject({
+            code: JsonRpcErrorCode.ValidationError,
+          });
+        }
+        expect(mockApi.listNominations).not.toHaveBeenCalled();
+        expect(mockApi.getNomination).not.toHaveBeenCalled();
+        expect(mockApi.getNominationSubResource).not.toHaveBeenCalled();
+      },
+    );
+
+    it("serves 'actions' with a valid window, naming the ignored filter before the parent-form hint", async () => {
+      mockApi.getNominationSubResource.mockResolvedValue(emptyPage());
+      const result = await runToolContract(senateNominationsTool, {
+        operation: 'actions',
+        congress: 119,
+        nominationNumber: '851',
+        fromDateTime: FROM,
+      });
+      expect(result.isError).not.toBe(true);
+      expect(mockApi.getNominationSubResource).toHaveBeenCalledWith(
+        { congress: 119, nominationNumber: '851', subResource: 'actions', limit: 20, offset: 0 },
+        expect.anything(),
+      );
+      const notice = (result.structuredContent as { notice?: string }).notice as string;
+      expect(notice.startsWith("'actions' does not use fromDateTime, so it was ignored. ")).toBe(
+        true,
+      );
+      expect(notice).toContain('`851-1`');
+      expect(contentText(result)).toContain("'actions' does not use fromDateTime");
+    });
+
+    it('says a filtered list that matched nothing found no updates in the window', async () => {
+      mockApi.listNominations.mockResolvedValue(emptyPage());
+      const ctx = createMockContext({ errors: senateNominationsTool.errors });
+      await senateNominationsTool.handler(
+        senateNominationsTool.input.parse({
+          operation: 'list',
+          congress: 119,
+          fromDateTime: '2024-01-01T00:00:00Z',
+          toDateTime: '2024-01-31T23:59:59Z',
+        }),
+        ctx,
+      );
+      const notice = getEnrichment(ctx).notice as string;
+      expect(notice).toContain('No nominations found for this congress');
+      expect(notice).toContain('update date');
+    });
   });
 
   describe('Senate roll vote pointers (issue #62)', () => {

@@ -7,6 +7,7 @@ import type { Context } from '@cyanheads/mcp-ts-core';
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { validationError } from '@cyanheads/mcp-ts-core/errors';
 import { formatNominations } from '@/mcp-server/tools/format-helpers.js';
+import { rollVotePointer } from '@/mcp-server/tools/roll-vote-pointer.js';
 import {
   buildEffectiveQuery,
   congressErrorContracts,
@@ -14,16 +15,35 @@ import {
   listEnrichment,
   listOrDetail,
   normalizeOptionalString,
+  noticeIgnoredInputs,
   notifyIfNoMatches,
+  validateDateTimeRange,
+  validateIsoDateTime,
 } from '@/mcp-server/tools/tool-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
-import {
-  SENATE_VOTE_COVERAGE,
-  SENATE_VOTE_FIRST_CONGRESS,
-  senateSessionForDate,
-} from '@/services/senate-lis/parse.js';
+import { SENATE_VOTE_COVERAGE, senateSessionForDate } from '@/services/senate-lis/parse.js';
+import { ordinal } from '@/utils/congress-calendar.js';
 
 type UpstreamRecord = Record<string, unknown>;
+
+/**
+ * A nomination number as callers send it: the number (`1000`), a partitioned child
+ * (`730-2`), or either as the citation list rows carry (`PN730-2`), in either case,
+ * padded with whitespace, or blank. JSON Schema carries no case flag or trim, so the
+ * pattern spells out every raw form and `toNominationNumber` normalizes. Adjacent
+ * pieces match disjoint characters and the only trailing `\s*` sits inside the
+ * optional group, so a match runs in linear time.
+ */
+const NOMINATION_NUMBER_PATTERN = /^\s*(?:(?:[Pp][Nn])?\d+(?:-\d+)?\s*)?$/;
+
+/**
+ * The number the API path takes: trimmed, with any citation prefix dropped
+ * (`PN730-2` → `730-2`); blank is unset. Leading zeros pass through — Congress.gov
+ * resolves `0730-2` and `730-02` to PN730-2.
+ */
+function toNominationNumber(value: string | undefined): string | undefined {
+  return normalizeOptionalString(value)?.replace(/^pn/i, '');
+}
 
 /**
  * An action's citation of its own Senate record vote: `Record Vote Number: 225.`,
@@ -70,42 +90,28 @@ const latestActionSchema = z
 const NOMINATION_RECORD_DESCRIPTION =
   'Nomination record for `get` (description, dates, nominees array, sub-resource counts); absent for `list` and sub-resources.';
 
-const nominationListOutput = listOrDetail({ nomination: 'record' }, NOMINATION_RECORD_DESCRIPTION);
-
-/** Zod types a description as optional; `listOrDetail` sets one on every envelope it builds. */
-const envelopeDescription = nominationListOutput.description;
-if (envelopeDescription === undefined) {
-  throw new Error('listOrDetail built an envelope with no root description.');
-}
-
-/**
- * The shared list/detail envelope with the two roots that can carry a `rollVote`
- * declared. Zod keeps a description per schema instance, so the extended root
- * re-applies the envelope's.
- */
-const nominationOutput = nominationListOutput
-  .extend({
-    data: z
-      .array(
-        z
-          .object({
-            latestAction: latestActionSchema,
-            rollVote: rollVoteSchema.optional(),
-          })
-          .passthrough()
-          .describe(
-            "Upstream JSON record: a nomination (`list`), an action (`actions`), a committee, a hearing, or a nominee. A `list` row's `latestAction` and an `actions` row carry `rollVote` when they cite their own Senate record vote.",
-          ),
-      )
-      .optional()
-      .describe('Result rows for `list` and the sub-resource operations.'),
-    nomination: z
-      .object({ latestAction: latestActionSchema })
-      .passthrough()
-      .optional()
-      .describe(NOMINATION_RECORD_DESCRIPTION),
-  })
-  .describe(envelopeDescription);
+/** The shared list/detail envelope with the two roots that can carry a `rollVote` declared. */
+const nominationOutput = listOrDetail({ nomination: 'record' }, NOMINATION_RECORD_DESCRIPTION, {
+  data: z
+    .array(
+      z
+        .object({
+          latestAction: latestActionSchema,
+          rollVote: rollVoteSchema.optional(),
+        })
+        .passthrough()
+        .describe(
+          "Upstream JSON record: a nomination (`list`), an action (`actions`), a committee, a hearing, or a nominee. A `list` row's `latestAction` and an `actions` row carry `rollVote` when they cite their own Senate record vote.",
+        ),
+    )
+    .optional()
+    .describe('Result rows for `list` and the sub-resource operations.'),
+  nomination: z
+    .object({ latestAction: latestActionSchema })
+    .passthrough()
+    .optional()
+    .describe(NOMINATION_RECORD_DESCRIPTION),
+});
 
 /**
  * The `congressgov_roll_votes` arguments for the Senate vote an action cites as its
@@ -113,14 +119,14 @@ const nominationOutput = nominationListOutput
  * vote predates the Senate feed.
  */
 export function citedRollVote(action: unknown, congress: number): RollVote | undefined {
-  if (congress < SENATE_VOTE_FIRST_CONGRESS || !action || typeof action !== 'object') return;
+  if (!action || typeof action !== 'object') return;
   const { actionDate, text } = action as UpstreamRecord;
   if (typeof actionDate !== 'string' || typeof text !== 'string') return;
-  const voteNumber = Number(OWN_VOTE_CITATION.exec(text)?.[1]);
-  if (!Number.isSafeInteger(voteNumber) || voteNumber < 1) return;
+  const cited = OWN_VOTE_CITATION.exec(text)?.[1];
+  if (cited === undefined) return;
   const session = senateSessionForDate(congress, actionDate);
   if (session === undefined) return;
-  return { chamber: 'senate', congress, session, voteNumber };
+  return rollVotePointer('senate', congress, session, Number(cited));
 }
 
 /** `record`, with `rollVote` on its `latestAction` when that action cites its own Senate vote. */
@@ -138,7 +144,7 @@ function withRollVote(action: UpstreamRecord, congress: number): UpstreamRecord 
 
 export const senateNominationsTool = tool('congressgov_senate_nominations', {
   title: 'Congress.gov Senate Nominations',
-  description: `Browse presidential nominations to federal positions and track the Senate confirmation process. Use 'list' to browse, 'get' for nomination detail, 'actions'/'committees'/'hearings' for confirmation pipeline data, or 'nominees' to retrieve individual appointees in a multi-nominee batch. Nominations use 'PN' (Presidential Nomination) numbering. Most nominations carry confirmation activity on the parent (e.g., PN1000); multi-part parents (e.g., PN851) carry no activity of their own — their actions, committees, hearings, and nominees live on partitioned children (PN851-1, PN851-2, …). 'get' on a parent that has no \`nominees\` array signals the partitioned form is needed for everything below it. An action that cites its own Senate record vote — an \`actions\` row, or \`latestAction\` on \`list\` and \`get\` — carries \`rollVote\`, the congressgov_roll_votes arguments for that vote.`,
+  description: `Browse presidential nominations to federal positions and track the Senate confirmation process. Use 'list' to browse, 'get' for nomination detail, 'actions'/'committees'/'hearings' for confirmation pipeline data, or 'nominees' to retrieve individual appointees in a multi-nominee batch. Nominations use 'PN' (Presidential Nomination) numbering. Most nominations carry confirmation activity on the parent (e.g., PN1000); multi-part parents (e.g., PN851) carry no activity of their own — their actions, committees, hearings, and nominees live on partitioned children (PN851-1, PN851-2, …). 'get' on a parent that has no \`nominees\` array signals the partitioned form is needed for everything below it. nominationNumber takes either form bare or as its citation (1000 or PN1000, 730-2 or PN730-2). 'list' runs newest update first and takes fromDateTime/toDateTime, which filter on the date Congress.gov last updated a nomination record — not its received date or latest action date. An action that cites its own Senate record vote — an \`actions\` row, or \`latestAction\` on \`list\` and \`get\` — carries \`rollVote\`, the congressgov_roll_votes arguments for that vote.`,
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
   errors: [...congressErrorContracts, ...identityErrorContracts],
   input: z.object({
@@ -148,9 +154,13 @@ export const senateNominationsTool = tool('congressgov_senate_nominations', {
     congress: z.number().int().positive().describe('Congress number.'),
     nominationNumber: z
       .string()
+      .regex(
+        NOMINATION_NUMBER_PATTERN,
+        'Must be a nomination number (1000), a partitioned child (730-2), or either as a citation (PN730-2).',
+      )
       .optional()
       .describe(
-        "Nomination number. Use the bare form (e.g. '1000') for nominations whose activity sits on the parent; use the partitioned form (e.g. '851-1') for sub-resources of a multi-part nomination. Required for detail operations.",
+        "Nomination number, bare or as the citation list rows carry (e.g. 'PN730-2'). Use the parent form (e.g. '1000') for nominations whose activity sits on the parent; use the partitioned form (e.g. '851-1') for sub-resources of a multi-part nomination. Case and surrounding whitespace are ignored. Required for detail operations.",
       ),
     ordinal: z
       .number()
@@ -159,6 +169,18 @@ export const senateNominationsTool = tool('congressgov_senate_nominations', {
       .optional()
       .describe(
         "Batch ordinal within a multi-nominee nomination. Each ordinal addresses a group of nominees; the 'nominees' operation returns every individual in that batch. Use 'get' first to see available ordinals on the nomination's `nominees` array (multi-part parents have no nominees array — use a partitioned form like '851-1' instead).",
+      ),
+    fromDateTime: z
+      .string()
+      .optional()
+      .describe(
+        "Start of the update-date window for 'list' (ISO 8601, e.g. 2026-10-01T00:00:00Z): the date Congress.gov last updated a nomination record, not its received or latest action date. Ignored by other operations.",
+      ),
+    toDateTime: z
+      .string()
+      .optional()
+      .describe(
+        "End of the update-date window for 'list' (ISO 8601). Same field semantics as fromDateTime. Ignored by other operations.",
       ),
     limit: z.number().int().min(1).max(250).default(20).describe('Results per page (1-250).'),
     offset: z.number().int().min(0).default(0).describe('Pagination offset.'),
@@ -169,9 +191,16 @@ export const senateNominationsTool = tool('congressgov_senate_nominations', {
 
   async handler(input, ctx) {
     const api = getCongressApi();
+    const nominationNumber = toNominationNumber(input.nominationNumber);
+    const fromDateTime = validateIsoDateTime(
+      normalizeOptionalString(input.fromDateTime),
+      'fromDateTime',
+    );
+    const toDateTime = validateIsoDateTime(normalizeOptionalString(input.toDateTime), 'toDateTime');
+    validateDateTimeRange(fromDateTime, toDateTime);
 
     if (input.operation === 'list') {
-      if (normalizeOptionalString(input.nominationNumber)) {
+      if (nominationNumber) {
         throw ctx.fail(
           'incompatible_identity',
           "'list' does not use nominationNumber. Remove nominationNumber to browse, or use 'get' with congress and nominationNumber.",
@@ -183,6 +212,8 @@ export const senateNominationsTool = tool('congressgov_senate_nominations', {
           congress: input.congress,
           limit: input.limit,
           offset: input.offset,
+          fromDateTime,
+          toDateTime,
         },
         ctx,
       );
@@ -190,12 +221,16 @@ export const senateNominationsTool = tool('congressgov_senate_nominations', {
         congress: input.congress,
         count: result.data.length,
       });
-      ctx.enrich.echo(buildEffectiveQuery('nominations', { congress: input.congress }));
+      ctx.enrich.echo(
+        buildEffectiveQuery('nominations', { congress: input.congress, fromDateTime, toDateTime }),
+      );
       ctx.enrich.total(result.pagination.count);
       notifyIfNoMatches(
         ctx,
         result,
-        'No nominations found for this congress. Verify the congress number.',
+        fromDateTime || toDateTime
+          ? 'No nominations found for this congress with an update date in that window. Widen or remove fromDateTime/toDateTime, or verify the congress number.'
+          : 'No nominations found for this congress. Verify the congress number.',
       );
       return {
         ...result,
@@ -203,20 +238,20 @@ export const senateNominationsTool = tool('congressgov_senate_nominations', {
       };
     }
 
-    if (!input.nominationNumber) {
+    if (!nominationNumber) {
       throw validationError(
         `The '${input.operation}' operation requires nominationNumber. Use 'list' to browse nominations.`,
         { field: 'nominationNumber', operation: input.operation },
       );
     }
+    noticeIgnoredInputs(ctx, input.operation, { fromDateTime, toDateTime });
 
     if (input.operation === 'get') {
-      const result = await api.getNomination(input.congress, input.nominationNumber, ctx);
-      ctx.log.info('Nomination retrieved', {
-        congress: input.congress,
-        nominationNumber: input.nominationNumber,
-      });
-      ctx.enrich.echo(`nomination PN${input.nominationNumber} in the ${input.congress}th Congress`);
+      const result = await api.getNomination(input.congress, nominationNumber, ctx);
+      ctx.log.info('Nomination retrieved', { congress: input.congress, nominationNumber });
+      ctx.enrich.echo(
+        `nomination PN${nominationNumber} in the ${ordinal(input.congress)} Congress`,
+      );
       ctx.enrich.total(1);
       return { ...result, nomination: withLatestActionRollVote(result.nomination, input.congress) };
     }
@@ -230,7 +265,7 @@ export const senateNominationsTool = tool('congressgov_senate_nominations', {
       }
       const result = await api.getNominee(
         input.congress,
-        input.nominationNumber,
+        nominationNumber,
         input.ordinal,
         {
           limit: input.limit,
@@ -240,21 +275,19 @@ export const senateNominationsTool = tool('congressgov_senate_nominations', {
       );
       ctx.log.info('Nominee retrieved', {
         congress: input.congress,
-        nominationNumber: input.nominationNumber,
+        nominationNumber,
         ordinal: input.ordinal,
       });
-      ctx.enrich.echo(
-        `nominees for nomination ${input.nominationNumber}, ordinal ${input.ordinal}`,
-      );
+      ctx.enrich.echo(`nominees for nomination PN${nominationNumber}, ordinal ${input.ordinal}`);
       ctx.enrich.total(result.pagination.count);
-      applyParentFormNotice(ctx, result, input.nominationNumber);
+      applyParentFormNotice(ctx, result, nominationNumber);
       return result;
     }
 
     const result = await api.getNominationSubResource(
       {
         congress: input.congress,
-        nominationNumber: input.nominationNumber,
+        nominationNumber,
         subResource: input.operation,
         limit: input.limit,
         offset: input.offset,
@@ -263,12 +296,12 @@ export const senateNominationsTool = tool('congressgov_senate_nominations', {
     );
     ctx.log.info('Nomination sub-resource retrieved', {
       congress: input.congress,
-      nominationNumber: input.nominationNumber,
+      nominationNumber,
       subResource: input.operation,
     });
-    ctx.enrich.echo(`${input.operation} for nomination ${input.nominationNumber}`);
+    ctx.enrich.echo(`${input.operation} for nomination PN${nominationNumber}`);
     ctx.enrich.total(result.pagination.count);
-    applyParentFormNotice(ctx, result, input.nominationNumber);
+    applyParentFormNotice(ctx, result, nominationNumber);
     if (input.operation !== 'actions') return result;
     return { ...result, data: result.data.map((row) => withRollVote(row, input.congress)) };
   },
