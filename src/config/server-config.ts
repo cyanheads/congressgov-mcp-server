@@ -79,8 +79,28 @@ export type ServerConfig = z.infer<typeof ServerConfigSchema>;
 
 let _config: ServerConfig | undefined;
 
+/**
+ * Load `./.env` into `process.env`, never overriding a variable already set.
+ * `search-bills.tool.ts` reads this config at import to decide whether to register
+ * its tool, before `createApp()` loads `.env`; Bun loads it at process start, Node
+ * doesn't. A missing file is the normal case. Any other read failure (an
+ * unreadable file, a directory named `.env`) is left to `createApp()`, which reads
+ * `.env` again and stops with its startup banner — thrown here, it would end the
+ * import on a raw stack.
+ */
+function loadDotEnv(): void {
+  try {
+    process.loadEnvFile();
+  } catch {
+    // Missing: nothing to load. Anything else: createApp() reports it.
+  }
+}
+
+/** The parsed server config, cached on first call; that first call loads `./.env`. */
 export function getServerConfig(): ServerConfig {
-  _config ??= parseEnvConfig(ServerConfigSchema, {
+  if (_config) return _config;
+  loadDotEnv();
+  _config = parseEnvConfig(ServerConfigSchema, {
     apiKey: 'CONGRESS_API_KEY',
     baseUrl: 'CONGRESS_API_BASE_URL',
     mirrorEnabled: 'CONGRESS_MIRROR_ENABLED',
