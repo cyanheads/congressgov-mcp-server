@@ -21,6 +21,7 @@ import { billTypesResource } from '@/mcp-server/resources/definitions/bill-types
 import { committeeResource } from '@/mcp-server/resources/definitions/committee.resource.js';
 import { currentCongressResource } from '@/mcp-server/resources/definitions/current-congress.resource.js';
 import { memberResource } from '@/mcp-server/resources/definitions/member.resource.js';
+import { amendmentLookupTool } from '@/mcp-server/tools/definitions/amendment-lookup.tool.js';
 import { billLookupTool } from '@/mcp-server/tools/definitions/bill-lookup.tool.js';
 import { billSummariesTool } from '@/mcp-server/tools/definitions/bill-summaries.tool.js';
 import { committeeLookupTool } from '@/mcp-server/tools/definitions/committee-lookup.tool.js';
@@ -89,6 +90,7 @@ await createApp({
   cacheHints,
   tools: [
     withSource(billLookupTool, 'tools', 'bill-lookup.tool.ts'),
+    withSource(amendmentLookupTool, 'tools', 'amendment-lookup.tool.ts'),
     withSource(enactedLawsTool, 'tools', 'enacted-laws.tool.ts'),
     withSource(memberLookupTool, 'tools', 'member-lookup.tool.ts'),
     withSource(committeeLookupTool, 'tools', 'committee-lookup.tool.ts'),
@@ -111,7 +113,7 @@ await createApp({
     withSource(billAnalysisPrompt, 'prompts', 'bill-analysis.prompt.ts'),
     withSource(legislativeResearchPrompt, 'prompts', 'legislative-research.prompt.ts'),
   ],
-  instructions: `Use the congressgov_* tools to access U.S. legislative data via the Congress.gov API v3: bills, enacted laws, members, committees, roll call votes, presidential nominations, CRS reports, and the daily Congressional Record. The Congress.gov API itself has no keyword search — browse by congress number, bill/report type, date range, chamber, state, and district. An optional local FTS mirror adds congressgov_search_bills (keyword search over bill titles and summaries) when CONGRESS_MIRROR_ENABLED is set; it is off by default, and the tool is not offered at all unless that flag is set. Bills are addressed by congress + billType + billNumber (e.g. 118/hr/1234), members by bioguideId, committees by chamber-prefix codes. congressgov_roll_votes serves both chambers via its 'chamber' parameter — House votes come from the Congress.gov API, Senate votes from the Senate's official LIS feed.`,
+  instructions: `Use the congressgov_* tools to access U.S. legislative data via the Congress.gov API v3: bills, amendments, enacted laws, members, committees, roll call votes, presidential nominations, CRS reports, and the daily Congressional Record. The Congress.gov API itself has no keyword search — browse by congress number, bill/report type, date range, chamber, state, and district. An optional local FTS mirror adds congressgov_search_bills (keyword search over bill titles and summaries) when CONGRESS_MIRROR_ENABLED is set; it is off by default, and the tool is not offered at all unless that flag is set. Bills are addressed by congress + billType + billNumber (e.g. 118/hr/1234), amendments by congress + amendmentType + amendmentNumber (e.g. 118/hamdt/255), members by bioguideId, committees by chamber-prefix codes. congressgov_roll_votes serves both chambers via its 'chamber' parameter — House votes come from the Congress.gov API, Senate votes from the Senate's official LIS feed, or Voteview's published vote files when that feed can't be read.`,
   landing: {
     repoRoot: REPO_ROOT,
     tagline: 'U.S. legislative data (bills, votes, members, committees) via MCP.',
