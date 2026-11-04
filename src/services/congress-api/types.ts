@@ -62,6 +62,34 @@ export interface BillSubResourceParams extends GetBillParams, PaginationParams {
   subResource: BillSubResource;
 }
 
+// --- Amendments ---
+
+/**
+ * Amendment types as the API path takes them — lower case, since
+ * `/amendment/118/HAMDT/255` is a 404. `suamdt` (Senate unprinted) exists only
+ * in the 97th and 98th Congresses.
+ */
+export const AMENDMENT_TYPE_CODES = ['hamdt', 'samdt', 'suamdt'] as const;
+export type AmendmentType = (typeof AMENDMENT_TYPE_CODES)[number];
+
+export type AmendmentSubResource = 'actions' | 'amendments' | 'cosponsors' | 'text';
+
+export interface ListAmendmentsParams extends PaginationParams, DateRangeParams {
+  amendmentType?: AmendmentType | undefined;
+  congress: number;
+  sort?: ListBillsParams['sort'];
+}
+
+export interface GetAmendmentParams {
+  amendmentNumber: number;
+  amendmentType: AmendmentType;
+  congress: number;
+}
+
+export interface AmendmentSubResourceParams extends GetAmendmentParams, PaginationParams {
+  subResource: AmendmentSubResource;
+}
+
 // --- Laws ---
 
 export type LawType = 'pub' | 'priv';
@@ -127,7 +155,7 @@ export interface GetVoteParams {
 
 export type NominationSubResource = 'actions' | 'committees' | 'hearings';
 
-export interface ListNominationsParams extends PaginationParams {
+export interface ListNominationsParams extends PaginationParams, DateRangeParams {
   congress: number;
 }
 
@@ -146,6 +174,8 @@ export interface ListSummariesParams extends PaginationParams, DateRangeParams {
 
 // --- CRS Reports ---
 
+export interface ListCrsReportsParams extends PaginationParams, DateRangeParams {}
+
 export interface GetCrsReportParams {
   reportNumber: string;
 }
@@ -154,7 +184,9 @@ export interface GetCrsReportParams {
 
 export type CommitteeReportType = 'hrpt' | 'srpt' | 'erpt';
 
-export interface ListCommitteeReportsParams extends PaginationParams {
+export interface ListCommitteeReportsParams extends PaginationParams, DateRangeParams {
+  /** Conference reports only (`true`) or none of them (`false`); unset lists both. */
+  conference?: boolean | undefined;
   congress: number;
   reportType?: CommitteeReportType | undefined;
 }

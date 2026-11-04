@@ -1,5 +1,9 @@
 /**
- * @fileoverview Turn a Congress.gov document body into the plain text offsets index into.
+ * @fileoverview Turn a Congress.gov document body into the plain text offsets
+ * index into — the normative, whole-string form of each reading
+ * (`DocumentReading`): {@link extractDocumentText} for GPO publications and
+ * {@link extractHtmlText} for HTML pages. `extract-text-stream.ts` reproduces
+ * both incrementally.
  * @module services/congress-documents/extract-text
  */
 
@@ -96,4 +100,286 @@ export function extractDocumentText(body: string): string {
     normalizeXmlSiblingBoundaries(stripped).replace(TAG_RE, ''),
   );
   return resolveXmlSiblingBoundaries(readable).trim();
+}
+
+/**
+ * What an element does to the `html` reading's layout. An element not listed
+ * is transparent: its tags vanish and the text around them runs on.
+ *
+ * - `paragraph` — a blank line before and after (a space inside a table cell)
+ * - `line` — a line break before and after (a space inside a table cell)
+ * - `row` — a line break; a table row is one line
+ * - `table` — a blank line before and after
+ * - `cell` — a tab between cells of one row
+ * - `raw` — `script` and `style`: dropped with everything inside them
+ */
+export type HtmlTagRole = 'cell' | 'line' | 'paragraph' | 'raw' | 'row' | 'table';
+
+/** Roles by lowercase tag name. */
+export const HTML_TAG_ROLES: ReadonlyMap<string, HtmlTagRole> = new Map<string, HtmlTagRole>([
+  ['blockquote', 'paragraph'],
+  ['br', 'line'],
+  ['div', 'line'],
+  ['h1', 'paragraph'],
+  ['h2', 'paragraph'],
+  ['h3', 'paragraph'],
+  ['h4', 'paragraph'],
+  ['h5', 'paragraph'],
+  ['h6', 'paragraph'],
+  ['hr', 'paragraph'],
+  ['li', 'line'],
+  ['ol', 'paragraph'],
+  ['p', 'paragraph'],
+  ['script', 'raw'],
+  ['style', 'raw'],
+  ['table', 'table'],
+  ['td', 'cell'],
+  ['th', 'cell'],
+  ['tr', 'row'],
+  ['ul', 'paragraph'],
+]);
+
+/** The longest name in {@link HTML_TAG_ROLES}; a longer tag name has no role. */
+export const MAX_HTML_TAG_NAME = Math.max(...[...HTML_TAG_ROLES.keys()].map((name) => name.length));
+
+/** ASCII whitespace as HTML defines it — tab, LF, FF, CR, space. U+00A0 is text. */
+export function isHtmlWhitespace(ch: string): boolean {
+  return ch === ' ' || ch === '\n' || ch === '\t' || ch === '\r' || ch === '\f';
+}
+
+function isAsciiLetter(ch: string | undefined): boolean {
+  return ch !== undefined && ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z'));
+}
+
+/** Lowercase A–Z only, so no other character can turn into a tag name. */
+function asciiLowercase(text: string): string {
+  return text.replace(/[A-Z]/g, (ch) => ch.toLowerCase());
+}
+
+/** Whether `body` holds `lowerName` at `from`, A–Z matched in either case. */
+function matchesAsciiName(body: string, from: number, lowerName: string): boolean {
+  for (let k = 0; k < lowerName.length; k++) {
+    const code = body.charCodeAt(from + k);
+    const lower = code >= 0x41 && code <= 0x5a ? code | 0x20 : code;
+    if (lower !== lowerName.charCodeAt(k)) return false;
+  }
+  return true;
+}
+
+/** The index just past the first `>` at or after `from`, or the end of the body. */
+function pastNextGt(body: string, from: number): number {
+  const at = body.indexOf('>', from);
+  return at === -1 ? body.length : at + 1;
+}
+
+/** A run of markup: where it ends, and the tag it was, if it was one. */
+interface HtmlMarkup {
+  end: number;
+  tag?: { isEnd: boolean; name: string };
+}
+
+/** A start or end tag whose name begins at `nameStart`; it runs to its first `>`. */
+function scanTag(body: string, nameStart: number, isEnd: boolean): HtmlMarkup {
+  let nameEnd = nameStart;
+  while (nameEnd < body.length) {
+    const ch = body[nameEnd] as string;
+    if (ch === '>' || ch === '/' || isHtmlWhitespace(ch)) break;
+    nameEnd++;
+  }
+  const raw = body.slice(nameStart, nameEnd);
+  const name = raw.length <= MAX_HTML_TAG_NAME ? asciiLowercase(raw) : '';
+  return { end: pastNextGt(body, nameEnd), tag: { isEnd, name } };
+}
+
+/**
+ * Where a comment opened at `lt` ends, as the HTML tokenizer ends it: at the
+ * first `-->` (which may reuse the opener's dashes, so `<!-->` and `<!--->` are
+ * empty comments) or the first `--!>` past the opener, else at the end of the
+ * body.
+ */
+function commentEnd(body: string, lt: number): number {
+  let from = lt + 2;
+  for (;;) {
+    const dashes = body.indexOf('--', from);
+    if (dashes === -1) return body.length;
+    if (body[dashes + 2] === '>') return dashes + 3;
+    if (dashes >= lt + 4 && body[dashes + 2] === '!' && body[dashes + 3] === '>') {
+      return dashes + 4;
+    }
+    from = dashes + 1;
+  }
+}
+
+/**
+ * The markup that starts at `lt`, or `undefined` when this `<` opens nothing
+ * and is text. A tag starts with a letter; `<!--` opens a comment; any other
+ * `<!`, `<?`, or `</` not followed by a letter is a bogus comment to the next
+ * `>`; `</>` is nothing at all.
+ */
+function scanMarkup(body: string, lt: number): HtmlMarkup | undefined {
+  const next = body[lt + 1];
+  if (isAsciiLetter(next)) return scanTag(body, lt + 1, false);
+  if (next === '/') {
+    const after = body[lt + 2];
+    if (after === undefined) return;
+    if (after === '>') return { end: lt + 3 };
+    if (isAsciiLetter(after)) return scanTag(body, lt + 2, true);
+    return { end: pastNextGt(body, lt + 2) };
+  }
+  if (next === '!') {
+    if (body.startsWith('--', lt + 2)) return { end: commentEnd(body, lt) };
+    return { end: pastNextGt(body, lt + 2) };
+  }
+  if (next === '?') return { end: pastNextGt(body, lt + 2) };
+  return;
+}
+
+/**
+ * Where a `script` or `style` element's content ends: past the end tag that
+ * names it — `</`, the name in any case, then whitespace, `/`, or `>` — which
+ * runs to its first `>`. An element never closed runs to the end of the body.
+ */
+function rawTextEnd(body: string, from: number, name: string): number {
+  let at = from;
+  for (;;) {
+    const close = body.indexOf('</', at);
+    if (close === -1) return body.length;
+    const after = close + 2 + name.length;
+    const terminator = body[after];
+    if (
+      terminator !== undefined &&
+      (terminator === '>' || terminator === '/' || isHtmlWhitespace(terminator)) &&
+      matchesAsciiName(body, close + 2, name)
+    ) {
+      return pastNextGt(body, after);
+    }
+    at = close + 2;
+  }
+}
+
+/**
+ * Collects the `html` reading's text and the separators owed between pieces
+ * of it. A separator is written only once more text follows, so nothing leads
+ * or trails the document, and the strongest one owed wins: a blank line over a
+ * line break over tabs over a space.
+ */
+class HtmlLayout {
+  private inCell = false;
+  private newlines = 0;
+  private readonly parts: string[] = [];
+  private space = false;
+  private started = false;
+  private tabs = 0;
+
+  /** Decoded text: each run of ASCII whitespace separates, everything else is written. */
+  text(decoded: string): void {
+    let i = 0;
+    while (i < decoded.length) {
+      if (isHtmlWhitespace(decoded[i] as string)) {
+        this.space = true;
+        i++;
+        continue;
+      }
+      let end = i + 1;
+      while (end < decoded.length && !isHtmlWhitespace(decoded[end] as string)) end++;
+      this.write(decoded.slice(i, end));
+      i = end;
+    }
+  }
+
+  tag(role: HtmlTagRole, isEnd: boolean): void {
+    switch (role) {
+      case 'cell':
+        /** A cell opened inside another closed it: the end tag was omitted. */
+        if (isEnd || this.inCell) this.tabs++;
+        this.inCell = !isEnd;
+        return;
+      case 'row':
+        this.inCell = false;
+        this.lineBreak(1);
+        return;
+      case 'table':
+        this.inCell = false;
+        this.lineBreak(2);
+        return;
+      case 'line':
+        if (this.inCell) this.space = true;
+        else this.lineBreak(1);
+        return;
+      case 'paragraph':
+        if (this.inCell) this.space = true;
+        else this.lineBreak(2);
+        return;
+      case 'raw':
+        return;
+    }
+  }
+
+  finish(): string {
+    return this.parts.join('');
+  }
+
+  /** Tabs still owed when a line break arrives trail the row it ends, so they go. */
+  private lineBreak(newlines: number): void {
+    this.newlines = Math.max(this.newlines, newlines);
+    this.tabs = 0;
+  }
+
+  private write(text: string): void {
+    if (this.started) {
+      if (this.newlines > 0 || this.tabs > 0) {
+        this.parts.push('\n'.repeat(this.newlines), '\t'.repeat(this.tabs));
+      } else if (this.space) {
+        this.parts.push(' ');
+      }
+    }
+    this.parts.push(text);
+    this.started = true;
+    this.newlines = 0;
+    this.tabs = 0;
+    this.space = false;
+  }
+}
+
+/**
+ * Extract the readable plain text of an HTML page — the `html` reading.
+ *
+ * Markup is tokenized as the HTML tokenizer reads it, with one simplification:
+ * a tag runs from `<` to its first `>`, quoted attribute values included. A `<`
+ * opens a tag only before a letter, `/`, `!`, or `?`; otherwise it is text.
+ * Comments, declarations, and every tag and attribute are dropped, and so are
+ * `script` and `style` with their content; markup left open at the end of the
+ * body runs to the end. Character references decode once, within one run of
+ * text — never across markup — through the shared decoder.
+ *
+ * The text is laid out the way a browser shows it, as plain text: each run of
+ * ASCII whitespace collapses to one space, {@link HTML_TAG_ROLES} puts line
+ * breaks and blank lines between blocks, a table row is one line of trimmed
+ * cells joined by tabs, and no line starts or ends with a space. There is no
+ * element stack: the only state that outlives a tag is whether a table cell is
+ * open, so nesting depth costs nothing.
+ */
+export function extractHtmlText(body: string): string {
+  const layout = new HtmlLayout();
+  let runStart = 0;
+  let at = 0;
+  for (;;) {
+    const lt = body.indexOf('<', at);
+    if (lt === -1) break;
+    const markup = scanMarkup(body, lt);
+    if (markup === undefined) {
+      at = lt + 1;
+      continue;
+    }
+    layout.text(decodeCharacterReferences(body.slice(runStart, lt)));
+    at = markup.end;
+    if (markup.tag !== undefined) {
+      const role = HTML_TAG_ROLES.get(markup.tag.name);
+      if (role === 'raw' && !markup.tag.isEnd) at = rawTextEnd(body, at, markup.tag.name);
+      else if (role !== undefined) layout.tag(role, markup.tag.isEnd);
+    }
+    runStart = at;
+  }
+  layout.text(decodeCharacterReferences(body.slice(runStart)));
+  return layout.finish();
 }

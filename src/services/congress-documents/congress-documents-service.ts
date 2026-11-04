@@ -127,6 +127,11 @@ export class CongressDocumentsService {
    * goes out, so a redirected or malformed upstream link cannot turn this into a
    * general-purpose fetcher.
    *
+   * `reading` names how the body becomes text (`DocumentReading`): the caller
+   * that resolved the URL knows what it points at, so the body never decides.
+   * The cache holds bytes, not text, so a replay applies the reading of the call
+   * it serves.
+   *
    * A document whose body is cached is replayed from it with no request at all.
    * Otherwise the fetch spends what is left of the tool call's budget
    * (`call-budget.ts`): running out throws `Timeout` (`upstream_timeout`), and a
@@ -171,10 +176,7 @@ export class CongressDocumentsService {
     signal?: AbortSignal,
   ): Promise<ExtractedWindow> {
     const decoder = new TextDecoder('utf-8');
-    const extractor = createStreamingExtractor({
-      characterLimit: params.characterLimit,
-      characterOffset: params.characterOffset,
-    });
+    const extractor = createStreamingExtractor(params);
     for (let start = 0; start < body.byteLength; start += REPLAY_SLICE_BYTES) {
       if (start > 0) await new Promise<void>((resolve) => setImmediate(resolve));
       if (signal?.aborted) throw requestCancelled('The document read was cancelled.');
@@ -330,10 +332,7 @@ export class CongressDocumentsService {
   ): Promise<FetchedWindow> {
     const reader = response.body?.getReader();
     const decoder = new TextDecoder('utf-8');
-    const extractor = createStreamingExtractor({
-      characterLimit: params.characterLimit,
-      characterOffset: params.characterOffset,
-    });
+    const extractor = createStreamingExtractor(params);
     const body = this.bodyCache.capture();
     let bytes = 0;
 

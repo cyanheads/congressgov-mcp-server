@@ -1,12 +1,16 @@
 /**
- * @fileoverview Tests for the GPO `<pre>` → plain-text extractor. The extracted
- * string is what every character offset indexes into, so these pin exactness:
- * verbatim whitespace, single-pass entity decoding, and deterministic newlines.
+ * @fileoverview Tests for the whole-string document readings: the GPO `<pre>` /
+ * XML reading and the HTML reading. The extracted string is what every
+ * character offset indexes into, so these pin exactness: verbatim whitespace,
+ * single-pass entity decoding, deterministic newlines, and HTML layout.
  * @module tests/services/congress-documents/extract-text.test
  */
 
 import { describe, expect, it } from 'vitest';
-import { extractDocumentText } from '@/services/congress-documents/extract-text.js';
+import {
+  extractDocumentText,
+  extractHtmlText,
+} from '@/services/congress-documents/extract-text.js';
 
 describe('extractDocumentText', () => {
   it('unwraps a bare <pre> body and keeps the print layout verbatim', () => {
@@ -258,6 +262,226 @@ describe('extractDocumentText', () => {
       expect(extractDocumentText('<pre>a   \n\n</pre>')).toBe('a');
       expect(extractDocumentText('<pre>a&nbsp;</pre>')).toBe('a');
       expect(extractDocumentText('<pre>   \n  </pre>')).toBe('');
+    });
+  });
+});
+
+/**
+ * The `html` reading — CRS report pages. Like the GPO reading, the string is
+ * what every `content` offset indexes into, so these pin it exactly: what is
+ * markup, what is text, and where lines and paragraphs fall.
+ */
+describe('extractHtmlText', () => {
+  it.each([
+    ['a comment hiding a script', '<!-- <script>x</script> -->a', 'a'],
+    ['a script end tag with trailing whitespace', '<script>x</script >b', 'b'],
+    ['a mixed-case script closed by a line break', '<SCRIPT>x</script\n>c', 'c'],
+    ['a script name split by a nested tag', '<scr<b>ipt>x</scr<b>ipt>y', 'ipt>xipt>y'],
+    ['a CDATA section', '<![CDATA[x<y]]>z', 'z'],
+    [
+      'a table cell holding two paragraphs',
+      '<table><tr><td><p>a</p><p>b</p></td><td>c</td></tr></table>',
+      'a b\tc',
+    ],
+  ])('reads %s', (_label, body, expected) => {
+    expect(extractHtmlText(body)).toBe(expected);
+  });
+
+  describe('dropped content', () => {
+    it('drops script and style elements with everything inside them', () => {
+      expect(extractHtmlText('a<script type="text/javascript">var x = "<p>";</script>b')).toBe(
+        'ab',
+      );
+      expect(extractHtmlText('a<style>p { content: "</p>" }</style>b')).toBe('ab');
+      expect(extractHtmlText('<script/>hidden</script>shown')).toBe('shown');
+    });
+
+    it('closes a raw-text element only with its own end tag', () => {
+      expect(extractHtmlText('<script>a</style>b</script>c')).toBe('c');
+      expect(extractHtmlText('<style>a</script>b</STYLE/>c')).toBe('c');
+      expect(extractHtmlText('<script>a</scriptx>b</script>c')).toBe('c');
+    });
+
+    it('runs an unclosed script or style to the end of the document', () => {
+      expect(extractHtmlText('a<script>b</script')).toBe('a');
+      expect(extractHtmlText('a<style>b</sty')).toBe('a');
+    });
+
+    it('runs an unterminated comment to the end of the document', () => {
+      expect(extractHtmlText('a<!-- b <p>c</p>')).toBe('a');
+    });
+
+    it('ends a comment where the HTML tokenizer does', () => {
+      expect(extractHtmlText('<!-->a')).toBe('a');
+      expect(extractHtmlText('<!--->a')).toBe('a');
+      expect(extractHtmlText('<!---->a')).toBe('a');
+      expect(extractHtmlText('<!-- x --!>a')).toBe('a');
+      expect(extractHtmlText('<!-- x <!-- y -->a')).toBe('a');
+      expect(extractHtmlText('<!--!>a')).toBe('');
+      expect(extractHtmlText('<!---!>a')).toBe('');
+    });
+
+    it('reads declarations, processing instructions, and stray end tags as markup to the first >', () => {
+      expect(extractHtmlText('<!DOCTYPE html>a')).toBe('a');
+      expect(extractHtmlText('<?xml version="1.0"?>a')).toBe('a');
+      expect(extractHtmlText('<!>a<!->b<!-x>c')).toBe('abc');
+      expect(extractHtmlText('a</>b</ x>c</3>d')).toBe('abcd');
+    });
+
+    it('ends a tag at its first >, quotes or not', () => {
+      expect(extractHtmlText('<a title="x>y">z</a>')).toBe('y">z');
+    });
+
+    it('drops an unterminated tag to the end of the document', () => {
+      expect(extractHtmlText('alpha<beta')).toBe('alpha');
+      expect(extractHtmlText('alpha</beta gamma')).toBe('alpha');
+      expect(extractHtmlText('alpha<!DOCTYPE')).toBe('alpha');
+    });
+
+    it('drops every tag and attribute, footnote titles and link targets included', () => {
+      expect(
+        extractHtmlText(
+          '<p>Text<sup><a class="FootnoteLink" title="The footnote body." href="#fn1">1</a></sup> continues.</p>',
+        ),
+      ).toBe('Text1 continues.');
+    });
+  });
+
+  describe('kept text', () => {
+    it('keeps a < that opens no tag', () => {
+      expect(extractHtmlText('a < b <3 c<')).toBe('a < b <3 c<');
+      expect(extractHtmlText('x</')).toBe('x</');
+      expect(extractHtmlText('<')).toBe('<');
+    });
+
+    it('keeps text the report template shows, escaped directive included', () => {
+      expect(
+        extractHtmlText(
+          '<head><meta charset="utf-8"/></head>\n    &lt;%@ Control Language="C#" %&gt;\n    <script language="C#" runat="server">public string X;</script><div class="Title">Voter Registration</div>',
+        ),
+      ).toBe('<%@ Control Language="C#" %>\nVoter Registration');
+    });
+
+    it('collapses each run of ASCII whitespace to one space and trims the ends', () => {
+      expect(extractHtmlText('  a \n\t b\r\n\fc  ')).toBe('a b c');
+      expect(extractHtmlText(' \n\t ')).toBe('');
+      expect(extractHtmlText('')).toBe('');
+    });
+
+    it('keeps a non-breaking space as text, at the ends too', () => {
+      expect(extractHtmlText('a&nbsp;&#160;b')).toBe('a  b');
+      expect(extractHtmlText('&nbsp;a&nbsp;')).toBe(' a ');
+    });
+
+    it('collapses whitespace that a reference decodes to', () => {
+      expect(extractHtmlText('a&#32; &#10;&#x9;b')).toBe('a b');
+    });
+  });
+
+  describe('character references', () => {
+    it('decodes references once', () => {
+      expect(extractHtmlText('&amp;lt; &lt;b&gt; &quot;q&quot; &#x2014; &#8212;')).toBe(
+        '&lt; <b> "q" — —',
+      );
+    });
+
+    it('never turns a decoded < into markup', () => {
+      expect(extractHtmlText('&lt;script&gt;x&lt;/script&gt;y')).toBe('<script>x</script>y');
+    });
+
+    it('leaves a reference it does not recognize verbatim', () => {
+      expect(extractHtmlText('&copy; &#0; &#xD800; &#99999999; &#; &abcdefghij;')).toBe(
+        '&copy; &#0; &#xD800; &#99999999; &#; &abcdefghij;',
+      );
+    });
+
+    it('never joins a reference across markup', () => {
+      expect(extractHtmlText('&am<i>p;')).toBe('&amp;');
+      expect(extractHtmlText('&am<!-- x -->p;')).toBe('&amp;');
+    });
+
+    it('restarts a reference at a later ampersand and reads through leading zeros', () => {
+      expect(extractHtmlText('&&amp; &am&amp; &#0000065;')).toBe('&& &am& A');
+    });
+  });
+
+  describe('layout', () => {
+    it('puts a blank line between paragraph-level blocks', () => {
+      expect(extractHtmlText('<p>a</p><p>b</p>')).toBe('a\n\nb');
+      expect(extractHtmlText('<h1>Contents</h1><ul><li>a</li><li>b</li></ul>after')).toBe(
+        'Contents\n\na\nb\n\nafter',
+      );
+      expect(
+        extractHtmlText('a<h2>b</h2><h6>c</h6><ol><li>d</li></ol><blockquote>e</blockquote>f'),
+      ).toBe('a\n\nb\n\nc\n\nd\n\ne\n\nf');
+      expect(extractHtmlText('a<hr color="#003399"/>b')).toBe('a\n\nb');
+    });
+
+    it('ends a line at div, li, tr, and br', () => {
+      expect(extractHtmlText('<div>a</div><div>b</div>c<br/>d<BR>e</br>f')).toBe(
+        'a\nb\nc\nd\ne\nf',
+      );
+    });
+
+    it('never puts more than one blank line between text', () => {
+      expect(extractHtmlText('<p>a</p><p></p>\n<p> </p><br><div></div><p>b</p>')).toBe('a\n\nb');
+    });
+
+    it('trims each line', () => {
+      expect(extractHtmlText('<p>  a  </p>  <p>\n b \n</p>')).toBe('a\n\nb');
+      expect(extractHtmlText('a <br> b')).toBe('a\nb');
+    });
+
+    it('keeps inline elements inline', () => {
+      expect(
+        extractHtmlText(
+          '<p>pre<em>formatted</em> <strong>text</strong><span class="Hyperlink">!</span></p>',
+        ),
+      ).toBe('preformatted text!');
+    });
+
+    it('lays a table row out on one line, cells joined by tabs', () => {
+      expect(
+        extractHtmlText(
+          '<p>Table 1</p><table><tr><th>Year</th><th>OASI</th></tr>\n<tr>\n<td> 2026 </td>\n<td>$1,234</td>\n</tr></table><p>Source</p>',
+        ),
+      ).toBe('Table 1\n\nYear\tOASI\n2026\t$1,234\n\nSource');
+    });
+
+    it('turns block breaks inside a cell into spaces', () => {
+      expect(
+        extractHtmlText(
+          '<table><tr><td><div>a</div><br>b<ul><li>c</li></ul><hr>d</td><td>e</td></tr></table>',
+        ),
+      ).toBe('a b c d\te');
+    });
+
+    it('keeps the tab of an empty cell before or between filled ones and drops it after the last', () => {
+      expect(
+        extractHtmlText(
+          '<table><tr><td>a</td><td></td><td>c</td></tr><tr><td></td><td>e</td><td></td></tr><tr><td>g</td></tr></table>',
+        ),
+      ).toBe('a\t\tc\n\te\ng');
+    });
+
+    it('separates a cell whose end tag was omitted', () => {
+      expect(extractHtmlText('<table><tr><td>a<td>b<tr><td>c</table>')).toBe('a\tb\nc');
+    });
+
+    it('lays a nested table out on its own lines and keeps the outer cells apart', () => {
+      expect(
+        extractHtmlText(
+          '<table><tr><td>x<table><tr><td>a</td><td>b</td></tr></table>y</td><td>z</td></tr></table>',
+        ),
+      ).toBe('x\n\na\tb\n\ny\tz');
+    });
+
+    it('reads a footnote list as number, tab, text', () => {
+      expect(
+        extractHtmlText(
+          '<h1>Footnotes</h1><table><tr><td valign="top"><a class="FootnoteBL" href="#ifn1" name="fn1">1</a>.\n </td>\n<td>\n<p class="FootnoteText"> See <a href="x"><em>Report</em></a>, p. 2.</p>\n</td>\n</tr></table>',
+        ),
+      ).toBe('Footnotes\n\n1.\tSee Report, p. 2.');
     });
   });
 });

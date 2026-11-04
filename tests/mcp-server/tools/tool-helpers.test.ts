@@ -1,7 +1,7 @@
 /**
  * @fileoverview Tests for shared tool-helpers — normalizeOptionalString, validateIsoDateTime,
  * numericIdentifier/toIdentifierNumber, lawNumberIdentifier/toLawNumber,
- * validateDateTimeRange, buildEffectiveQuery, notifyIfNoMatches.
+ * validateDateTimeRange, buildEffectiveQuery, notifyIfNoMatches, addNotice, noticeIgnoredInputs.
  * @module tests/mcp-server/tools/tool-helpers.test
  */
 
@@ -9,9 +9,11 @@ import { z } from '@cyanheads/mcp-ts-core';
 import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
 import { describe, expect, it } from 'vitest';
 import {
+  addNotice,
   buildEffectiveQuery,
   lawNumberIdentifier,
   normalizeOptionalString,
+  noticeIgnoredInputs,
   notifyIfNoMatches,
   numericIdentifier,
   toIdentifierNumber,
@@ -335,5 +337,83 @@ describe('notifyIfNoMatches', () => {
     const ctx = createMockContext();
     notifyIfNoMatches(ctx, { data: [], pagination: { count: 0 } }, 'No actions found for HR 9479.');
     expect(getEnrichment(ctx).notice).toBe('No actions found for HR 9479.');
+  });
+});
+
+describe('addNotice', () => {
+  it('writes a single sentence as the notice', () => {
+    const ctx = createMockContext();
+    addNotice(ctx, 'First.');
+    expect(getEnrichment(ctx).notice).toBe('First.');
+  });
+
+  it('composes later sentences after earlier ones instead of replacing them', () => {
+    const ctx = createMockContext();
+    addNotice(ctx, "Resolved 'judiciary' → ssju00 (Judiciary Committee)");
+    notifyIfNoMatches(ctx, { data: [], pagination: { count: 0 } }, 'No bills found.');
+    expect(getEnrichment(ctx).notice).toBe(
+      "Resolved 'judiciary' → ssju00 (Judiciary Committee) No bills found.",
+    );
+  });
+
+  it('keeps each call context separate', () => {
+    const first = createMockContext();
+    const second = createMockContext();
+    addNotice(first, 'One.');
+    addNotice(second, 'Two.');
+    expect(getEnrichment(first).notice).toBe('One.');
+    expect(getEnrichment(second).notice).toBe('Two.');
+  });
+});
+
+describe('noticeIgnoredInputs', () => {
+  it('names one ignored input', () => {
+    const ctx = createMockContext();
+    noticeIgnoredInputs(ctx, 'sponsored', { congress: 118 });
+    expect(getEnrichment(ctx).notice).toBe("'sponsored' does not use congress, so it was ignored.");
+  });
+
+  it('names several ignored inputs in the order given and appends the detail', () => {
+    const ctx = createMockContext();
+    noticeIgnoredInputs(
+      ctx,
+      'bills',
+      { congress: 118, stateCode: 'WA' },
+      'Results span every congress.',
+    );
+    expect(getEnrichment(ctx).notice).toBe(
+      "'bills' does not use congress or stateCode, so they were ignored. Results span every congress.",
+    );
+  });
+
+  it('lists three or more ignored names as a series ending in "or"', () => {
+    const ctx = createMockContext();
+    noticeIgnoredInputs(ctx, 'get', { stateCode: 'WA', district: 9, currentMember: true });
+    expect(getEnrichment(ctx).notice).toBe(
+      "'get' does not use stateCode, district, or currentMember, so they were ignored.",
+    );
+  });
+
+  it('treats undefined, null, and blank values as unset', () => {
+    const ctx = createMockContext();
+    noticeIgnoredInputs(ctx, 'get', { congress: undefined, filter: '', district: null });
+    expect(getEnrichment(ctx).notice).toBeUndefined();
+  });
+
+  it('counts falsy but set values as supplied', () => {
+    const ctx = createMockContext();
+    noticeIgnoredInputs(ctx, 'get', { district: 0, currentMember: false });
+    expect(getEnrichment(ctx).notice).toBe(
+      "'get' does not use district or currentMember, so they were ignored.",
+    );
+  });
+
+  it('composes with a notice written before it', () => {
+    const ctx = createMockContext();
+    addNotice(ctx, 'Earlier.');
+    noticeIgnoredInputs(ctx, 'actions', { fromDateTime: '2024-01-01T00:00:00Z' });
+    expect(getEnrichment(ctx).notice).toBe(
+      "Earlier. 'actions' does not use fromDateTime, so it was ignored.",
+    );
   });
 });

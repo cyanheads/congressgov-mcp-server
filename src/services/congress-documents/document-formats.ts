@@ -1,9 +1,12 @@
 /**
- * @fileoverview Resolve a requested document format to its upstream URL.
+ * @fileoverview Resolve a requested document format to its upstream URL: GPO
+ * format lists, CRS report formats, and the part a committee report's format
+ * URL belongs to.
  * @module services/congress-documents/document-formats
  */
 
-import type { DocumentFormat, DocumentFormatRef } from './types.js';
+import { notFound } from '@cyanheads/mcp-ts-core/errors';
+import type { CrsFormatRef, DocumentFormat, DocumentFormatRef } from './types.js';
 
 export const DOCUMENT_FORMATS = ['text', 'xml'] as const;
 
@@ -56,4 +59,81 @@ export function selectDocumentUrl(entries: unknown, format: DocumentFormat): str
 /** The upstream labels a format resolves to, for error messages that name what was searched. */
 export function describeFormat(format: DocumentFormat): string {
   return DOCUMENT_FORMAT_LABELS[format].join(' / ');
+}
+
+/** A published CRS format: its label as upstream writes it, and its URL. */
+interface CrsFormat {
+  format: string;
+  url: string;
+}
+
+/** The entries of a CRS `formats[]` that carry a usable URL. */
+function crsFormats(formats: unknown): CrsFormat[] {
+  if (!Array.isArray(formats)) return [];
+  return formats.flatMap((entry: unknown) => {
+    if (typeof entry !== 'object' || entry === null) return [];
+    const { format, url } = entry as CrsFormatRef;
+    if (typeof url !== 'string' || url.trim() === '') return [];
+    return [{ format: typeof format === 'string' ? format.trim() : '', url: url.trim() }];
+  });
+}
+
+/**
+ * Pick the HTML rendition of a CRS report from its `formats[]` — the one CRS
+ * format this server reads as text, through the `html` reading.
+ *
+ * CRS labels each entry `HTML` or `PDF`, and the HTML path does not follow the
+ * report ID (`/RA/HTML/RL32893.html`, `/RL/HTML/93-931.html`), so the URL is
+ * always the one the entry publishes, never one built from the ID.
+ *
+ * @throws `NotFound`, reason `format_unavailable`, naming every published
+ *   format and its URL in the message and in `data.formats`, when the report
+ *   publishes formats but no HTML (the oldest reports are PDF only).
+ * @throws `NotFound`, reason `document_unavailable`, when it publishes no
+ *   format with a URL at all.
+ */
+export function selectCrsDocumentUrl(formats: unknown, reportNumber: string): string {
+  const published = crsFormats(formats);
+  const html = published.find((entry) => entry.format.toUpperCase() === 'HTML');
+  if (html) return html.url;
+  if (published.length === 0) {
+    throw notFound(`CRS report ${reportNumber} publishes no document formats.`, {
+      reason: 'document_unavailable',
+      reportNumber,
+      retryable: false,
+    });
+  }
+  const listed = published.map((entry) => `${entry.format || 'unlabeled'} at ${entry.url}`);
+  throw notFound(
+    `CRS report ${reportNumber} publishes no HTML version, the one format this server reads as text. It publishes ${listed.join('; ')}.`,
+    {
+      reason: 'format_unavailable',
+      reportNumber,
+      formats: published,
+      retryable: false,
+    },
+  );
+}
+
+/**
+ * The `-pt{N}` marker in a committee report file name, ended by the extension,
+ * a hyphen (`err-pt3-ERRATA`), or the end of the name.
+ */
+const PART_MARKER_RE = /-pt(\d+)(?=[.-]|$)/i;
+
+/**
+ * The part of a multi-part committee report a format URL belongs to: the `N`
+ * of a `-pt{N}` marker in its file name, else 1.
+ *
+ * Congress.gov files each part as its own record and lists every part's
+ * formats under one report number. Part 1 is unsuffixed (`CRPT-117hrpt70.htm`)
+ * or `-pt1` (Book-style reports and the 110th Congress); later parts carry
+ * `-pt{N}`, and an errata file carries its part as `err-pt{N}-ERRATA`. Only
+ * the file name is read — never a directory, query, or fragment.
+ */
+export function formatUrlPart(url: string): number {
+  const end = url.search(/[?#]/);
+  const path = end === -1 ? url : url.slice(0, end);
+  const marker = PART_MARKER_RE.exec(path.slice(path.lastIndexOf('/') + 1));
+  return marker ? Number(marker[1]) : 1;
 }

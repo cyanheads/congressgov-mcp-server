@@ -11,18 +11,25 @@ import {
   buildEffectiveQuery,
   congressErrorContracts,
   documentErrorContracts,
+  documentFormatInput,
   documentWindowInput,
   identityErrorContracts,
   listEnrichment,
   listOrDetail,
+  normalizeOptionalString,
+  noticeIgnoredInputs,
   notifyIfNoMatches,
+  validateDateTimeRange,
+  validateIsoDateTime,
 } from '@/mcp-server/tools/tool-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 import { getCongressDocuments } from '@/services/congress-documents/congress-documents-service.js';
 import {
   describeFormat,
+  formatUrlPart,
   selectDocumentUrl,
 } from '@/services/congress-documents/document-formats.js';
+import { ordinal } from '@/utils/congress-calendar.js';
 
 /**
  * Committee report text arrives as `[{formats:[…]}, …]` — one format per entry,
@@ -37,9 +44,58 @@ function collectReportFormats(text: unknown): unknown[] {
   });
 }
 
+/** The part a format entry belongs to: its URL's `-pt{N}` marker, else 1. */
+function formatPart(format: unknown): number {
+  const url = (format as { url?: unknown } | null | undefined)?.url;
+  return typeof url === 'string' ? formatUrlPart(url) : 1;
+}
+
+/** The part a report record describes: upstream `part`, a number or digit string, else 1. */
+function recordPart(record: Record<string, unknown>): number {
+  const { part } = record;
+  if (typeof part === 'number' && Number.isInteger(part) && part > 0) return part;
+  if (typeof part === 'string' && /^\s*0*[1-9]\d*\s*$/.test(part)) return Number(part);
+  return 1;
+}
+
+/** An errata reprint of a part, which files under the part number it corrects. */
+function isErrataRecord(record: Record<string, unknown>): boolean {
+  return typeof record.citation === 'string' && /errata/i.test(record.citation);
+}
+
+/** The sorted distinct parts; a report that names none is Part 1 alone. */
+function distinctParts(parts: number[]): number[] {
+  const sorted = [...new Set(parts)].sort((a, b) => a - b);
+  return sorted.length > 0 ? sorted : [1];
+}
+
+/** The `/text` entries of one part: other parts' formats dropped, and entries left with none. */
+function partTextEntries(text: unknown[], part: number): unknown[] {
+  return text.flatMap((entry) => {
+    const formats = (entry as { formats?: unknown } | null | undefined)?.formats;
+    if (!Array.isArray(formats)) return [entry];
+    const kept = formats.filter((format) => formatPart(format) === part);
+    if (kept.length === formats.length) return [entry];
+    return kept.length > 0 ? [{ ...(entry as Record<string, unknown>), formats: kept }] : [];
+  });
+}
+
+const committeeReportsOutput = listOrDetail(
+  { report: 'record', text: 'records', content: 'record' },
+  "the committee report (citation, title, committees, associated bill) — the selected part's record for a multi-part report; for `text`, an alternative key 'text' carries an array of {type, url} format links for the selected part; for `content`, an alternative key 'content' carries {text, format, sourceUrl, documentTitle, totalCharacters, offset, truncated, nextOffset} — one exact character window of the selected part's text.",
+  {
+    parts: z
+      .array(z.number().int().positive().describe('A part number.'))
+      .optional()
+      .describe(
+        "Every part number the report is filed in, ascending, on 'get', 'text', and 'content' for a report Congress.gov files in more than one part; absent for a single-part report. The response describes the part the part input selected.",
+      ),
+  },
+);
+
 export const committeeReportsTool = tool('congressgov_committee_reports', {
   title: 'Congress.gov Committee Reports',
-  description: `Browse and retrieve committee reports from Congress.gov — reports accompany legislation reported out of committee and explain the bill's purpose, committee amendments, dissenting views, and the committee vote. Report types are 'hrpt' (House), 'srpt' (Senate), and 'erpt' (Executive). 'text' lists the published format URLs; 'content' then reads the report's actual text, a bounded character window at a time.`,
+  description: `Browse and retrieve committee reports from Congress.gov — reports accompany legislation reported out of committee and explain the bill's purpose, committee amendments, dissenting views, and the committee vote. Report types are 'hrpt' (House), 'srpt' (Senate), and 'erpt' (Executive). 'list' is not ordered by date; it takes fromDateTime/toDateTime, which filter on the date Congress.gov last updated a report record, and conference, which selects conference reports — list rows carry no conference field. 'text' lists the published format URLs; 'content' then reads the report's actual text, a bounded character window at a time. A multi-part report (Part 2, Book 3) is filed as one record per part under one report number: 'get', 'text', and 'content' serve Part 1 unless part names another, and list every part number in parts.`,
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
   errors: [...congressErrorContracts, ...documentErrorContracts, ...identityErrorContracts],
   input: z.object({
@@ -55,19 +111,49 @@ export const committeeReportsTool = tool('congressgov_committee_reports', {
       .positive()
       .optional()
       .describe('Committee report number. Required for get, text, and content operations.'),
+    part: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .describe(
+        "Which part of a multi-part report 'get', 'text', and 'content' serve; Part 1 when omitted. A multi-part response lists the report's part numbers in parts. 'list' does not take it.",
+      ),
+    fromDateTime: z
+      .string()
+      .optional()
+      .describe(
+        "Start of the update-date window for 'list' (ISO 8601, e.g. 2025-06-01T00:00:00Z): the date Congress.gov last updated a report record, not its publication date. Ignored by other operations.",
+      ),
+    toDateTime: z
+      .string()
+      .optional()
+      .describe(
+        "End of the update-date window for 'list' (ISO 8601). Same field semantics as fromDateTime. Ignored by other operations.",
+      ),
+    conference: z
+      .boolean()
+      .optional()
+      .describe(
+        "For 'list': true returns only conference reports, false only the others; omit for both. Ignored by other operations.",
+      ),
     limit: z.number().int().min(1).max(250).default(20).describe('Results per page (1-250).'),
     offset: z.number().int().min(0).default(0).describe('Pagination offset.'),
+    ...documentFormatInput,
     ...documentWindowInput,
   }),
-  output: listOrDetail(
-    { report: 'record', text: 'records', content: 'record' },
-    "the committee report (citation, title, committees, associated bill); for `text`, an alternative key 'text' carries an array of {type, url} format links; for `content`, an alternative key 'content' carries {text, format, sourceUrl, documentTitle, totalCharacters, offset, truncated, nextOffset} — one exact character window of the report.",
-  ),
+  output: committeeReportsOutput,
   enrichment: listEnrichment,
   format: formatCommitteeReports,
 
   async handler(input, ctx) {
     const api = getCongressApi();
+    const fromDateTime = validateIsoDateTime(
+      normalizeOptionalString(input.fromDateTime),
+      'fromDateTime',
+    );
+    const toDateTime = validateIsoDateTime(normalizeOptionalString(input.toDateTime), 'toDateTime');
+    validateDateTimeRange(fromDateTime, toDateTime);
 
     if (input.operation === 'list') {
       if (input.reportNumber !== undefined) {
@@ -77,10 +163,20 @@ export const committeeReportsTool = tool('congressgov_committee_reports', {
           { field: 'reportNumber', operation: input.operation },
         );
       }
+      if (input.part !== undefined) {
+        throw ctx.fail(
+          'incompatible_identity',
+          "'list' does not use part. Remove part to browse, or use 'get', 'text', or 'content' with congress, reportType, reportNumber, and part.",
+          { field: 'part', operation: input.operation },
+        );
+      }
       const result = await api.listCommitteeReports(
         {
           congress: input.congress,
           reportType: input.reportType,
+          fromDateTime,
+          toDateTime,
+          conference: input.conference,
           limit: input.limit,
           offset: input.offset,
         },
@@ -94,13 +190,16 @@ export const committeeReportsTool = tool('congressgov_committee_reports', {
         buildEffectiveQuery('committee reports', {
           congress: input.congress,
           reportType: input.reportType,
+          fromDateTime,
+          toDateTime,
+          conference: input.conference,
         }),
       );
       ctx.enrich.total(result.pagination.count);
       notifyIfNoMatches(
         ctx,
         result,
-        'No committee reports found. Try removing the reportType filter or check the congress number.',
+        'No committee reports found. Try removing the reportType, fromDateTime/toDateTime, or conference filter, or check the congress number.',
       );
       return result;
     }
@@ -115,36 +214,72 @@ export const committeeReportsTool = tool('congressgov_committee_reports', {
         },
       );
     }
+    noticeIgnoredInputs(ctx, input.operation, {
+      fromDateTime,
+      toDateTime,
+      conference: input.conference,
+    });
 
-    if (input.operation === 'content') {
-      const citation = `${input.reportType.toUpperCase()} ${input.congress}-${input.reportNumber}`;
-      const result = await api.getCommitteeReportText(
+    const report = {
+      congress: input.congress,
+      reportType: input.reportType,
+      reportNumber: input.reportNumber,
+    };
+    const citation = `${input.reportType.toUpperCase()} ${input.congress}-${input.reportNumber}`;
+    const part = input.part ?? 1;
+
+    /** Fail a part the report is not filed in, naming the ones it is. */
+    const missingPart = (parts: number[]) =>
+      ctx.fail(
+        'not_found',
+        `Committee report ${citation} has no part ${part}. Its parts are ${parts.join(', ')}.`,
         {
-          congress: input.congress,
-          reportType: input.reportType,
-          reportNumber: input.reportNumber,
+          ...report,
+          part,
+          parts,
+          recovery: {
+            hint: `Retry with part set to one of ${parts.join(', ')}, or omit part to read Part 1.`,
+          },
         },
-        ctx,
       );
 
-      const formats = collectReportFormats(result.text);
+    if (input.operation === 'get') {
+      const { reports } = await api.getCommitteeReport(report, ctx);
+      const parts = distinctParts(reports.map(recordPart));
+      const filed = reports.filter((record) => recordPart(record) === part);
+      const selected = filed.find((record) => !isErrataRecord(record)) ?? filed[0];
+      if (!selected) throw missingPart(parts);
+      ctx.log.info('Committee report retrieved', { ...report, part });
+      ctx.enrich.echo(
+        `${input.reportType.toUpperCase()} ${input.reportNumber}${parts.length > 1 ? `, Part ${part}` : ''} (${ordinal(input.congress)} Congress)`,
+      );
+      ctx.enrich.total(1);
+      return { report: selected, ...(parts.length > 1 ? { parts } : {}) };
+    }
+
+    const result = await api.getCommitteeReportText(report, ctx);
+    const formats = collectReportFormats(result.text);
+
+    if (input.operation === 'content') {
       if (formats.length === 0) {
         throw ctx.fail(
           'document_unavailable',
           `Committee report ${citation} publishes no document formats.`,
-          {
-            congress: input.congress,
-            reportType: input.reportType,
-            reportNumber: input.reportNumber,
-          },
+          report,
         );
       }
+      const parts = distinctParts(formats.map(formatPart));
+      if (!parts.includes(part)) throw missingPart(parts);
+      const label = parts.length > 1 ? `${citation}, Part ${part}` : citation;
 
-      const url = selectDocumentUrl(formats, input.format);
+      const url = selectDocumentUrl(
+        formats.filter((format) => formatPart(format) === part),
+        input.format,
+      );
       if (!url) {
         throw ctx.fail(
           'format_unavailable',
-          `Committee report ${citation} publishes no '${input.format}' document (looked for ${describeFormat(input.format)}).`,
+          `Committee report ${label} publishes no '${input.format}' document (looked for ${describeFormat(input.format)}).`,
           { ...ctx.recoveryFor('format_unavailable'), format: input.format },
         );
       }
@@ -154,18 +289,18 @@ export const committeeReportsTool = tool('congressgov_committee_reports', {
           url,
           characterOffset: input.characterOffset,
           characterLimit: input.characterLimit,
+          reading: 'gpo',
         },
         ctx,
       );
       ctx.log.info('Committee report content retrieved', {
-        congress: input.congress,
-        reportType: input.reportType,
-        reportNumber: input.reportNumber,
+        ...report,
+        part,
         format: input.format,
         totalCharacters: document.totalCharacters,
       });
       ctx.enrich.echo(
-        `${citation}, ${input.format} characters ${document.offset}–${document.offset + document.text.length}`,
+        `${label}, ${input.format} characters ${document.offset}–${document.offset + document.text.length}`,
       );
       ctx.enrich.total(document.totalCharacters);
       return {
@@ -173,49 +308,20 @@ export const committeeReportsTool = tool('congressgov_committee_reports', {
           ...document,
           format: input.format,
           sourceUrl: url,
-          documentTitle: `Committee Report ${citation}`,
+          documentTitle: `Committee Report ${label}`,
         },
+        ...(parts.length > 1 ? { parts } : {}),
       };
     }
 
-    if (input.operation === 'text') {
-      const result = await api.getCommitteeReportText(
-        {
-          congress: input.congress,
-          reportType: input.reportType,
-          reportNumber: input.reportNumber,
-        },
-        ctx,
-      );
-      ctx.log.info('Committee report text retrieved', {
-        congress: input.congress,
-        reportType: input.reportType,
-        reportNumber: input.reportNumber,
-      });
-      ctx.enrich.echo(
-        `text formats for ${input.reportType.toUpperCase()} ${input.reportNumber} (${input.congress}th Congress)`,
-      );
-      ctx.enrich.total(Array.isArray(result.text) ? result.text.length : 1);
-      return result;
-    }
-
-    const result = await api.getCommitteeReport(
-      {
-        congress: input.congress,
-        reportType: input.reportType,
-        reportNumber: input.reportNumber,
-      },
-      ctx,
-    );
-    ctx.log.info('Committee report retrieved', {
-      congress: input.congress,
-      reportType: input.reportType,
-      reportNumber: input.reportNumber,
-    });
+    const parts = distinctParts(formats.map(formatPart));
+    if (!parts.includes(part)) throw missingPart(parts);
+    const text = Array.isArray(result.text) ? partTextEntries(result.text, part) : result.text;
+    ctx.log.info('Committee report text retrieved', { ...report, part });
     ctx.enrich.echo(
-      `${input.reportType.toUpperCase()} ${input.reportNumber} (${input.congress}th Congress)`,
+      `text formats for ${input.reportType.toUpperCase()} ${input.reportNumber}${parts.length > 1 ? `, Part ${part}` : ''} (${ordinal(input.congress)} Congress)`,
     );
-    ctx.enrich.total(1);
-    return result;
+    ctx.enrich.total(Array.isArray(text) ? text.length : 1);
+    return { text, ...(parts.length > 1 ? { parts } : {}) };
   },
 });

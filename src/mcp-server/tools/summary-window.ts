@@ -1,23 +1,18 @@
 /**
- * @fileoverview Character bounding for Congress.gov summary pages — the page
- * budget both summary surfaces enforce, and the per-row window over one
- * summary's upstream HTML `text`.
+ * @fileoverview The per-row character window both summary surfaces apply to
+ * one summary's upstream HTML `text`.
  *
- * Two independent limits. The page budget stops a page from accumulating rows
- * once their serialized size reaches `SUMMARY_PAGE_CHARACTERS`; row pagination
- * carries the rest, so `pagination.nextOffset` resumes at the first row not
- * returned. The row window bounds one summary's `text`, which upstream publishes
- * past two hundred thousand characters for an omnibus bill; `textNextOffset`
- * carries the rest of that row. A row that fits both is returned untouched, so a
- * page under the limits is byte-identical to one this module never saw.
+ * Upstream publishes a summary past two hundred thousand characters for an
+ * omnibus bill, so each row's `text` is bounded on its own and `textNextOffset`
+ * carries the rest of that row. The page is left as the caller's `limit` shaped
+ * it — every row, and the upstream `pagination` — and a row inside the window is
+ * returned untouched, so a page with no oversized row is byte-identical to one
+ * this module never saw.
  *
  * @module mcp-server/tools/summary-window
  */
 
-import {
-  DEFAULT_SUMMARY_TEXT_CHARACTERS,
-  SUMMARY_PAGE_CHARACTERS,
-} from '@/mcp-server/tools/tool-helpers.js';
+import { DEFAULT_SUMMARY_TEXT_CHARACTERS } from '@/mcp-server/tools/tool-helpers.js';
 
 /** One upstream summary row. Congress.gov shapes vary, so the record stays open. */
 type SummaryRow = Record<string, unknown>;
@@ -45,17 +40,13 @@ export interface WindowedSummaryRow {
 }
 
 export interface SummaryWindowResult {
-  /** Rows the caller asked for but this page does not carry, when that happened. */
-  droppedRows: number;
   /**
    * The page carries rows, every one of them holds text, and `characterOffset`
    * is at or past the end of all of them — no window could be non-empty.
    */
   offsetPastEnd: boolean;
-  /** The envelope to return — the bounded page and nothing else. */
+  /** The envelope to return — every row, each one windowed, and nothing else. */
   page: SummaryPage;
-  /** Rows were dropped because the page reached its character budget. */
-  stoppedForSize: boolean;
   /** Every row whose `text` was windowed, in page order. */
   windowed: WindowedSummaryRow[];
 }
@@ -65,8 +56,6 @@ export interface SummaryWindowOptions {
   characterLimit?: number;
   /** First character of each row's text to return, 0-based. */
   characterOffset?: number;
-  /** Row offset the page was requested at — a truncated page's `nextOffset` counts from here. */
-  offset: number;
 }
 
 /**
@@ -157,36 +146,24 @@ function windowRow(
 }
 
 /**
- * Apply both limits to a page of summary rows.
- *
- * Rows are windowed first, then accumulated against the page budget by their
- * serialized length — the response size the budget is named for, not just the
- * text inside it. The first row is always kept, so a single oversized summary
- * still returns its first window rather than an empty page.
+ * Window every row of a page of summaries. Rows, their order, and the upstream
+ * `pagination` pass through — the caller's `limit` is the page's only bound.
  */
 export function windowSummaryPage(
   page: SummaryPage,
-  options: SummaryWindowOptions,
+  options: SummaryWindowOptions = {},
 ): SummaryWindowResult {
   const characterOffset = options.characterOffset ?? 0;
   const characterLimit = options.characterLimit ?? DEFAULT_SUMMARY_TEXT_CHARACTERS;
 
   const data: SummaryRow[] = [];
   const windowed: WindowedSummaryRow[] = [];
-  let used = 0;
-  let stoppedForSize = false;
   let textRows = 0;
   let emptyWindows = 0;
 
   for (const upstream of page.data) {
     const { row, window } = windowRow(upstream, characterOffset, characterLimit);
-    const cost = JSON.stringify(row).length;
-    if (data.length > 0 && used + cost > SUMMARY_PAGE_CHARACTERS) {
-      stoppedForSize = true;
-      break;
-    }
     data.push(row);
-    used += cost;
     if (typeof upstream.text === 'string') {
       textRows++;
       if (window && window.start >= window.totalCharacters) emptyWindows++;
@@ -194,19 +171,8 @@ export function windowSummaryPage(
     if (window) windowed.push({ index: data.length - 1, row, ...window });
   }
 
-  /**
-   * Only a size-driven stop rewrites `nextOffset`. Leaving an untruncated page's
-   * pagination exactly as upstream shaped it is what keeps a page under the
-   * limits byte-identical.
-   */
-  const pagination = stoppedForSize
-    ? { ...page.pagination, nextOffset: options.offset + data.length }
-    : page.pagination;
-
   return {
-    page: { ...page, data, pagination },
-    stoppedForSize,
-    droppedRows: page.data.length - data.length,
+    page: { ...page, data },
     windowed,
     offsetPastEnd: textRows > 0 && emptyWindows === textRows,
   };
@@ -241,34 +207,21 @@ export function summaryContinuationCall(continuation: SummaryContinuation): stri
 }
 
 /**
- * The notice a page carries when either limit fired: what stopped, what was
- * returned, and the call that continues from there. Returns undefined when the
- * page was bounded by neither.
+ * The notice a page carries when a row's text was windowed short of its end:
+ * what was returned and the call that continues from there. Returns undefined
+ * when every row's text was read to its end.
  */
 export function summaryWindowNotice(
   result: SummaryWindowResult,
-  requestedRows: number,
   continuationFor: (row: WindowedSummaryRow) => string | undefined,
 ): string | undefined {
-  const parts: string[] = [];
-
-  if (result.stoppedForSize) {
-    parts.push(
-      `Returned ${result.page.data.length} of the ${requestedRows} rows requested — the page reached its ${SUMMARY_PAGE_CHARACTERS.toLocaleString('en-US')}-character budget. Continue at offset ${result.page.pagination.nextOffset}.`,
-    );
-  }
-
   const first = result.windowed.find((row) => row.nextOffset !== null);
-  if (first) {
-    const continuation = continuationFor(first);
-    const more =
-      result.windowed.length > 1
-        ? ` ${result.windowed.length} rows on this page carry windowed text; each row's textNextOffset continues it.`
-        : '';
-    parts.push(
-      `Summary text on row ${first.index + 1} runs ${first.totalCharacters.toLocaleString('en-US')} characters; characters ${(first.start + 1).toLocaleString('en-US')}–${first.end.toLocaleString('en-US')} returned.${continuation ? ` Continue with: ${continuation}` : ''}${more}`,
-    );
-  }
+  if (!first) return;
 
-  return parts.length > 0 ? parts.join(' ') : undefined;
+  const continuation = continuationFor(first);
+  const more =
+    result.windowed.length > 1
+      ? ` ${result.windowed.length} rows on this page carry windowed text; each row's textNextOffset continues it.`
+      : '';
+  return `Summary text on row ${first.index + 1} runs ${first.totalCharacters.toLocaleString('en-US')} characters; characters ${(first.start + 1).toLocaleString('en-US')}–${first.end.toLocaleString('en-US')} returned.${continuation ? ` Continue with: ${continuation}` : ''}${more}`;
 }

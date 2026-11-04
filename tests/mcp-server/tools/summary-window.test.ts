@@ -1,7 +1,8 @@
 /**
- * @fileoverview Tests for the summary page budget and per-row character window.
+ * @fileoverview Tests for the per-row summary character window, and for the
+ * page it leaves at the caller's `limit`.
  *
- * Resolves cyanheads/congressgov-mcp-server#70.
+ * Resolves cyanheads/congressgov-mcp-server#70 and #98.
  *
  * @module tests/mcp-server/tools/summary-window.test
  */
@@ -15,11 +16,7 @@ import {
   summaryWindowNotice,
   windowSummaryPage,
 } from '@/mcp-server/tools/summary-window.js';
-import {
-  DEFAULT_SUMMARY_TEXT_CHARACTERS,
-  MAX_CONTENT_CHARACTERS,
-  SUMMARY_PAGE_CHARACTERS,
-} from '@/mcp-server/tools/tool-helpers.js';
+import { DEFAULT_SUMMARY_TEXT_CHARACTERS } from '@/mcp-server/tools/tool-helpers.js';
 
 /** Dense markup: every window edge in the sweep below lands inside something. */
 const MARKUP =
@@ -45,11 +42,7 @@ function walk(text: string, characterLimit: number): string[] {
   let characterOffset: number | null = 0;
   for (let guard = 0; characterOffset !== null; guard++) {
     if (guard > 5_000) throw new Error('window walk did not terminate');
-    const result = windowSummaryPage(onePage(text), {
-      offset: 0,
-      characterOffset,
-      characterLimit,
-    });
+    const result = windowSummaryPage(onePage(text), { characterOffset, characterLimit });
     const row = result.page.data[0] as Record<string, unknown>;
     windows.push(row.text as string);
     const next = row.textNextOffset;
@@ -102,16 +95,15 @@ describe('safeWindowEnd', () => {
 describe('windowSummaryPage — per-row window', () => {
   it('returns a row that fits untouched, with no window metadata', () => {
     const page = onePage(MARKUP);
-    const result = windowSummaryPage(page, { offset: 0 });
+    const result = windowSummaryPage(page);
     expect(result.page.data[0]).toBe(page.data[0]);
     expect(result.page.data[0]).not.toHaveProperty('textTotalCharacters');
     expect(result.windowed).toHaveLength(0);
-    expect(result.stoppedForSize).toBe(false);
   });
 
   it('windows a row past the limit and publishes its offsets', () => {
     const text = 'x'.repeat(120);
-    const result = windowSummaryPage(onePage(text), { offset: 0, characterLimit: 50 });
+    const result = windowSummaryPage(onePage(text), { characterLimit: 50 });
     expect(result.page.data[0]).toMatchObject({
       text: 'x'.repeat(50),
       textTotalCharacters: 120,
@@ -131,11 +123,7 @@ describe('windowSummaryPage — per-row window', () => {
 
   it('closes the walk with textNextOffset null on the last window', () => {
     const text = 'x'.repeat(120);
-    const result = windowSummaryPage(onePage(text), {
-      offset: 0,
-      characterOffset: 100,
-      characterLimit: 50,
-    });
+    const result = windowSummaryPage(onePage(text), { characterOffset: 100, characterLimit: 50 });
     expect(result.page.data[0]).toMatchObject({
       text: 'x'.repeat(20),
       textTotalCharacters: 120,
@@ -183,11 +171,7 @@ describe('windowSummaryPage — per-row window', () => {
   });
 
   it('a mid-text characterOffset windows from there with no offset snapping', () => {
-    const result = windowSummaryPage(onePage(MARKUP), {
-      offset: 0,
-      characterOffset: 17,
-      characterLimit: 40,
-    });
+    const result = windowSummaryPage(onePage(MARKUP), { characterOffset: 17, characterLimit: 40 });
     const row = result.page.data[0] as Record<string, unknown>;
     const end = row.textNextOffset as number;
     expect(row.text).toBe(MARKUP.slice(17, end));
@@ -196,7 +180,6 @@ describe('windowSummaryPage — per-row window', () => {
 
   it('returns an empty window and flags offsetPastEnd past a row end', () => {
     const result = windowSummaryPage(onePage('short summary'), {
-      offset: 0,
       characterOffset: 13,
       characterLimit: 100,
     });
@@ -214,14 +197,14 @@ describe('windowSummaryPage — per-row window', () => {
       data: [{ text: 'short' }, { text: 'a much longer summary body' }],
       pagination: { count: 2, nextOffset: null },
     };
-    const result = windowSummaryPage(page, { offset: 0, characterOffset: 10, characterLimit: 100 });
+    const result = windowSummaryPage(page, { characterOffset: 10, characterLimit: 100 });
     expect(result.offsetPastEnd).toBe(false);
     expect(result.page.data[0]).toMatchObject({ text: '' });
     expect(result.page.data[1]).toMatchObject({ text: 'ger summary body' });
   });
 
   it('never flags offsetPastEnd at characterOffset 0, even on an empty summary', () => {
-    const result = windowSummaryPage(onePage(''), { offset: 0 });
+    const result = windowSummaryPage(onePage(''));
     expect(result.offsetPastEnd).toBe(false);
     expect(result.page.data[0]).not.toHaveProperty('textTotalCharacters');
   });
@@ -231,22 +214,20 @@ describe('windowSummaryPage — per-row window', () => {
       data: [{ actionDesc: 'Introduced in House' }],
       pagination: { count: 1, nextOffset: null },
     };
-    const result = windowSummaryPage(page, { offset: 0, characterOffset: 500 });
+    const result = windowSummaryPage(page, { characterOffset: 500 });
     expect(result.page.data[0]).toEqual({ actionDesc: 'Introduced in House' });
     expect(result.offsetPastEnd).toBe(false);
   });
 
   it('defaults the row window to DEFAULT_SUMMARY_TEXT_CHARACTERS', () => {
-    const result = windowSummaryPage(onePage('y'.repeat(DEFAULT_SUMMARY_TEXT_CHARACTERS + 10)), {
-      offset: 0,
-    });
+    const result = windowSummaryPage(onePage('y'.repeat(DEFAULT_SUMMARY_TEXT_CHARACTERS + 10)));
     expect((result.page.data[0] as Record<string, unknown>).textNextOffset).toBe(
       DEFAULT_SUMMARY_TEXT_CHARACTERS,
     );
   });
 });
 
-describe('windowSummaryPage — page budget', () => {
+describe('windowSummaryPage — the page itself', () => {
   /** A row whose serialized length is roughly `chars` plus a little scaffolding. */
   const row = (chars: number, index: number) => ({
     actionDesc: 'Introduced in House',
@@ -254,67 +235,49 @@ describe('windowSummaryPage — page budget', () => {
     text: `${index}`.padEnd(chars, 'z'),
   });
 
-  it('keeps a page that fits byte-identical, pagination included', () => {
+  it('keeps a page whose rows fit the window byte-identical, pagination included', () => {
     const page: SummaryPage = {
       data: [row(1_000, 0), row(1_000, 1)],
       pagination: { count: 40, nextOffset: 2 },
     };
-    const result = windowSummaryPage(page, { offset: 0 });
+    const result = windowSummaryPage(page);
     expect(JSON.stringify(result.page)).toBe(JSON.stringify(page));
-    expect(result.stoppedForSize).toBe(false);
-    expect(result.droppedRows).toBe(0);
   });
 
-  it('stops mid-page and resumes at the first row not returned', () => {
+  /** #98: `limit` is the only page boundary — no response-size stop. */
+  it('returns every row and the upstream pagination however large the page serializes', () => {
     const data = Array.from({ length: 10 }, (_, index) => row(6_000, index));
-    const result = windowSummaryPage(
-      { data, pagination: { count: 200, nextOffset: 10 } },
-      { offset: 20 },
-    );
-    expect(result.stoppedForSize).toBe(true);
-    expect(result.page.data.length).toBeLessThan(10);
-    expect(result.page.pagination.nextOffset).toBe(20 + result.page.data.length);
-    expect(result.droppedRows).toBe(10 - result.page.data.length);
-    const used = result.page.data.reduce((sum, kept) => sum + JSON.stringify(kept).length, 0);
-    expect(used).toBeLessThanOrEqual(SUMMARY_PAGE_CHARACTERS);
-    /** The first dropped row is the row the resumed page starts with. */
-    expect(data[result.page.data.length]).toBe(data.at(result.page.data.length));
+    const page: SummaryPage = { data, pagination: { count: 200, nextOffset: 30 } };
+    const result = windowSummaryPage(page);
+    expect(JSON.stringify(result.page.data).length).toBeGreaterThan(60_000);
+    expect(result.page.data).toEqual(data);
+    expect(result.page.pagination).toEqual({ count: 200, nextOffset: 30 });
   });
 
-  it('returns one row when the first windowed row already fills the budget', () => {
+  it('windows every oversized row and keeps them all', () => {
     const data = [
       row(DEFAULT_SUMMARY_TEXT_CHARACTERS + 5_000, 0),
       row(DEFAULT_SUMMARY_TEXT_CHARACTERS + 5_000, 1),
+      row(DEFAULT_SUMMARY_TEXT_CHARACTERS + 5_000, 2),
     ];
-    const result = windowSummaryPage(
-      { data, pagination: { count: 5, nextOffset: 2 } },
-      { offset: 0 },
-    );
-    expect(result.page.data).toHaveLength(1);
-    expect(result.stoppedForSize).toBe(true);
-    expect(result.page.pagination.nextOffset).toBe(1);
-    expect((result.page.data[0] as Record<string, unknown>).textNextOffset).toBe(
-      DEFAULT_SUMMARY_TEXT_CHARACTERS,
-    );
+    const result = windowSummaryPage({ data, pagination: { count: 5, nextOffset: 3 } });
+    expect(result.page.data).toHaveLength(3);
+    expect(result.page.pagination).toEqual({ count: 5, nextOffset: 3 });
+    expect(result.windowed.map((windowed) => windowed.index)).toEqual([0, 1, 2]);
+    for (const kept of result.page.data) {
+      expect(kept).toMatchObject({
+        textTotalCharacters: DEFAULT_SUMMARY_TEXT_CHARACTERS + 5_000,
+        textNextOffset: DEFAULT_SUMMARY_TEXT_CHARACTERS,
+      });
+    }
   });
 
-  it('always returns the first row, even when it alone clears the budget', () => {
-    const result = windowSummaryPage(
-      { data: [row(400_000, 0), row(10, 1)], pagination: { count: 2, nextOffset: null } },
-      { offset: 0, characterLimit: MAX_CONTENT_CHARACTERS },
-    );
-    expect(result.page.data).toHaveLength(1);
-    expect(JSON.stringify(result.page.data[0]).length).toBeGreaterThan(SUMMARY_PAGE_CHARACTERS);
-    expect(result.stoppedForSize).toBe(true);
-    expect(result.page.pagination.nextOffset).toBe(1);
-  });
-
-  it('leaves pagination untouched when nothing was dropped', () => {
+  it('leaves pagination untouched when nothing was windowed', () => {
     const page: SummaryPage = {
       data: [row(10, 0)],
       pagination: { count: 99, nextOffset: null },
     };
-    const result = windowSummaryPage(page, { offset: 40 });
+    const result = windowSummaryPage(page);
     expect(result.page.pagination).toEqual({ count: 99, nextOffset: null });
   });
 });
@@ -350,32 +313,21 @@ describe('summaryContinuationCall', () => {
 
 describe('summaryWindowNotice', () => {
   const bounded = (data: Record<string, unknown>[], characterLimit: number, count: number) =>
-    windowSummaryPage(
-      { data, pagination: { count, nextOffset: null } },
-      {
-        offset: 0,
-        characterLimit,
-      },
-    );
+    windowSummaryPage({ data, pagination: { count, nextOffset: null } }, { characterLimit });
 
-  it('is absent when neither limit fired', () => {
-    expect(
-      summaryWindowNotice(bounded([{ text: 'hi' }], 100, 1), 20, () => undefined),
-    ).toBeUndefined();
+  it('is absent when no row was windowed', () => {
+    expect(summaryWindowNotice(bounded([{ text: 'hi' }], 100, 1), () => undefined)).toBeUndefined();
   });
 
-  it('discloses a size-driven stop and where to resume', () => {
+  /** #98: a large page draws no notice of its own. */
+  it('is absent on a page past 50,000 characters whose rows fit the window', () => {
     const data = Array.from({ length: 10 }, () => ({ text: 'z'.repeat(6_000) }));
-    const notice = summaryWindowNotice(bounded(data, 25_000, 200), 10, () => undefined);
-    expect(notice).toMatch(/Returned \d+ of the 10 rows requested/);
-    expect(notice).toContain('50,000-character budget');
-    expect(notice).toMatch(/Continue at offset \d+\./);
+    expect(summaryWindowNotice(bounded(data, 25_000, 200), () => undefined)).toBeUndefined();
   });
 
   it('names the continuation call for the first windowed row', () => {
     const notice = summaryWindowNotice(
       bounded([{ versionCode: '49', text: 'z'.repeat(1_000) }], 400, 1),
-      20,
       () => 'congressgov_bill_lookup {"operation":"summaries"}',
     );
     expect(notice).toContain('runs 1,000 characters; characters 1–400 returned.');
@@ -388,7 +340,7 @@ describe('summaryWindowNotice', () => {
       { text: 'b'.repeat(1_000) },
       { text: 'c'.repeat(1_000) },
     ];
-    const notice = summaryWindowNotice(bounded(data, 400, 3), 20, () => 'CALL');
+    const notice = summaryWindowNotice(bounded(data, 400, 3), () => 'CALL');
     expect(notice).toContain("3 rows on this page carry windowed text; each row's textNextOffset");
   });
 });

@@ -69,11 +69,14 @@ export const listOutput = z
  * Detail-mode payloads carry one or more explicitly advertised roots; list-mode
  * carries `data` + `pagination`. Each root stays permissive below its declared
  * boundary so Congress.gov's sparse, variable records remain type-compatible.
+ *
+ * `extra` adds or overrides envelope keys (a typed `data` row, a `parts` field);
+ * `.extend()` drops the root description, so it is applied after.
  */
-export function listOrDetail<const TRoots extends Record<string, keyof typeof detailRootSchemas>>(
-  roots: TRoots,
-  description?: string,
-) {
+export function listOrDetail<
+  const TRoots extends Record<string, keyof typeof detailRootSchemas>,
+  TExtra extends z.ZodRawShape = Record<never, never>,
+>(roots: TRoots, description?: string, extra?: TExtra) {
   const detailShape = Object.fromEntries(
     Object.entries(roots).map(([key, kind]) => [key, detailRootSchemas[kind].optional()]),
   ) as unknown as {
@@ -92,6 +95,7 @@ export function listOrDetail<const TRoots extends Record<string, keyof typeof de
       ...detailShape,
     })
     .passthrough()
+    .extend((extra ?? {}) as TExtra)
     .describe(`Non-list roots ${rootNames.join(', ')} carry: ${detailDesc}`);
 }
 
@@ -316,7 +320,50 @@ type PaginatedResult = {
  * Resolves cyanheads/congressgov-mcp-server#49.
  */
 export function notifyIfNoMatches(ctx: Context, result: PaginatedResult, message: string): void {
-  if (result.data.length === 0 && result.pagination.count === 0) ctx.enrich.notice(message);
+  if (result.data.length === 0 && result.pagination.count === 0) addNotice(ctx, message);
+}
+
+/** Notice sentences written so far in each call, keyed by its context. */
+const noticesByCall = new WeakMap<Context, string[]>();
+
+/**
+ * Add a sentence to the call's `notice`. `ctx.enrich.notice` is last-wins, so
+ * every notice in a handler goes through here: each write re-emits all of the
+ * call's sentences, in the order they were added, as one string.
+ */
+export function addNotice(ctx: Context, text: string): void {
+  const notices = noticesByCall.get(ctx) ?? [];
+  notices.push(text);
+  noticesByCall.set(ctx, notices);
+  ctx.enrich.notice(notices.join(' '));
+}
+
+/** Joins ignored input names as "a or b" / "a, b, or c". */
+const IGNORED_NAMES = new Intl.ListFormat('en', { type: 'disjunction' });
+
+/**
+ * Disclose the supplied inputs an operation doesn't use. The call is still
+ * served — these are filters another operation reads — but a dropped filter
+ * otherwise reads as applied. `candidates` maps input names to their values for
+ * this call; undefined, null, and blank values are unset and draw nothing.
+ * `detail` adds a sentence (e.g. that results span every congress).
+ */
+export function noticeIgnoredInputs(
+  ctx: Context,
+  operation: string,
+  candidates: Record<string, unknown>,
+  detail?: string,
+): void {
+  const ignored = Object.entries(candidates)
+    .filter(([, value]) => value !== undefined && value !== null && value !== '')
+    .map(([name]) => name);
+  if (ignored.length === 0) return;
+  const names = IGNORED_NAMES.format(ignored);
+  const verb = ignored.length === 1 ? 'was' : 'were';
+  addNotice(
+    ctx,
+    `'${operation}' does not use ${names}, so ${ignored.length === 1 ? 'it' : 'they'} ${verb} ignored.${detail ? ` ${detail}` : ''}`,
+  );
 }
 
 /**
@@ -340,27 +387,32 @@ export const DEFAULT_CONTENT_CHARACTERS = 25_000;
 export const MAX_CONTENT_CHARACTERS = 100_000;
 
 /**
- * Characters of serialized summary rows one page carries before it stops adding
- * them. Measured against live pages: a full default page of the browse feed
- * (`limit` 20) runs about 35,000 characters, so the budget clears an unfiltered
- * call without firing, while a `limit: 250` page — 401,000 characters today —
- * stops at roughly an eighth of that. Row pagination carries the remainder.
- */
-export const SUMMARY_PAGE_CHARACTERS = 50_000;
-
-/**
  * Characters of one summary row's `text` a response returns when the caller
- * names no window. Matches `DEFAULT_CONTENT_CHARACTERS` deliberately — a
- * response carries about this much body text whichever surface produced it —
- * and sits above the largest row measured on a 250-row browse page (25,210), so
- * the browse feed windows outliers only. A single bill's summaries are the
- * reason it exists: one enacted omnibus summary runs past 200,000 characters.
+ * names no window. Matches `DEFAULT_CONTENT_CHARACTERS` deliberately — a row
+ * carries about this much body text whichever surface produced it — and sits
+ * just under the largest row measured on a 250-row browse page (25,210), so the
+ * browse feed windows outliers only. A single bill's summaries are the reason
+ * it exists: one enacted omnibus summary runs past 200,000 characters. The
+ * window bounds a row, never the page: `limit` alone sets how many rows return.
  */
 export const DEFAULT_SUMMARY_TEXT_CHARACTERS = 25_000;
 
 /**
- * Input fields shared by every `content` operation: which format to read, and
- * the character window to return.
+ * The format input of a `content` operation over GPO publications — bill text,
+ * committee reports, and Congressional Record articles. A CRS report publishes
+ * one readable format, so `congressgov_crs_reports` takes the window alone.
+ */
+export const documentFormatInput = {
+  format: z
+    .enum(DOCUMENT_FORMATS)
+    .default('text')
+    .describe(
+      "Document format for 'content'. 'text' is GPO's Formatted Text — plain, pre-formatted print output, published for every document checked. 'xml' prefers United States Legislative Markup and falls back to Formatted XML; it exists on some bill text versions and on no committee report or Congressional Record article. PDF is not retrieved — read one at the format URLs 'text'/'articles' return.",
+    ),
+};
+
+/**
+ * The character window every `content` operation returns.
  *
  * The window is deliberately **not** the tools' existing `offset`/`limit` pair.
  * Those are the Congress.gov pagination params, capped at `limit ≤ 250` because
@@ -371,12 +423,6 @@ export const DEFAULT_SUMMARY_TEXT_CHARACTERS = 25_000;
  * so the two ranges can carry the bounds each actually needs.
  */
 export const documentWindowInput = {
-  format: z
-    .enum(DOCUMENT_FORMATS)
-    .default('text')
-    .describe(
-      "Document format for 'content'. 'text' is GPO's Formatted Text — plain, pre-formatted print output, published for every document checked. 'xml' prefers United States Legislative Markup and falls back to Formatted XML; it exists on some bill text versions and on no committee report or Congressional Record article. PDF is not retrieved — read one at the format URLs 'text'/'articles' return.",
-    ),
   characterOffset: z
     .number()
     .int()
@@ -397,33 +443,36 @@ export const documentWindowInput = {
 };
 
 /**
- * Failure modes of the `content` operation on `congressgov_bill_lookup`,
- * `congressgov_committee_reports`, and `congressgov_daily_record`. Layered on top
- * of `congressErrorContracts` — the document fetch is a second upstream
- * (`www.congress.gov`) with its own ways to fail, and only these three tools
- * reach it.
+ * Failure modes of the `content` operation on `congressgov_amendment_lookup`,
+ * `congressgov_bill_lookup`, `congressgov_committee_reports`,
+ * `congressgov_crs_reports`, and `congressgov_daily_record`. Layered on top of
+ * `congressErrorContracts` — the document fetch is a second upstream
+ * (`www.congress.gov`) with its own ways to fail, and only these five tools reach it.
  *
- * `CongressDocumentsService` raises each with a matching `data.reason` and
- * the framework fills the `recovery` hint declared here, so the hint lives in
- * exactly one place. Direct-handler tests retain explicit forwards where needed.
+ * `CongressDocumentsService` and the format selectors in `document-formats.ts`
+ * raise each with a matching `data.reason`, and the framework fills the
+ * `recovery` hint declared here, so the hint lives in exactly one place.
+ * Direct-handler tests retain explicit forwards where needed.
  * Resolves cyanheads/congressgov-mcp-server#53.
  */
 export const documentErrorContracts = [
   {
     code: JsonRpcErrorCode.NotFound,
     reason: 'document_unavailable',
+    thrownBy: 'service',
     retryable: false,
     when: "The 'content' selection resolves to no retrievable document — the text version or article index is past the end of the list, the record publishes no formats at all, or Congress.gov does not hold the file its own metadata names.",
     recovery:
-      "Run the tool's 'text' or 'articles' operation first to see which documents Congress.gov publishes for this record, then retry with a selection it lists.",
+      "See which documents Congress.gov publishes for this record — the tool's 'text' or 'articles' operation lists them, and for a CRS report 'get' lists its formats — then retry with a selection listed there or read the document at a URL listed there.",
   },
   {
     code: JsonRpcErrorCode.NotFound,
     reason: 'format_unavailable',
+    thrownBy: 'service',
     retryable: false,
-    when: "The document exists but publishes nothing in the requested 'format' — some text versions and committee reports ship PDF only, and no Congressional Record article publishes XML.",
+    when: 'The document exists but publishes nothing in a format this server reads — some text versions and committee reports ship PDF only, no Congressional Record article publishes XML, and the oldest CRS reports publish a PDF but no HTML.',
     recovery:
-      "Retry with format 'text', which every document checked publishes; if that fails too the document is PDF-only, so read it at the format URL the text operation returns.",
+      "Where the tool takes a format, retry with format 'text', which every GPO document checked publishes. A PDF-only document is not read as text: read it at its PDF URL, which this error names for a CRS report and the 'text' or 'articles' operation lists for the others.",
   },
   {
     code: JsonRpcErrorCode.ServiceUnavailable,
@@ -477,7 +526,7 @@ export const congressErrorContracts = [
     reason: 'rate_limited',
     thrownBy: 'service',
     retryable: true,
-    when: 'A process-local attempt budget or the shared upstream credential/IP quota was reached; upstream hourly limits vary and DEMO_KEY also has a daily quota.',
+    when: 'A process-local attempt budget or the shared upstream credential/IP quota was reached; upstream hourly limits vary and DEMO_KEY also has a daily quota. On a Senate vote the LIS feed could not answer, Voteview answering HTTP 429 is reported the same way.',
     recovery:
       'Follow Retry-After when supplied; otherwise wait and reduce request frequency. This process cannot account for other clients sharing the key or demo IP.',
   },
@@ -504,7 +553,7 @@ export const congressErrorContracts = [
     reason: 'upstream_error',
     thrownBy: 'service',
     retryable: true,
-    when: 'Congress.gov returned an unexpected error (5xx or another non-2xx status) or could not be reached, or the Senate LIS feed failed (5xx, a timeout, or a senate.gov HTTP 403 refusal, which carries retryable: false).',
+    when: 'Congress.gov returned an unexpected error (5xx or another non-2xx status) or could not be reached, or a Senate vote could be read from neither the Senate LIS feed nor its Voteview fallback (before the 101st Congress there is no fallback, and there a senate.gov HTTP 403 refusal carries retryable: false).',
     recovery:
       'Retry after a short delay; if the failure persists the Congress.gov service may be temporarily degraded.',
   },

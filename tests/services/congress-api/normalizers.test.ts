@@ -541,9 +541,10 @@ describe('CongressApiService — listSummaries path construction', () => {
   });
 });
 
-describe('CongressApiService — getCommitteeReport empty report handling', () => {
+describe('CongressApiService — getCommitteeReport records', () => {
   let service: CongressApiService;
   const mockFetch = vi.fn();
+  const params = { congress: 118, reportType: 'hrpt', reportNumber: 9999 } as const;
 
   beforeEach(() => {
     mockFetch.mockReset();
@@ -557,11 +558,34 @@ describe('CongressApiService — getCommitteeReport empty report handling', () =
 
   it('throws not-found when committeeReports array is empty', async () => {
     mockFetch.mockResolvedValue(okJson({ committeeReports: [], pagination: {} }));
-    await expect(
-      service.getCommitteeReport(
-        { congress: 118, reportType: 'hrpt', reportNumber: 9999 },
-        createMockContext(),
-      ),
-    ).rejects.toMatchObject({ code: JsonRpcErrorCode.NotFound });
+    await expect(service.getCommitteeReport(params, createMockContext())).rejects.toMatchObject({
+      code: JsonRpcErrorCode.NotFound,
+    });
+  });
+
+  it('throws not-found when committeeReports is an empty object', async () => {
+    mockFetch.mockResolvedValue(okJson({ committeeReports: {} }));
+    await expect(service.getCommitteeReport(params, createMockContext())).rejects.toMatchObject({
+      code: JsonRpcErrorCode.NotFound,
+    });
+  });
+
+  it('returns every record filed under the number, in upstream order', async () => {
+    const records = [
+      { citation: 'H. Rept. 118-372,Book 3', part: 3 },
+      { citation: 'H. Rept. 118-372,Book 1', part: 1 },
+      { citation: 'H. Rept. 118-372,Book 2', part: 2 },
+    ];
+    mockFetch.mockResolvedValue(okJson({ committeeReports: records }));
+    await expect(service.getCommitteeReport(params, createMockContext())).resolves.toEqual({
+      reports: records,
+    });
+  });
+
+  it('returns a lone record object as a one-record list', async () => {
+    mockFetch.mockResolvedValue(okJson({ committeeReports: { citation: 'H. Rept. 118-1' } }));
+    await expect(service.getCommitteeReport(params, createMockContext())).resolves.toEqual({
+      reports: [{ citation: 'H. Rept. 118-1' }],
+    });
   });
 });

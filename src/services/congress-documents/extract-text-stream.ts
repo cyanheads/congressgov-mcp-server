@@ -1,13 +1,18 @@
 /**
- * @fileoverview Incremental form of {@link extractDocumentText} — consumes a
- * document body chunk by chunk and retains only the requested character window.
+ * @fileoverview Incremental form of both document readings — consumes a body
+ * chunk by chunk and retains only the requested character window.
  *
- * `extract-text.ts` is the normative definition of the extraction: every
+ * `extract-text.ts` is the normative definition of each reading: every
  * character offset in the `content` contract indexes into the string it
  * produces. This module reproduces that string exactly while holding constant
  * memory, so a document is bounded by how long it takes to stream rather than by
  * how much of it fits in a buffer. The two are pinned against each other by a
  * differential test — if this file drifts, that test fails, not production.
+ *
+ * The `html` reading ({@link extractHtmlText}) is one forward pass with no
+ * rewinds: markup left open runs to the end of the body, so nothing it spans
+ * is ever written and taken back. The rest of this header describes the `gpo`
+ * reading ({@link extractDocumentText}), which is not so lucky.
  *
  * The whole-string pipeline is `normalize newlines → strip comments → choose
  * verbatim <pre> or sibling-normalized XML → strip tags → decode entities →
@@ -32,13 +37,22 @@
  */
 
 import { decodeCharacterReference } from '@/utils/character-references.js';
+import {
+  HTML_TAG_ROLES,
+  type HtmlTagRole,
+  isHtmlWhitespace,
+  MAX_HTML_TAG_NAME,
+} from './extract-text.js';
+import type { DocumentReading } from './types.js';
 
-/** The character window to retain while streaming. */
+/** The character window to retain while streaming, and the reading to apply. */
 export interface TextWindowRequest {
   /** Maximum characters to keep, counted from `characterOffset`. */
   characterLimit: number;
   /** First character of the extracted text to keep, 0-based. */
   characterOffset: number;
+  /** The reading the body gets — named by the caller, never sniffed from the body. */
+  reading: DocumentReading;
 }
 
 /** The retained window plus the length of the whole extracted text. */
@@ -112,6 +126,187 @@ const MAX_ENTITY_NAME = 8;
 /** The largest code point a numeric reference can name. */
 const MAX_CODE_POINT = 0x10ffff;
 
+/** What a character-reference candidate resolves to, in the owning sink's own terms. */
+interface ReferenceOutput {
+  /** The text a well-formed reference decodes to. */
+  decoded(text: string): void;
+  /** A candidate that is not a reference, as the literal characters it was built from. */
+  literal(text: string): void;
+}
+
+/** Everything a rewind has to put back of a {@link ReferenceDecoder}. */
+interface ReferenceState {
+  digits: string;
+  hexMarker: string;
+  kind: number;
+  name: string;
+  zeros: number;
+}
+
+/**
+ * Incremental `&…;` recognizer shared by both readings. It buffers a candidate
+ * a character at a time and hands the result to its owner: the decoded text
+ * when the candidate closes as a known reference, the literal characters when
+ * it turns out not to be one.
+ */
+class ReferenceDecoder {
+  private digits = '';
+  private hexMarker = '';
+  private kind = ENTITY_NONE;
+  private name = '';
+  private zeros = 0;
+  private readonly output: ReferenceOutput;
+
+  constructor(output: ReferenceOutput) {
+    this.output = output;
+  }
+
+  /** Whether a candidate is open, so the next character must go through {@link step}. */
+  get pending(): boolean {
+    return this.kind !== ENTITY_NONE;
+  }
+
+  /** Open a candidate at an `&`. */
+  begin(): void {
+    this.kind = ENTITY_AMP;
+  }
+
+  mark(): ReferenceState {
+    return {
+      digits: this.digits,
+      hexMarker: this.hexMarker,
+      kind: this.kind,
+      name: this.name,
+      zeros: this.zeros,
+    };
+  }
+
+  restore(state: ReferenceState): void {
+    this.digits = state.digits;
+    this.hexMarker = state.hexMarker;
+    this.kind = state.kind;
+    this.name = state.name;
+    this.zeros = state.zeros;
+  }
+
+  /** Advance the open candidate. Returns false when `ch` still needs handling. */
+  step(ch: string): boolean {
+    switch (this.kind) {
+      case ENTITY_AMP:
+        if (ch === '#') {
+          this.kind = ENTITY_HASH;
+          return true;
+        }
+        if (isAsciiLetter(ch)) {
+          this.kind = ENTITY_NAMED;
+          this.name = ch;
+          return true;
+        }
+        break;
+      case ENTITY_NAMED:
+        if (isAsciiLetter(ch)) {
+          this.name += ch;
+          if (this.name.length > MAX_ENTITY_NAME) this.flush();
+          return true;
+        }
+        if (ch === ';') {
+          this.complete(this.name);
+          return true;
+        }
+        break;
+      case ENTITY_HASH:
+        if (ch === 'x' || ch === 'X') {
+          this.kind = ENTITY_HEX_MARKER;
+          this.hexMarker = ch;
+          return true;
+        }
+        if (isDigit(ch)) {
+          this.kind = ENTITY_DEC;
+          this.addDigit(ch, false);
+          return true;
+        }
+        break;
+      case ENTITY_HEX_MARKER:
+        if (isHexDigit(ch)) {
+          this.kind = ENTITY_HEX;
+          this.addDigit(ch, true);
+          return true;
+        }
+        break;
+      case ENTITY_DEC:
+        if (isDigit(ch)) {
+          this.addDigit(ch, false);
+          return true;
+        }
+        if (ch === ';') {
+          this.complete(`#${this.digits || '0'}`);
+          return true;
+        }
+        break;
+      case ENTITY_HEX:
+        if (isHexDigit(ch)) {
+          this.addDigit(ch, true);
+          return true;
+        }
+        if (ch === ';') {
+          this.complete(`#${this.hexMarker}${this.digits || '0'}`);
+          return true;
+        }
+        break;
+    }
+    this.flush();
+    return false;
+  }
+
+  /** Write the open candidate as the literal characters it was built from. */
+  flush(): void {
+    const kind = this.kind;
+    if (kind === ENTITY_NONE) return;
+    let literal = '&';
+    if (kind === ENTITY_NAMED) literal += this.name;
+    else if (kind !== ENTITY_AMP) {
+      literal += '#';
+      if (kind === ENTITY_HEX_MARKER || kind === ENTITY_HEX) literal += this.hexMarker;
+      literal += '0'.repeat(this.zeros) + this.digits;
+    }
+    this.reset();
+    this.output.literal(literal);
+  }
+
+  /**
+   * Leading zeros are counted rather than stored, so a reference padded to any
+   * width still resolves without buffering it. Past the largest code point the
+   * value can only climb, so the reference is already text.
+   */
+  private addDigit(ch: string, hex: boolean): void {
+    if (this.digits === '' && ch === '0') {
+      this.zeros++;
+      return;
+    }
+    this.digits += ch;
+    if (Number.parseInt(this.digits, hex ? 16 : 10) > MAX_CODE_POINT) this.flush();
+  }
+
+  private complete(ref: string): void {
+    const decoded = decodeCharacterReference(ref);
+    if (decoded === undefined) {
+      this.flush();
+      this.output.literal(';');
+      return;
+    }
+    this.reset();
+    this.output.decoded(decoded);
+  }
+
+  private reset(): void {
+    this.digits = '';
+    this.hexMarker = '';
+    this.kind = ENTITY_NONE;
+    this.name = '';
+    this.zeros = 0;
+  }
+}
+
 /** Minimal tag classification needed for XML sibling-boundary normalization. */
 const TAG_UNDECIDED = 0;
 const TAG_OPEN = 1;
@@ -126,16 +321,12 @@ const MAX_INLINE_TAG_NAME = 6;
 /** A rewind point for one sink. Fixed size, whatever the document does. */
 interface SinkMark {
   emitted: number;
-  entityDigits: string;
-  entityHexMarker: string;
-  entityKind: number;
-  entityName: string;
-  entityZeros: number;
   inTag: boolean;
   lastEmittedWhitespace: boolean;
   pendingCloseRun: boolean;
   pendingCloseRunStructural: boolean;
   pendingSiblingSeparator: boolean;
+  reference: ReferenceState;
   started: boolean;
   tagKind: number;
   tagMark: SinkMark | null;
@@ -159,16 +350,15 @@ interface SinkMark {
  */
 class WindowSink {
   private emitted = 0;
-  private entityDigits = '';
-  private entityHexMarker = '';
-  private entityKind = ENTITY_NONE;
-  private entityName = '';
-  private entityZeros = 0;
   private inTag = false;
   private lastEmittedWhitespace = false;
   private pendingCloseRun = false;
   private pendingCloseRunStructural = false;
   private pendingSiblingSeparator = false;
+  private readonly reference = new ReferenceDecoder({
+    decoded: (text) => this.emit(text),
+    literal: (text) => this.emit(text),
+  });
   private started = false;
   private tagKind = TAG_UNDECIDED;
   private tagMark: SinkMark | null = null;
@@ -190,7 +380,7 @@ class WindowSink {
   write(text: string): void {
     let i = 0;
     while (i < text.length) {
-      if (this.started && !this.inTag && this.entityKind === ENTITY_NONE) {
+      if (this.started && !this.inTag && !this.reference.pending) {
         let stop = i;
         while (stop < text.length) {
           const ch = text[stop] as string;
@@ -211,16 +401,12 @@ class WindowSink {
   mark(): SinkMark {
     return {
       emitted: this.emitted,
-      entityDigits: this.entityDigits,
-      entityHexMarker: this.entityHexMarker,
-      entityKind: this.entityKind,
-      entityName: this.entityName,
-      entityZeros: this.entityZeros,
       inTag: this.inTag,
       lastEmittedWhitespace: this.lastEmittedWhitespace,
       pendingCloseRun: this.pendingCloseRun,
       pendingCloseRunStructural: this.pendingCloseRunStructural,
       pendingSiblingSeparator: this.pendingSiblingSeparator,
+      reference: this.reference.mark(),
       started: this.started,
       tagKind: this.tagKind,
       tagMark: this.tagMark,
@@ -254,16 +440,12 @@ class WindowSink {
 
   restore(mark: SinkMark): void {
     this.emitted = mark.emitted;
-    this.entityDigits = mark.entityDigits;
-    this.entityHexMarker = mark.entityHexMarker;
-    this.entityKind = mark.entityKind;
-    this.entityName = mark.entityName;
-    this.entityZeros = mark.entityZeros;
     this.inTag = mark.inTag;
     this.lastEmittedWhitespace = mark.lastEmittedWhitespace;
     this.pendingCloseRun = mark.pendingCloseRun;
     this.pendingCloseRunStructural = mark.pendingCloseRunStructural;
     this.pendingSiblingSeparator = mark.pendingSiblingSeparator;
+    this.reference.restore(mark.reference);
     this.started = mark.started;
     this.tagKind = mark.tagKind;
     this.tagMark = mark.tagMark;
@@ -284,7 +466,7 @@ class WindowSink {
    * so it is text, not markup — the same reading the regexes give it.
    */
   finish(): ExtractedWindow {
-    this.flushEntityVerbatim();
+    this.reference.flush();
     const totalCharacters = this.emitted - this.trailingWs;
     const overshoot = this.windowStart + this.windowChars.length - totalCharacters;
     const take = overshoot > 0 ? this.windowChars.length - overshoot : this.windowChars.length;
@@ -372,7 +554,7 @@ class WindowSink {
       this.pendingCloseRun = false;
       this.pendingCloseRunStructural = false;
       if (structural) {
-        this.flushEntityVerbatim();
+        this.reference.flush();
         this.pendingSiblingSeparator = true;
       }
       return;
@@ -385,142 +567,12 @@ class WindowSink {
 
   /** Feed one character to the entity decoder. */
   private literal(ch: string): void {
-    if (this.entityKind !== ENTITY_NONE && this.stepEntity(ch)) return;
+    if (this.reference.pending && this.reference.step(ch)) return;
     if (ch === '&') {
-      this.entityKind = ENTITY_AMP;
+      this.reference.begin();
       return;
     }
     this.emitChar(ch);
-  }
-
-  /** Advance the entity candidate. Returns false when `ch` still needs handling. */
-  private stepEntity(ch: string): boolean {
-    switch (this.entityKind) {
-      case ENTITY_AMP:
-        if (ch === '#') {
-          this.entityKind = ENTITY_HASH;
-          return true;
-        }
-        if (isAsciiLetter(ch)) {
-          this.entityKind = ENTITY_NAMED;
-          this.entityName = ch;
-          return true;
-        }
-        break;
-      case ENTITY_NAMED:
-        if (isAsciiLetter(ch)) {
-          this.entityName += ch;
-          if (this.entityName.length > MAX_ENTITY_NAME) this.flushEntityVerbatim();
-          return true;
-        }
-        if (ch === ';') {
-          this.completeEntity(this.entityName);
-          return true;
-        }
-        break;
-      case ENTITY_HASH:
-        if (ch === 'x' || ch === 'X') {
-          this.entityKind = ENTITY_HEX_MARKER;
-          this.entityHexMarker = ch;
-          return true;
-        }
-        if (isDigit(ch)) {
-          this.entityKind = ENTITY_DEC;
-          this.addEntityDigit(ch, false);
-          return true;
-        }
-        break;
-      case ENTITY_HEX_MARKER:
-        if (isHexDigit(ch)) {
-          this.entityKind = ENTITY_HEX;
-          this.addEntityDigit(ch, true);
-          return true;
-        }
-        break;
-      case ENTITY_DEC:
-        if (isDigit(ch)) {
-          this.addEntityDigit(ch, false);
-          return true;
-        }
-        if (ch === ';') {
-          this.completeEntity(`#${this.significantDigits()}`);
-          return true;
-        }
-        break;
-      case ENTITY_HEX:
-        if (isHexDigit(ch)) {
-          this.addEntityDigit(ch, true);
-          return true;
-        }
-        if (ch === ';') {
-          this.completeEntity(`#${this.entityHexMarker}${this.significantDigits()}`);
-          return true;
-        }
-        break;
-    }
-    this.flushEntityVerbatim();
-    return false;
-  }
-
-  /**
-   * Leading zeros are counted rather than stored, so a reference padded to any
-   * width still resolves without buffering it. Past the largest code point the
-   * value can only climb, so the reference is already text.
-   */
-  private addEntityDigit(ch: string, hex: boolean): void {
-    if (this.entityDigits === '' && ch === '0') {
-      this.entityZeros++;
-      return;
-    }
-    this.entityDigits += ch;
-    if (Number.parseInt(this.entityDigits, hex ? 16 : 10) > MAX_CODE_POINT) {
-      this.flushEntityVerbatim();
-    }
-  }
-
-  private significantDigits(): string {
-    return this.entityDigits === '' ? '0' : this.entityDigits;
-  }
-
-  private completeEntity(ref: string): void {
-    const decoded = decodeCharacterReference(ref);
-    if (decoded === undefined) {
-      this.flushEntityVerbatim();
-      this.emitChar(';');
-      return;
-    }
-    this.entityKind = ENTITY_NONE;
-    this.entityName = '';
-    this.entityDigits = '';
-    this.entityHexMarker = '';
-    this.entityZeros = 0;
-    this.emit(decoded);
-  }
-
-  /** Render the pending candidate as the literal characters it was built from. */
-  private flushEntityVerbatim(): void {
-    const kind = this.entityKind;
-    if (kind === ENTITY_NONE) return;
-    const name = this.entityName;
-    const digits = this.entityDigits;
-    const hexMarker = this.entityHexMarker;
-    const zeros = this.entityZeros;
-    this.entityKind = ENTITY_NONE;
-    this.entityName = '';
-    this.entityDigits = '';
-    this.entityHexMarker = '';
-    this.entityZeros = 0;
-
-    this.emitChar('&');
-    if (kind === ENTITY_NAMED) {
-      this.emit(name);
-      return;
-    }
-    if (kind === ENTITY_AMP) return;
-    this.emitChar('#');
-    if (kind === ENTITY_HEX_MARKER || kind === ENTITY_HEX) this.emitChar(hexMarker);
-    for (let i = 0; i < zeros; i++) this.emitChar('0');
-    if (digits !== '') this.emit(digits);
   }
 
   private emit(text: string): void {
@@ -871,10 +923,335 @@ class DocumentTextStream implements StreamingExtractor {
   }
 }
 
+/** Tokenizer states of the `html` reading, named for what was read last. */
+const HTML_DATA = 0;
+/** `<` */
+const HTML_TAG_OPEN = 1;
+/** `</` */
+const HTML_END_TAG_OPEN = 2;
+/** `<` or `</`, then a letter: reading the tag name. */
+const HTML_TAG_NAME = 3;
+/** Past the tag name; the tag runs to the first `>`. */
+const HTML_TAG = 4;
+/** A bogus comment — `<?`, `<!x`, `</3` — running to the first `>`. */
+const HTML_BOGUS = 5;
+/** `<!` */
+const HTML_MARKUP = 6;
+/** `<!-` */
+const HTML_MARKUP_DASH = 7;
+/** The HTML tokenizer's comment states. Only where a comment ends matters, not what it holds. */
+const HTML_COMMENT_START = 8;
+const HTML_COMMENT_START_DASH = 9;
+const HTML_COMMENT = 10;
+const HTML_COMMENT_END_DASH = 11;
+const HTML_COMMENT_END = 12;
+const HTML_COMMENT_END_BANG = 13;
+/** Inside `script` or `style`, watching for `</` + its name + whitespace, `/`, or `>`. */
+const HTML_RAW = 14;
+const HTML_RAW_LT = 15;
+const HTML_RAW_SLASH = 16;
+const HTML_RAW_NAME = 17;
+
+function asciiLower(ch: string): string {
+  return ch >= 'A' && ch <= 'Z' ? String.fromCharCode(ch.charCodeAt(0) | 0x20) : ch;
+}
+
 /**
- * Create an extractor that reproduces {@link extractDocumentText} over a chunked
- * body while retaining only `characterLimit` characters of it.
+ * The `html` reading over a chunked body: a tokenizer state machine feeding a
+ * reference decoder feeding the layout, each holding a few fields whatever the
+ * document does. Unlike the `gpo` reading it never rewinds — markup left open
+ * runs to the end of the body, and a reference never spans markup — so every
+ * character written is final and the window is kept as plain string pieces.
+ */
+class HtmlTextStream implements StreamingExtractor {
+  private emitted = 0;
+  private inCell = false;
+  private newlines = 0;
+  private rawMatched = 0;
+  private rawName = '';
+  /** A decoded reference is text like any other: whitespace it decodes to collapses. */
+  private readonly reference = new ReferenceDecoder({
+    decoded: (text) => {
+      for (const ch of text) {
+        if (isHtmlWhitespace(ch)) this.space = true;
+        else this.writeText(ch);
+      }
+    },
+    literal: (text) => this.writeText(text),
+  });
+  private space = false;
+  private started = false;
+  private state = HTML_DATA;
+  private tabs = 0;
+  private tagIsEnd = false;
+  private tagName = '';
+  private tagNameOverflow = false;
+  private readonly windowEnd: number;
+  private readonly windowParts: string[] = [];
+  private readonly windowStart: number;
+
+  constructor(request: TextWindowRequest) {
+    this.windowStart = request.characterOffset;
+    this.windowEnd = request.characterOffset + request.characterLimit;
+  }
+
+  push(chunk: string): void {
+    let i = 0;
+    while (i < chunk.length) i = this.step(chunk, i);
+  }
+
+  /** Text pending at the end is written; markup left open is dropped with all it spanned. */
+  finish(): ExtractedWindow {
+    if (this.state === HTML_DATA) this.reference.flush();
+    else if (this.state === HTML_TAG_OPEN) this.writeText('<');
+    else if (this.state === HTML_END_TAG_OPEN) this.writeText('</');
+    return { text: this.windowParts.join(''), totalCharacters: this.emitted };
+  }
+
+  /** Consume from `chunk[i]` in the current state; returns where to continue. */
+  private step(chunk: string, i: number): number {
+    const ch = chunk[i] as string;
+    switch (this.state) {
+      case HTML_DATA:
+        return this.data(chunk, i);
+      case HTML_TAG_OPEN:
+        if (isAsciiLetter(ch)) this.startTagName(ch, false);
+        else if (ch === '/') this.state = HTML_END_TAG_OPEN;
+        else if (ch === '!') this.state = HTML_MARKUP;
+        else if (ch === '?') this.state = HTML_BOGUS;
+        else {
+          /** No markup after all: the `<` is text, and `ch` is read again as text. */
+          this.writeText('<');
+          this.state = HTML_DATA;
+          return i;
+        }
+        return i + 1;
+      case HTML_END_TAG_OPEN:
+        if (isAsciiLetter(ch)) this.startTagName(ch, true);
+        else this.state = ch === '>' ? HTML_DATA : HTML_BOGUS;
+        return i + 1;
+      case HTML_TAG_NAME:
+        if (ch === '>') this.completeTag();
+        else if (ch === '/' || isHtmlWhitespace(ch)) this.state = HTML_TAG;
+        else if (this.tagName.length < MAX_HTML_TAG_NAME) this.tagName += asciiLower(ch);
+        else this.tagNameOverflow = true;
+        return i + 1;
+      case HTML_TAG: {
+        const gt = chunk.indexOf('>', i);
+        if (gt === -1) return chunk.length;
+        this.completeTag();
+        return gt + 1;
+      }
+      case HTML_BOGUS: {
+        const gt = chunk.indexOf('>', i);
+        if (gt === -1) return chunk.length;
+        this.state = HTML_DATA;
+        return gt + 1;
+      }
+      case HTML_MARKUP:
+        this.state = ch === '-' ? HTML_MARKUP_DASH : ch === '>' ? HTML_DATA : HTML_BOGUS;
+        return i + 1;
+      case HTML_MARKUP_DASH:
+        this.state = ch === '-' ? HTML_COMMENT_START : ch === '>' ? HTML_DATA : HTML_BOGUS;
+        return i + 1;
+      case HTML_COMMENT_START:
+        this.state = ch === '-' ? HTML_COMMENT_START_DASH : ch === '>' ? HTML_DATA : HTML_COMMENT;
+        return i + 1;
+      case HTML_COMMENT_START_DASH:
+        this.state = ch === '-' ? HTML_COMMENT_END : ch === '>' ? HTML_DATA : HTML_COMMENT;
+        return i + 1;
+      case HTML_COMMENT: {
+        const dash = chunk.indexOf('-', i);
+        if (dash === -1) return chunk.length;
+        this.state = HTML_COMMENT_END_DASH;
+        return dash + 1;
+      }
+      case HTML_COMMENT_END_DASH:
+        this.state = ch === '-' ? HTML_COMMENT_END : HTML_COMMENT;
+        return i + 1;
+      case HTML_COMMENT_END:
+        if (ch === '>') this.state = HTML_DATA;
+        else if (ch === '!') this.state = HTML_COMMENT_END_BANG;
+        else if (ch !== '-') this.state = HTML_COMMENT;
+        return i + 1;
+      case HTML_COMMENT_END_BANG:
+        this.state = ch === '-' ? HTML_COMMENT_END_DASH : ch === '>' ? HTML_DATA : HTML_COMMENT;
+        return i + 1;
+      case HTML_RAW: {
+        const lt = chunk.indexOf('<', i);
+        if (lt === -1) return chunk.length;
+        this.state = HTML_RAW_LT;
+        return lt + 1;
+      }
+      case HTML_RAW_LT:
+        this.state = ch === '/' ? HTML_RAW_SLASH : ch === '<' ? HTML_RAW_LT : HTML_RAW;
+        return i + 1;
+      case HTML_RAW_SLASH:
+        this.rawMatched = 0;
+        this.matchRawName(ch);
+        return i + 1;
+      default:
+        this.matchRawName(ch);
+        return i + 1;
+    }
+  }
+
+  /** Text, whitespace, and references, with a bulk path for a plain run. */
+  private data(chunk: string, i: number): number {
+    const ch = chunk[i] as string;
+    if (this.reference.pending && this.reference.step(ch)) return i + 1;
+    if (ch === '<') {
+      this.state = HTML_TAG_OPEN;
+      return i + 1;
+    }
+    if (ch === '&') {
+      this.reference.begin();
+      return i + 1;
+    }
+    let end = i + 1;
+    if (isHtmlWhitespace(ch)) {
+      while (end < chunk.length && isHtmlWhitespace(chunk[end] as string)) end++;
+      this.space = true;
+      return end;
+    }
+    while (end < chunk.length) {
+      const next = chunk[end] as string;
+      if (next === '<' || next === '&' || isHtmlWhitespace(next)) break;
+      end++;
+    }
+    this.writeSeparators();
+    this.appendSlice(chunk, i, end);
+    return end;
+  }
+
+  /** One more character of `</name` inside a raw-text element, or its terminator. */
+  private matchRawName(ch: string): void {
+    if (this.rawMatched < this.rawName.length) {
+      if (asciiLower(ch) === this.rawName[this.rawMatched]) {
+        this.rawMatched++;
+        this.state = HTML_RAW_NAME;
+      } else {
+        this.state = ch === '<' ? HTML_RAW_LT : HTML_RAW;
+      }
+      return;
+    }
+    if (ch === '>') {
+      this.state = HTML_DATA;
+    } else if (ch === '/' || isHtmlWhitespace(ch)) {
+      /** The end tag found; like any tag it runs to its first `>`. */
+      this.tagName = this.rawName;
+      this.tagIsEnd = true;
+      this.tagNameOverflow = false;
+      this.state = HTML_TAG;
+    } else {
+      this.state = ch === '<' ? HTML_RAW_LT : HTML_RAW;
+    }
+  }
+
+  private startTagName(ch: string, isEnd: boolean): void {
+    this.tagIsEnd = isEnd;
+    this.tagName = asciiLower(ch);
+    this.tagNameOverflow = false;
+    this.state = HTML_TAG_NAME;
+  }
+
+  /** A tag's `>` arrived: apply its role, entering raw text after a script or style start tag. */
+  private completeTag(): void {
+    const role = this.tagNameOverflow ? undefined : HTML_TAG_ROLES.get(this.tagName);
+    this.state = HTML_DATA;
+    if (role === undefined) return;
+    if (role === 'raw' && !this.tagIsEnd) {
+      this.rawName = this.tagName;
+      this.state = HTML_RAW;
+      return;
+    }
+    this.applyRole(role, this.tagIsEnd);
+  }
+
+  /** The layout rules of `HtmlLayout.tag` in `extract-text.ts`. */
+  private applyRole(role: HtmlTagRole, isEnd: boolean): void {
+    switch (role) {
+      case 'cell':
+        if (isEnd || this.inCell) this.tabs++;
+        this.inCell = !isEnd;
+        return;
+      case 'row':
+        this.inCell = false;
+        this.lineBreak(1);
+        return;
+      case 'table':
+        this.inCell = false;
+        this.lineBreak(2);
+        return;
+      case 'line':
+        if (this.inCell) this.space = true;
+        else this.lineBreak(1);
+        return;
+      case 'paragraph':
+        if (this.inCell) this.space = true;
+        else this.lineBreak(2);
+        return;
+      case 'raw':
+        return;
+    }
+  }
+
+  private lineBreak(newlines: number): void {
+    this.newlines = Math.max(this.newlines, newlines);
+    this.tabs = 0;
+  }
+
+  /** Write text with no whitespace in it, after whatever separator is owed. */
+  private writeText(text: string): void {
+    this.writeSeparators();
+    this.appendSlice(text, 0, text.length);
+  }
+
+  /** The strongest separator owed, once text follows it: blank line, line, tabs, then a space. */
+  private writeSeparators(): void {
+    if (this.started) {
+      if (this.newlines > 0 || this.tabs > 0) {
+        const separator = '\n'.repeat(this.newlines) + '\t'.repeat(this.tabs);
+        this.appendSlice(separator, 0, separator.length);
+      } else if (this.space) {
+        this.appendSlice(' ', 0, 1);
+      }
+    }
+    this.started = true;
+    this.newlines = 0;
+    this.tabs = 0;
+    this.space = false;
+  }
+
+  /** Count `source[from, to)` as written, keeping whatever of it falls in the window. */
+  private appendSlice(source: string, from: number, to: number): void {
+    const start = this.emitted;
+    this.emitted = start + (to - from);
+    if (start >= this.windowEnd || this.emitted <= this.windowStart) return;
+    this.windowParts.push(
+      source.slice(
+        from + Math.max(0, this.windowStart - start),
+        Math.min(to, from + (this.windowEnd - start)),
+      ),
+    );
+  }
+}
+
+/**
+ * Create an extractor that reproduces the requested reading — {@link
+ * extractDocumentText} for `gpo`, {@link extractHtmlText} for `html` — over a
+ * chunked body while retaining only `characterLimit` characters of it.
  */
 export function createStreamingExtractor(request: TextWindowRequest): StreamingExtractor {
-  return new DocumentTextStream(request);
+  const { reading } = request;
+  switch (reading) {
+    case 'gpo':
+      return new DocumentTextStream(request);
+    case 'html':
+      return new HtmlTextStream(request);
+    default: {
+      const unknown: never = reading;
+      throw new Error(`Unknown document reading: ${String(unknown)}`);
+    }
+  }
 }

@@ -10,6 +10,7 @@ import { formatDailyRecord } from '@/mcp-server/tools/format-helpers.js';
 import {
   congressErrorContracts,
   documentErrorContracts,
+  documentFormatInput,
   documentWindowInput,
   identityErrorContracts,
   listEnrichment,
@@ -50,6 +51,7 @@ export const dailyRecordTool = tool('congressgov_daily_record', {
       .describe(
         "Which article 'content' reads, 0-based against the issue's whole article sequence — the same absolute position 'articles' pages through with offset. Ignored by other operations.",
       ),
+    ...documentFormatInput,
     ...documentWindowInput,
   }),
   output: listOrDetail(
@@ -146,7 +148,12 @@ export const dailyRecordTool = tool('congressgov_daily_record', {
       }
 
       const document = await getCongressDocuments().fetchDocument(
-        { url, characterOffset: input.characterOffset, characterLimit: input.characterLimit },
+        {
+          url,
+          characterOffset: input.characterOffset,
+          characterLimit: input.characterLimit,
+          reading: 'gpo',
+        },
         ctx,
       );
       const articleTitle =

@@ -15,6 +15,13 @@ vi.mock('@/services/congress-api/congress-api-service.js', () => ({
   getCongressApi: vi.fn(),
 }));
 
+vi.mock('@/config/server-config.js', () => ({
+  getServerConfig: vi.fn().mockReturnValue({
+    apiKey: 'test-api-key',
+    baseUrl: 'https://api.congress.gov/v3',
+  }),
+}));
+
 import { billLookupTool } from '@/mcp-server/tools/definitions/bill-lookup.tool.js';
 import { committeeReportsTool } from '@/mcp-server/tools/definitions/committee-reports.tool.js';
 import { dailyRecordTool } from '@/mcp-server/tools/definitions/daily-record.tool.js';
@@ -27,7 +34,10 @@ import {
   MAX_DOCUMENT_BYTES,
 } from '@/services/congress-documents/congress-documents-service.js';
 import { DocumentBodyCache } from '@/services/congress-documents/document-body-cache.js';
-import { extractDocumentText } from '@/services/congress-documents/extract-text.js';
+import {
+  extractDocumentText,
+  extractHtmlText,
+} from '@/services/congress-documents/extract-text.js';
 import type { DocumentContent } from '@/services/congress-documents/types.js';
 import {
   CALL_BUDGET_MS,
@@ -225,7 +235,7 @@ describe('CongressDocumentsService', () => {
       );
       await expect(
         service.fetchDocument(
-          { url: URL_BILL, characterOffset: 0, characterLimit: 100 },
+          { url: URL_BILL, characterOffset: 0, characterLimit: 100, reading: 'gpo' },
           { ...createMockContext(), signal: controller.signal },
         ),
       ).rejects.toMatchObject({ code: JsonRpcErrorCode.RequestCancelled });
@@ -236,7 +246,7 @@ describe('CongressDocumentsService', () => {
       mockFetch.mockImplementation(() => errorResponse(501));
       await expect(
         service.fetchDocument(
-          { url: URL_BILL, characterOffset: 0, characterLimit: 100 },
+          { url: URL_BILL, characterOffset: 0, characterLimit: 100, reading: 'gpo' },
           createMockContext(),
         ),
       ).rejects.toMatchObject({
@@ -249,7 +259,7 @@ describe('CongressDocumentsService', () => {
     it('requests the resolved URL', async () => {
       mockFetch.mockResolvedValue(htmlResponse(preDoc('Hello.')));
       await service.fetchDocument(
-        { url: URL_BILL, characterOffset: 0, characterLimit: 100 },
+        { url: URL_BILL, characterOffset: 0, characterLimit: 100, reading: 'gpo' },
         createMockContext(),
       );
       expect(String(mockFetch.mock.calls[0]![0])).toBe(URL_BILL);
@@ -258,7 +268,12 @@ describe('CongressDocumentsService', () => {
     it('rejects a URL outside www.congress.gov without fetching it', async () => {
       const error = (await service
         .fetchDocument(
-          { url: 'https://evil.example.com/doc.htm', characterOffset: 0, characterLimit: 100 },
+          {
+            url: 'https://evil.example.com/doc.htm',
+            characterOffset: 0,
+            characterLimit: 100,
+            reading: 'gpo',
+          },
           createMockContext(),
         )
         .catch((e: unknown) => e)) as McpError;
@@ -271,7 +286,7 @@ describe('CongressDocumentsService', () => {
       mockFetch.mockResolvedValue(errorResponse(404));
       const error = (await service
         .fetchDocument(
-          { url: URL_BILL, characterOffset: 0, characterLimit: 100 },
+          { url: URL_BILL, characterOffset: 0, characterLimit: 100, reading: 'gpo' },
           createMockContext(),
         )
         .catch((e: unknown) => e)) as McpError;
@@ -284,7 +299,7 @@ describe('CongressDocumentsService', () => {
       mockFetch.mockResolvedValue(errorResponse(503));
       const error = (await service
         .fetchDocument(
-          { url: URL_BILL, characterOffset: 0, characterLimit: 100 },
+          { url: URL_BILL, characterOffset: 0, characterLimit: 100, reading: 'gpo' },
           createMockContext(),
         )
         .catch((e: unknown) => e)) as McpError;
@@ -297,7 +312,7 @@ describe('CongressDocumentsService', () => {
       mockFetch.mockRejectedValue(new Error('socket hang up'));
       const error = (await service
         .fetchDocument(
-          { url: URL_BILL, characterOffset: 0, characterLimit: 100 },
+          { url: URL_BILL, characterOffset: 0, characterLimit: 100, reading: 'gpo' },
           createMockContext(),
         )
         .catch((e: unknown) => e)) as McpError;
@@ -311,7 +326,7 @@ describe('CongressDocumentsService', () => {
       );
       const error = (await service
         .fetchDocument(
-          { url: URL_BILL, characterOffset: 0, characterLimit: 100 },
+          { url: URL_BILL, characterOffset: 0, characterLimit: 100, reading: 'gpo' },
           createMockContext(),
         )
         .catch((e: unknown) => e)) as McpError;
@@ -327,7 +342,7 @@ describe('CongressDocumentsService', () => {
         }),
       );
       const result = await service.fetchDocument(
-        { url: URL_BILL, characterOffset: 0, characterLimit: 100 },
+        { url: URL_BILL, characterOffset: 0, characterLimit: 100, reading: 'gpo' },
         createMockContext(),
       );
       expect(result.text).toBe('Sec. 1.');
@@ -339,7 +354,7 @@ describe('CongressDocumentsService', () => {
       );
       const error = (await service
         .fetchDocument(
-          { url: URL_BILL, characterOffset: 0, characterLimit: 100 },
+          { url: URL_BILL, characterOffset: 0, characterLimit: 100, reading: 'gpo' },
           createMockContext(),
         )
         .catch((e: unknown) => e)) as McpError;
@@ -352,7 +367,7 @@ describe('CongressDocumentsService', () => {
       mockFetch.mockResolvedValue(htmlResponse(''));
       const error = (await service
         .fetchDocument(
-          { url: URL_BILL, characterOffset: 0, characterLimit: 100 },
+          { url: URL_BILL, characterOffset: 0, characterLimit: 100, reading: 'gpo' },
           createMockContext(),
         )
         .catch((e: unknown) => e)) as McpError;
@@ -368,7 +383,7 @@ describe('CongressDocumentsService', () => {
     it('accepts a document one byte under the ceiling', async () => {
       mockFetch.mockResolvedValue(streamedResponse('x'.repeat(CEILING - 1)));
       const result = await service.fetchDocument(
-        { url: URL_BILL, characterOffset: 0, characterLimit: CEILING },
+        { url: URL_BILL, characterOffset: 0, characterLimit: CEILING, reading: 'gpo' },
         createMockContext(),
       );
       expect(result.totalCharacters).toBe(CEILING - 1);
@@ -378,7 +393,7 @@ describe('CongressDocumentsService', () => {
       const body = 'x'.repeat(CEILING);
       mockFetch.mockResolvedValue(streamedResponse(body));
       const result = await service.fetchDocument(
-        { url: URL_BILL, characterOffset: 0, characterLimit: CEILING },
+        { url: URL_BILL, characterOffset: 0, characterLimit: CEILING, reading: 'gpo' },
         createMockContext(),
       );
       expect(result.totalCharacters).toBe(CEILING);
@@ -388,7 +403,7 @@ describe('CongressDocumentsService', () => {
       mockFetch.mockResolvedValue(streamedResponse('x'.repeat(CEILING + 1)));
       const error = (await service
         .fetchDocument(
-          { url: URL_BILL, characterOffset: 0, characterLimit: 100 },
+          { url: URL_BILL, characterOffset: 0, characterLimit: 100, reading: 'gpo' },
           createMockContext(),
         )
         .catch((e: unknown) => e)) as McpError;
@@ -403,7 +418,7 @@ describe('CongressDocumentsService', () => {
       );
       const error = (await service
         .fetchDocument(
-          { url: URL_BILL, characterOffset: 0, characterLimit: 100 },
+          { url: URL_BILL, characterOffset: 0, characterLimit: 100, reading: 'gpo' },
           createMockContext(),
         )
         .catch((e: unknown) => e)) as McpError;
@@ -415,7 +430,7 @@ describe('CongressDocumentsService', () => {
       mockFetch.mockResolvedValue(streamedResponse('x'.repeat(CEILING + 1)));
       await service
         .fetchDocument(
-          { url: URL_BILL, characterOffset: 0, characterLimit: 100 },
+          { url: URL_BILL, characterOffset: 0, characterLimit: 100, reading: 'gpo' },
           createMockContext(),
         )
         .catch(() => undefined);
@@ -431,7 +446,12 @@ describe('CongressDocumentsService', () => {
 
     it('returns the whole document when the limit exceeds its length', async () => {
       const result = await service.fetchDocument(
-        { url: URL_BILL, characterOffset: 0, characterLimit: LONG_TEXT.length + 500 },
+        {
+          url: URL_BILL,
+          characterOffset: 0,
+          characterLimit: LONG_TEXT.length + 500,
+          reading: 'gpo',
+        },
         createMockContext(),
       );
       expect(result.text).toBe(LONG_TEXT);
@@ -443,7 +463,7 @@ describe('CongressDocumentsService', () => {
 
     it('cuts at the exact character boundary, without snapping to a section break', async () => {
       const result = await service.fetchDocument(
-        { url: URL_BILL, characterOffset: 0, characterLimit: 37 },
+        { url: URL_BILL, characterOffset: 0, characterLimit: 37, reading: 'gpo' },
         createMockContext(),
       );
       expect(result.text).toBe(LONG_TEXT.slice(0, 37));
@@ -454,7 +474,7 @@ describe('CongressDocumentsService', () => {
 
     it('resumes at the exact offset it was given', async () => {
       const result = await service.fetchDocument(
-        { url: URL_BILL, characterOffset: 37, characterLimit: 40 },
+        { url: URL_BILL, characterOffset: 37, characterLimit: 40, reading: 'gpo' },
         createMockContext(),
       );
       expect(result.text).toBe(LONG_TEXT.slice(37, 77));
@@ -473,7 +493,7 @@ describe('CongressDocumentsService', () => {
         offsets.push(offset);
         const page: Awaited<ReturnType<CongressDocumentsService['fetchDocument']>> =
           await service.fetchDocument(
-            { url: URL_BILL, characterOffset: offset, characterLimit: 100 },
+            { url: URL_BILL, characterOffset: offset, characterLimit: 100, reading: 'gpo' },
             createMockContext(),
           );
         expect(page.offset).toBe(offset);
@@ -496,7 +516,7 @@ describe('CongressDocumentsService', () => {
     it('yields the final partial window with truncated false', async () => {
       const last = LONG_TEXT.length - 10;
       const result = await service.fetchDocument(
-        { url: URL_BILL, characterOffset: last, characterLimit: 100 },
+        { url: URL_BILL, characterOffset: last, characterLimit: 100, reading: 'gpo' },
         createMockContext(),
       );
       expect(result.text).toBe(LONG_TEXT.slice(last));
@@ -508,7 +528,7 @@ describe('CongressDocumentsService', () => {
     it('rejects an offset exactly at totalCharacters', async () => {
       const error = (await service
         .fetchDocument(
-          { url: URL_BILL, characterOffset: LONG_TEXT.length, characterLimit: 100 },
+          { url: URL_BILL, characterOffset: LONG_TEXT.length, characterLimit: 100, reading: 'gpo' },
           createMockContext(),
         )
         .catch((e: unknown) => e)) as McpError;
@@ -520,7 +540,12 @@ describe('CongressDocumentsService', () => {
     it('rejects an offset past the end', async () => {
       const error = (await service
         .fetchDocument(
-          { url: URL_BILL, characterOffset: LONG_TEXT.length + 5_000, characterLimit: 100 },
+          {
+            url: URL_BILL,
+            characterOffset: LONG_TEXT.length + 5_000,
+            characterLimit: 100,
+            reading: 'gpo',
+          },
           createMockContext(),
         )
         .catch((e: unknown) => e)) as McpError;
@@ -534,7 +559,7 @@ describe('CongressDocumentsService', () => {
       for (const chunkSize of [1, 2, 5, 17, 256]) {
         mockFetch.mockResolvedValueOnce(streamedResponse(XML_BODY, 'application/xml', chunkSize));
         const result = await service.fetchDocument(
-          { url: URL_BILL, characterOffset: 9, characterLimit: 21 },
+          { url: URL_BILL, characterOffset: 9, characterLimit: 21, reading: 'gpo' },
           createMockContext(),
         );
         expect(result).toEqual({
@@ -556,7 +581,7 @@ describe('CongressDocumentsService', () => {
 
       while (offset !== null) {
         const page = await service.fetchDocument(
-          { url: URL_BILL, characterOffset: offset, characterLimit: 11 },
+          { url: URL_BILL, characterOffset: offset, characterLimit: 11, reading: 'gpo' },
           createMockContext(),
         );
         expect(page.offset).toBe(offset);
@@ -606,7 +631,7 @@ describe('CongressDocumentsService', () => {
       const offsets = [0, Math.floor(reference.length / 2), reference.length - 100];
       for (const offset of offsets) {
         const result = await service.fetchDocument(
-          { url: URL_BILL, characterOffset: offset, characterLimit: 100_000 },
+          { url: URL_BILL, characterOffset: offset, characterLimit: 100_000, reading: 'gpo' },
           createMockContext(),
         );
         expect(result.totalCharacters, `offset ${offset}`).toBe(reference.length);
@@ -621,7 +646,7 @@ describe('CongressDocumentsService', () => {
       async (offset) => {
         const end = Math.min(offset + 250_000, reference.length);
         const page = await service.fetchDocument(
-          { url: URL_BILL, characterOffset: offset, characterLimit: 250_000 },
+          { url: URL_BILL, characterOffset: offset, characterLimit: 250_000, reading: 'gpo' },
           createMockContext(),
         );
 
@@ -638,7 +663,7 @@ describe('CongressDocumentsService', () => {
     it('rejects an offset past the end rather than serving an empty window', async () => {
       const error = (await service
         .fetchDocument(
-          { url: URL_BILL, characterOffset: reference.length, characterLimit: 100 },
+          { url: URL_BILL, characterOffset: reference.length, characterLimit: 100, reading: 'gpo' },
           createMockContext(),
         )
         .catch((e: unknown) => e)) as McpError;
@@ -651,7 +676,7 @@ describe('CongressDocumentsService', () => {
     it('returns an empty window rather than an offset error', async () => {
       mockFetch.mockResolvedValue(streamedResponse('<pre>\n   \n</pre>'));
       const result = await service.fetchDocument(
-        { url: URL_BILL, characterOffset: 0, characterLimit: 100 },
+        { url: URL_BILL, characterOffset: 0, characterLimit: 100, reading: 'gpo' },
         createMockContext(),
       );
       expect(result.text).toBe('');
@@ -667,7 +692,12 @@ describe('CongressDocumentsService', () => {
    * fetch — the format lookup — is already gone from it.
    */
   describe('call budget', () => {
-    const window = { url: URL_BILL, characterOffset: 0, characterLimit: 100 };
+    const window = {
+      url: URL_BILL,
+      characterOffset: 0,
+      characterLimit: 100,
+      reading: 'gpo' as const,
+    };
 
     beforeEach(() => useFakeClock());
     afterEach(() => vi.useRealTimers());
@@ -924,7 +954,7 @@ describe('CongressDocumentsService', () => {
       signal?: AbortSignal,
     ) =>
       target.fetchDocument(
-        { url, characterOffset, characterLimit },
+        { url, characterOffset, characterLimit, reading: 'gpo' },
         signal ? { ...createMockContext(), signal } : createMockContext(),
       );
 
@@ -1122,11 +1152,108 @@ describe('CongressDocumentsService', () => {
       await vi.advanceTimersByTimeAsync(CALL_BUDGET_MS);
       mockFetch.mockImplementation(stalledHeadersFetch);
       const page = await service.fetchDocument(
-        { url: URL_BILL, characterOffset: 100, characterLimit: 100 },
+        { url: URL_BILL, characterOffset: 100, characterLimit: 100, reading: 'gpo' },
         ctx,
       );
       expect(page.text).toBe(LONG_TEXT.slice(100, 200));
       expect(mockFetch).toHaveBeenCalledOnce();
+    });
+  });
+
+  /**
+   * CRS report pages are HTML served without a Content-Length. The caller names
+   * the `html` reading; the body never chooses it.
+   */
+  describe('html reading', () => {
+    const URL_CRS = 'https://www.congress.gov/crs_external_products/R/HTML/R46406.html';
+    const CRS_HEAD =
+      '<head><meta charset="utf-8"/></head>\n    &lt;%@ Control Language="C#" ClassName="CRSgov.UI.Product" %&gt;\n    <script language="C#" runat="server">\n      public string REPORT_HTML_LOCATION = "x";\n    </script><div class="Report"><div class="Title">Voter Registration</div>\n<hr color="#003399"/>\n<h1>Contents</h1>';
+    const CRS_SECTION = (i: number) =>
+      `\n<p class="Heading1">Section ${i} — “registration”</p>\n<p class="BodyText">Body ${i} &amp; <a href="#fn${i}">P.L. 103-31</a><sup><a class="FootnoteLink" title="Note ${i}.">${i}</a></sup>, at €${i} 𝔄.</p>\n<script type="text/javascript">Highcharts.chart("c${i}", { label: "<p>${i}</p>" });</script>\n<table class="ReportTable"><tr><td><p>Year</p></td><td><p>${i}</p></td></tr></table>`;
+    const CRS_BODY = `${CRS_HEAD}${repeatSections(CRS_SECTION, 1, 1_500)}</div>`;
+    const CRS_TEXT = extractHtmlText(CRS_BODY);
+
+    const readCrs = (
+      target: CongressDocumentsService,
+      characterOffset: number,
+      reading: 'gpo' | 'html',
+    ) =>
+      target.fetchDocument(
+        { url: URL_CRS, characterOffset, characterLimit: 25_000, reading },
+        createMockContext(),
+      );
+
+    beforeEach(() => {
+      mockFetch.mockImplementation(
+        serveDocuments(
+          new Map([[new URL(URL_CRS).pathname, { body: CRS_BODY, type: 'text/html' }]]),
+        ),
+      );
+    });
+
+    it('is a page past two replay slices whose reading carries no script text', () => {
+      expect(encoder.encode(CRS_BODY).byteLength).toBeGreaterThan(2 * SLICE);
+      expect(CRS_BODY).toContain('Highcharts');
+      expect(CRS_TEXT).not.toContain('Highcharts');
+      expect(CRS_TEXT).not.toContain('REPORT_HTML_LOCATION');
+      expect(CRS_TEXT.startsWith('<%@ Control')).toBe(true);
+    });
+
+    it('reads a CRS body the gpo way when the caller names the gpo reading', async () => {
+      const page = await readCrs(service, 0, 'gpo');
+      expect(page.text).toBe(extractDocumentText(CRS_BODY).slice(0, 25_000));
+      expect(page.text).toContain('REPORT_HTML_LOCATION');
+    });
+
+    it('applies the html reading the caller names', async () => {
+      const page = await readCrs(service, 0, 'html');
+      expect(page).toEqual({
+        text: CRS_TEXT.slice(0, 25_000),
+        totalCharacters: CRS_TEXT.length,
+        offset: 0,
+        truncated: true,
+        nextOffset: 25_000,
+      });
+      expect(page.text).toContain('Voter Registration\n\nContents\n\nSection 1 — “registration”');
+    });
+
+    it('walks the page via nextOffset from one fetch, each window what a fresh read returns', async () => {
+      const pages: DocumentContent[] = [];
+      let offset: number | null = 0;
+      while (offset !== null) {
+        if (pages.length > 100) throw new Error('walk did not terminate');
+        const page: DocumentContent = await readCrs(service, offset, 'html');
+        expect(page.totalCharacters).toBe(CRS_TEXT.length);
+        pages.push(page);
+        offset = page.nextOffset;
+      }
+      expect(mockFetch).toHaveBeenCalledOnce();
+      expect(pages.length).toBeGreaterThanOrEqual(5);
+      expect(pages.map((page) => page.text).join('')).toBe(CRS_TEXT);
+
+      for (const page of pages) {
+        const fresh = await readCrs(new CongressDocumentsService(ROOMY), page.offset, 'html');
+        expect(page, `window at ${page.offset}`).toEqual(fresh);
+      }
+    });
+
+    it('replays a cached body with the reading each call names', async () => {
+      await readCrs(service, 0, 'html');
+      const gpo = await readCrs(service, 25_000, 'gpo');
+      expect(gpo.text).toBe(extractDocumentText(CRS_BODY).slice(25_000, 50_000));
+      const html = await readCrs(service, 25_000, 'html');
+      expect(html.text).toBe(CRS_TEXT.slice(25_000, 50_000));
+      expect(mockFetch).toHaveBeenCalledOnce();
+    });
+
+    it('rejects an offset past the end of the html reading', async () => {
+      const error = (await readCrs(service, CRS_TEXT.length, 'html').catch(
+        (e: unknown) => e,
+      )) as McpError;
+      expect(error.data).toMatchObject({
+        reason: 'offset_past_end',
+        totalCharacters: CRS_TEXT.length,
+      });
     });
   });
 

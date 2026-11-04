@@ -1033,11 +1033,7 @@ describe('#70 — a windowed summary row renders its window and its bounds', () 
   const windowAt = (characterOffset: number, characterLimit: number) =>
     windowSummaryPage(
       { data: [{ text: FULL }], pagination: { count: 1, nextOffset: null } },
-      {
-        offset: 0,
-        characterOffset,
-        characterLimit,
-      },
+      { characterOffset, characterLimit },
     ).page.data[0] as Record<string, unknown>;
 
   const firstWindow = windowAt(0, 63);

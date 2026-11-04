@@ -7,6 +7,19 @@
 export type DocumentFormat = 'text' | 'xml';
 
 /**
+ * How a document body becomes the plain text offsets index into. The caller
+ * that resolved the URL names the reading; it is never sniffed from the body.
+ *
+ * - `gpo` — GPO publications (bill text, committee reports, Congressional
+ *   Record articles): Formatted Text `<pre>` print output kept verbatim, or XML
+ *   with one space at an unseparated structural sibling boundary, decided by
+ *   whether the body carries a `<pre>`.
+ * - `html` — a rendered web page (CRS reports): script and style dropped,
+ *   whitespace collapsed, and block elements laid out as lines and paragraphs.
+ */
+export type DocumentReading = 'gpo' | 'html';
+
+/**
  * One entry of an upstream format list. Bill text versions and committee reports
  * carry these under `formats[]`; Daily Congressional Record articles carry the
  * same `{type, url}` pairs under `text[]`. Every field is optional — upstream
@@ -18,12 +31,23 @@ export interface DocumentFormatRef {
   url?: unknown;
 }
 
+/**
+ * One entry of a CRS report's `formats[]`: the label sits under `format`
+ * (`HTML`, `PDF`), not the `type` the GPO format lists use.
+ */
+export interface CrsFormatRef {
+  format?: unknown;
+  url?: unknown;
+}
+
 /** Parameters for a single bounded document read. */
 export interface FetchDocumentParams {
   /** Maximum characters to return. */
   characterLimit: number;
   /** First character of the document to return, 0-based. */
   characterOffset: number;
+  /** The reading the body gets — named by the caller that resolved the URL. */
+  reading: DocumentReading;
   /** Absolute URL resolved from upstream metadata — never caller-supplied. */
   url: string;
 }

@@ -12,6 +12,7 @@ import {
   notFound,
   rateLimited,
   serviceUnavailable,
+  validationError,
 } from '@cyanheads/mcp-ts-core/errors';
 import type { RequestContext } from '@cyanheads/mcp-ts-core/utils';
 import {
@@ -23,10 +24,12 @@ import { getServerConfig } from '@/config/server-config.js';
 import { type BudgetedAttempt, withCallBudget } from '@/services/call-budget.js';
 import { ordinal } from '@/utils/congress-calendar.js';
 import type {
+  AmendmentSubResourceParams,
   BillSubResourceParams,
   CommitteeSubResourceParams,
   CongressDetail,
   DateRangeParams,
+  GetAmendmentParams,
   GetBillParams,
   GetCommitteeReportParams,
   GetCrsReportParams,
@@ -35,9 +38,11 @@ import type {
   GetLawParams,
   GetMemberLegislationParams,
   GetVoteParams,
+  ListAmendmentsParams,
   ListBillsParams,
   ListCommitteeReportsParams,
   ListCommitteesParams,
+  ListCrsReportsParams,
   ListDailyRecordParams,
   ListLawsParams,
   ListMembersParams,
@@ -60,6 +65,15 @@ interface FetchListResult {
 
 function isApiRecord(value: unknown): value is ApiRecord {
   return typeof value === 'object' && value !== null;
+}
+
+/**
+ * Tag for an API path: each interpolated value is percent-encoded as exactly one
+ * path segment. Encoding leaves an empty value and a dot segment unchanged;
+ * `buildUrl` refuses those.
+ */
+function apiPath(literals: TemplateStringsArray, ...values: Array<string | number>): string {
+  return String.raw(literals, ...values.map((value) => encodeURIComponent(value)));
 }
 
 /** Normalize upstream casing: bioguideID → bioguideId. */
@@ -377,15 +391,16 @@ export class CongressApiService {
 
   listBills(params: ListBillsParams, ctx?: Context): Promise<FetchListResult> {
     const path = params.billType
-      ? `/bill/${params.congress}/${params.billType}`
-      : `/bill/${params.congress}`;
+      ? apiPath`/bill/${params.congress}/${params.billType}`
+      : apiPath`/bill/${params.congress}`;
     const extraQuery = params.sort ? { sort: params.sort } : undefined;
     return this.fetchList(path, 'bills', params, ctx, extraQuery);
   }
 
   async getBill(params: GetBillParams, ctx?: Context): Promise<EntityResult<'bill'>> {
     const data = await this.tryNotFound(
-      () => this.get(`/bill/${params.congress}/${params.billType}/${params.billNumber}`, ctx),
+      () =>
+        this.get(apiPath`/bill/${params.congress}/${params.billType}/${params.billNumber}`, ctx),
       `Bill ${params.billType.toUpperCase()} ${params.billNumber} not found in the ${ordinal(params.congress)} Congress.`,
       { ...params },
     );
@@ -393,7 +408,7 @@ export class CongressApiService {
   }
 
   getBillSubResource(params: BillSubResourceParams, ctx?: Context): Promise<FetchListResult> {
-    const path = `/bill/${params.congress}/${params.billType}/${params.billNumber}/${params.subResource}`;
+    const path = apiPath`/bill/${params.congress}/${params.billType}/${params.billNumber}/${params.subResource}`;
     const key = this.inferListKey(params.subResource);
     return this.tryNotFound(
       () => this.fetchList(path, key, params, ctx),
@@ -402,19 +417,58 @@ export class CongressApiService {
     );
   }
 
+  // --- Amendments ---
+
+  listAmendments(params: ListAmendmentsParams, ctx?: Context): Promise<FetchListResult> {
+    const path = params.amendmentType
+      ? apiPath`/amendment/${params.congress}/${params.amendmentType}`
+      : apiPath`/amendment/${params.congress}`;
+    const extraQuery = params.sort ? { sort: params.sort } : undefined;
+    return this.fetchList(path, 'amendments', params, ctx, extraQuery);
+  }
+
+  async getAmendment(
+    params: GetAmendmentParams,
+    ctx?: Context,
+  ): Promise<EntityResult<'amendment'>> {
+    const data = await this.tryNotFound(
+      () =>
+        this.get(
+          apiPath`/amendment/${params.congress}/${params.amendmentType}/${params.amendmentNumber}`,
+          ctx,
+        ),
+      `Amendment ${params.amendmentType.toUpperCase()} ${params.amendmentNumber} not found in the ${ordinal(params.congress)} Congress.`,
+      { ...params },
+    );
+    return { amendment: data.amendment as ApiRecord };
+  }
+
+  getAmendmentSubResource(
+    params: AmendmentSubResourceParams,
+    ctx?: Context,
+  ): Promise<FetchListResult> {
+    const path = apiPath`/amendment/${params.congress}/${params.amendmentType}/${params.amendmentNumber}/${params.subResource}`;
+    const key = this.inferListKey(params.subResource);
+    return this.tryNotFound(
+      () => this.fetchList(path, key, params, ctx),
+      `Amendment ${params.amendmentType.toUpperCase()} ${params.amendmentNumber} (or its ${params.subResource}) not found in the ${ordinal(params.congress)} Congress.`,
+      { ...params },
+    );
+  }
+
   // --- Laws ---
 
   listLaws(params: ListLawsParams, ctx?: Context): Promise<FetchListResult> {
     const path = params.lawType
-      ? `/law/${params.congress}/${params.lawType}`
-      : `/law/${params.congress}`;
+      ? apiPath`/law/${params.congress}/${params.lawType}`
+      : apiPath`/law/${params.congress}`;
     return this.fetchList(path, 'bills', params, ctx);
   }
 
   async getLaw(params: GetLawParams, ctx?: Context): Promise<EntityResult<'law'>> {
     /** Congress.gov returns the law endpoint payload under `bill` — a law is a bill that became law. */
     const data = await this.tryNotFound(
-      () => this.get(`/law/${params.congress}/${params.lawType}/${params.lawNumber}`, ctx),
+      () => this.get(apiPath`/law/${params.congress}/${params.lawType}/${params.lawNumber}`, ctx),
       `${params.lawType === 'pub' ? 'Public' : 'Private'} Law ${params.congress}-${params.lawNumber} not found.`,
       { ...params },
     );
@@ -425,11 +479,11 @@ export class CongressApiService {
 
   listMembers(params: ListMembersParams, ctx?: Context): Promise<FetchListResult> {
     const prefix =
-      params.congress !== undefined ? `/member/congress/${params.congress}` : '/member';
+      params.congress !== undefined ? apiPath`/member/congress/${params.congress}` : '/member';
     let path = prefix;
     if (params.stateCode) {
-      path = `${prefix}/${params.stateCode}`;
-      if (params.district !== undefined) path += `/${params.district}`;
+      path += apiPath`/${params.stateCode}`;
+      if (params.district !== undefined) path += apiPath`/${params.district}`;
     }
     const extraQuery =
       params.currentMember === undefined
@@ -440,7 +494,7 @@ export class CongressApiService {
 
   async getMember(bioguideId: string, ctx?: Context): Promise<EntityResult<'member'>> {
     const data = await this.tryNotFound(
-      () => this.get(`/member/${bioguideId}`, ctx),
+      () => this.get(apiPath`/member/${bioguideId}`, ctx),
       `Member ${bioguideId} not found. Bioguide IDs are one letter followed by six digits (e.g., P000197).`,
       { bioguideId },
     );
@@ -451,7 +505,7 @@ export class CongressApiService {
     params: GetMemberLegislationParams,
     ctx?: Context,
   ): Promise<FetchListResult> {
-    const path = `/member/${params.bioguideId}/${params.type}`;
+    const path = apiPath`/member/${params.bioguideId}/${params.type}`;
     const key = params.type.replace('-legislation', 'Legislation');
     return this.tryNotFound(
       () => this.fetchList(path, key, params, ctx),
@@ -464,9 +518,10 @@ export class CongressApiService {
 
   listCommittees(params: ListCommitteesParams, ctx?: Context): Promise<FetchListResult> {
     let path = '/committee';
-    if (params.congress && params.chamber) path = `/committee/${params.congress}/${params.chamber}`;
-    else if (params.congress) path = `/committee/${params.congress}`;
-    else if (params.chamber) path = `/committee/${params.chamber}`;
+    if (params.congress && params.chamber)
+      path = apiPath`/committee/${params.congress}/${params.chamber}`;
+    else if (params.congress) path = apiPath`/committee/${params.congress}`;
+    else if (params.chamber) path = apiPath`/committee/${params.chamber}`;
     return this.fetchList(path, 'committees', params, ctx);
   }
 
@@ -476,7 +531,7 @@ export class CongressApiService {
     ctx?: Context,
   ): Promise<EntityResult<'committee'>> {
     const data = await this.tryNotFound(
-      () => this.get(`/committee/${chamber}/${committeeCode}`, ctx),
+      () => this.get(apiPath`/committee/${chamber}/${committeeCode}`, ctx),
       `Committee ${committeeCode} not found in the ${chamber} chamber. Committee system codes look like \`hspw00\` (chamber prefix + abbreviation + digits). Call \`congressgov_committee_lookup\` with \`operation: 'list'\` and an optional \`filter\` to discover valid codes.`,
       { chamber, committeeCode },
     );
@@ -487,7 +542,7 @@ export class CongressApiService {
     params: CommitteeSubResourceParams,
     ctx?: Context,
   ): Promise<FetchListResult> {
-    const path = `/committee/${params.chamber}/${params.committeeCode}/${params.subResource}`;
+    const path = apiPath`/committee/${params.chamber}/${params.committeeCode}/${params.subResource}`;
     const key = this.inferListKey(params.subResource);
     const result = await this.tryNotFound(
       () => this.fetchList(path, key, params, ctx),
@@ -504,7 +559,7 @@ export class CongressApiService {
 
   listVotes(params: ListVotesParams, ctx?: Context): Promise<FetchListResult> {
     return this.fetchList(
-      `/house-vote/${params.congress}/${params.session}`,
+      apiPath`/house-vote/${params.congress}/${params.session}`,
       'houseRollCallVotes',
       params,
       ctx,
@@ -513,7 +568,11 @@ export class CongressApiService {
 
   async getVote(params: GetVoteParams, ctx?: Context): Promise<EntityResult<'vote'>> {
     const data = await this.tryNotFound(
-      () => this.get(`/house-vote/${params.congress}/${params.session}/${params.voteNumber}`, ctx),
+      () =>
+        this.get(
+          apiPath`/house-vote/${params.congress}/${params.session}/${params.voteNumber}`,
+          ctx,
+        ),
       `House roll call vote ${params.voteNumber} not found in the ${ordinal(params.congress)} Congress, session ${params.session}.`,
       { ...params },
     );
@@ -528,7 +587,7 @@ export class CongressApiService {
     const data = await this.tryNotFound(
       () =>
         this.get(
-          `/house-vote/${params.congress}/${params.session}/${params.voteNumber}/members`,
+          apiPath`/house-vote/${params.congress}/${params.session}/${params.voteNumber}/members`,
           ctx,
         ),
       `House roll call vote ${params.voteNumber} not found in the ${ordinal(params.congress)} Congress, session ${params.session}.`,
@@ -555,7 +614,7 @@ export class CongressApiService {
   // --- Nominations ---
 
   listNominations(params: ListNominationsParams, ctx?: Context): Promise<FetchListResult> {
-    return this.fetchList(`/nomination/${params.congress}`, 'nominations', params, ctx);
+    return this.fetchList(apiPath`/nomination/${params.congress}`, 'nominations', params, ctx);
   }
 
   async getNomination(
@@ -564,7 +623,7 @@ export class CongressApiService {
     ctx?: Context,
   ): Promise<EntityResult<'nomination'>> {
     const data = await this.tryNotFound(
-      () => this.get(`/nomination/${congress}/${nominationNumber}`, ctx),
+      () => this.get(apiPath`/nomination/${congress}/${nominationNumber}`, ctx),
       `Nomination PN${nominationNumber} not found in the ${ordinal(congress)} Congress.`,
       { congress, nominationNumber },
     );
@@ -581,7 +640,7 @@ export class CongressApiService {
     return this.tryNotFound(
       () =>
         this.fetchList(
-          `/nomination/${congress}/${nominationNumber}/${ordinalNum}`,
+          apiPath`/nomination/${congress}/${nominationNumber}/${ordinalNum}`,
           'nominees',
           params,
           ctx,
@@ -595,7 +654,7 @@ export class CongressApiService {
     params: NominationSubResourceParams,
     ctx?: Context,
   ): Promise<FetchListResult> {
-    const path = `/nomination/${params.congress}/${params.nominationNumber}/${params.subResource}`;
+    const path = apiPath`/nomination/${params.congress}/${params.nominationNumber}/${params.subResource}`;
     const key = this.inferListKey(params.subResource);
     return this.tryNotFound(
       () => this.fetchList(path, key, params, ctx),
@@ -609,22 +668,22 @@ export class CongressApiService {
   listSummaries(params: ListSummariesParams, ctx?: Context): Promise<FetchListResult> {
     let path = '/summaries';
     if (params.congress && params.billType)
-      path = `/summaries/${params.congress}/${params.billType}`;
-    else if (params.congress) path = `/summaries/${params.congress}`;
+      path = apiPath`/summaries/${params.congress}/${params.billType}`;
+    else if (params.congress) path = apiPath`/summaries/${params.congress}`;
     return this.fetchList(path, 'summaries', params, ctx);
   }
 
   // --- CRS Reports ---
 
-  async listCrsReports(params?: PaginationParams, ctx?: Context): Promise<FetchListResult> {
+  async listCrsReports(params?: ListCrsReportsParams, ctx?: Context): Promise<FetchListResult> {
     const result = await this.fetchList('/crsreport', 'CRSReports', params, ctx);
     return { ...result, data: result.data.map(normalizeCrsReport) };
   }
 
   async getCrsReport(params: GetCrsReportParams, ctx?: Context): Promise<EntityResult<'report'>> {
     const data = await this.tryNotFound(
-      () => this.get(`/crsreport/${params.reportNumber}`, ctx),
-      `CRS report ${params.reportNumber} not found. Report IDs use letter-number codes (e.g., R40097, RL33612, IF12345).`,
+      () => this.get(apiPath`/crsreport/${params.reportNumber}`, ctx),
+      `CRS report ${params.reportNumber} not found. Report IDs are letters then digits (R40097, IF12345) or two digit groups joined by a hyphen (96-548).`,
       { reportNumber: params.reportNumber },
     );
     const report = (data.CRSReport ?? data) as ApiRecord;
@@ -638,34 +697,43 @@ export class CongressApiService {
     ctx?: Context,
   ): Promise<FetchListResult> {
     const path = params.reportType
-      ? `/committee-report/${params.congress}/${params.reportType}`
-      : `/committee-report/${params.congress}`;
-    const result = await this.fetchList(path, 'reports', params, ctx);
+      ? apiPath`/committee-report/${params.congress}/${params.reportType}`
+      : apiPath`/committee-report/${params.congress}`;
+    const extraQuery =
+      params.conference === undefined ? undefined : { conference: String(params.conference) };
+    const result = await this.fetchList(path, 'reports', params, ctx, extraQuery);
     return { ...result, data: result.data.map(normalizeCommitteeReport) };
   }
 
+  /**
+   * Every record filed under one report number, in upstream order. A multi-part
+   * report files each part (and each part's errata) as its own record, in no
+   * fixed order; the caller picks the part it serves.
+   */
   async getCommitteeReport(
     params: GetCommitteeReportParams,
     ctx?: Context,
-  ): Promise<EntityResult<'report'>> {
+  ): Promise<{ reports: ApiRecord[] }> {
     const data = await this.tryNotFound(
       () =>
         this.get(
-          `/committee-report/${params.congress}/${params.reportType}/${params.reportNumber}`,
+          apiPath`/committee-report/${params.congress}/${params.reportType}/${params.reportNumber}`,
           ctx,
         ),
       `Committee report ${params.reportType.toUpperCase()} ${params.congress}-${params.reportNumber} not found.`,
       { ...params },
     );
-    const reports = data.committeeReports;
-    const report = Array.isArray(reports) ? reports[0] : (reports ?? data);
-    if (!report || (typeof report === 'object' && Object.keys(report).length === 0)) {
+    const raw = data.committeeReports;
+    const reports = (Array.isArray(raw) ? raw : [raw ?? data]).filter(
+      (report): report is ApiRecord => isApiRecord(report) && Object.keys(report).length > 0,
+    );
+    if (reports.length === 0) {
       throw notFound(
         `Committee report ${params.reportType.toUpperCase()} ${params.congress}-${params.reportNumber} not found.`,
         { ...params, ...NOT_FOUND_RECOVERY },
       );
     }
-    return { report: report as ApiRecord };
+    return { reports };
   }
 
   async getCommitteeReportText(
@@ -675,7 +743,7 @@ export class CongressApiService {
     const data = await this.tryNotFound(
       () =>
         this.get(
-          `/committee-report/${params.congress}/${params.reportType}/${params.reportNumber}/text`,
+          apiPath`/committee-report/${params.congress}/${params.reportType}/${params.reportNumber}/text`,
           ctx,
         ),
       `Committee report ${params.reportType.toUpperCase()} ${params.congress}-${params.reportNumber} text not found.`,
@@ -694,7 +762,7 @@ export class CongressApiService {
     return this.tryNotFound(
       () =>
         this.fetchList(
-          `/daily-congressional-record/${params.volumeNumber}`,
+          apiPath`/daily-congressional-record/${params.volumeNumber}`,
           'dailyCongressionalRecord',
           params,
           ctx,
@@ -705,7 +773,7 @@ export class CongressApiService {
   }
 
   async getDailyArticles(params: GetDailyArticlesParams, ctx?: Context): Promise<FetchListResult> {
-    const path = `/daily-congressional-record/${params.volumeNumber}/${params.issueNumber}/articles`;
+    const path = apiPath`/daily-congressional-record/${params.volumeNumber}/${params.issueNumber}/articles`;
     const result = await this.tryNotFound(
       () => this.fetchList(path, 'articles', params, ctx),
       `Issue ${params.issueNumber} of volume ${params.volumeNumber} not found in the daily Congressional Record.`,
@@ -722,7 +790,7 @@ export class CongressApiService {
   }
 
   async getCongress(congress: number, ctx?: Context): Promise<CongressDetail> {
-    const data = await this.get(`/congress/${congress}`, ctx);
+    const data = await this.get(apiPath`/congress/${congress}`, ctx);
     return data.congress;
   }
 
@@ -888,7 +956,22 @@ export class CongressApiService {
     return mapping[subResource] ?? subResource;
   }
 
+  /**
+   * The request URL for `path`, refusing an empty or dot path segment before any
+   * request. Every value reaches here encoded by `apiPath`, whose encoding of `%`
+   * rules out the percent-encoded dot forms.
+   */
   private buildUrl(path: string, query?: Record<string, string>): URL {
+    if (
+      path
+        .split('/')
+        .slice(1)
+        .some((segment) => segment === '' || segment === '.' || segment === '..')
+    ) {
+      throw validationError(
+        'An identifier in this request is not a path segment Congress.gov can address, so no request was sent. Pass the identifier in the form the tool describes.',
+      );
+    }
     /** api_key is sent as X-Api-Key header in fetchResponse() — keeping it out of the URL prevents leakage via upstream error messages. */
     const url = new URL(`${this.baseUrl}${path}`);
     url.searchParams.set('format', 'json');

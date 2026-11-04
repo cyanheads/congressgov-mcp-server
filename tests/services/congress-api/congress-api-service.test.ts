@@ -111,6 +111,168 @@ describe('CongressApiService', () => {
     });
   });
 
+  // ── #96: every interpolated identifier is exactly one path segment ──
+
+  describe('identifier path segments', () => {
+    /** Run each call and return the pathname of the one request it sent. */
+    async function sentPathnames(calls: Array<() => Promise<unknown>>): Promise<string[]> {
+      const pathnames: string[] = [];
+      for (const call of calls) {
+        mockFetch.mockClear();
+        await call();
+        expect(mockFetch).toHaveBeenCalledTimes(1);
+        pathnames.push(new URL(mockFetch.mock.calls[0]![0]).pathname);
+      }
+      return pathnames;
+    }
+
+    it('builds the path of every documented identifier shape unchanged', async () => {
+      const ctx = createMockContext();
+      mockFetch.mockImplementation(async () =>
+        okJson({ committeeReports: [{ citation: 'H. Rept. 118-301' }] }),
+      );
+      expect(
+        await sentPathnames([
+          () => service.getCrsReport({ reportNumber: 'R40097' }, ctx),
+          () => service.getCrsReport({ reportNumber: '96-548' }, ctx),
+          () => service.getNomination(119, '730-2', ctx),
+          () => service.getNominee(119, '730-2', 1, undefined, ctx),
+          () =>
+            service.getNominationSubResource(
+              { congress: 119, nominationNumber: '1000', subResource: 'actions' },
+              ctx,
+            ),
+          () =>
+            service.getCommitteeReport(
+              { congress: 118, reportType: 'hrpt', reportNumber: 301 },
+              ctx,
+            ),
+          () => service.getCommittee('house', 'hspw00', ctx),
+          () => service.getMember('P000197', ctx),
+          () =>
+            service.getBillSubResource(
+              { congress: 119, billType: 'hr', billNumber: 1, subResource: 'relatedbills' },
+              ctx,
+            ),
+          () => service.getDailyArticles({ volumeNumber: 171, issueNumber: 5 }, ctx),
+        ]),
+      ).toEqual([
+        '/v3/crsreport/R40097',
+        '/v3/crsreport/96-548',
+        '/v3/nomination/119/730-2',
+        '/v3/nomination/119/730-2/1',
+        '/v3/nomination/119/1000/actions',
+        '/v3/committee-report/118/hrpt/301',
+        '/v3/committee/house/hspw00',
+        '/v3/member/P000197',
+        '/v3/bill/119/hr/1/relatedbills',
+        '/v3/daily-congressional-record/171/5/articles',
+      ]);
+    });
+
+    it('sends reserved characters inside an identifier as part of its one segment', async () => {
+      const ctx = createMockContext();
+      expect(
+        await sentPathnames([
+          () =>
+            service.getNominationSubResource(
+              { congress: 119, nominationNumber: '730/2', subResource: 'actions' },
+              ctx,
+            ),
+          () => service.getCrsReport({ reportNumber: 'R40097?format=xml' }, ctx),
+          () => service.getCrsReport({ reportNumber: '%2e%2e' }, ctx),
+          () => service.getCrsReport({ reportNumber: ' R40097 ' }, ctx),
+          () => service.getMember('P000197#x', ctx),
+          () => service.listMembers({ congress: 118, stateCode: 'C/A' }, ctx),
+        ]),
+      ).toEqual([
+        '/v3/nomination/119/730%2F2/actions',
+        '/v3/crsreport/R40097%3Fformat%3Dxml',
+        '/v3/crsreport/%252e%252e',
+        '/v3/crsreport/%20R40097%20',
+        '/v3/member/P000197%23x',
+        '/v3/member/congress/118/C%2FA',
+      ]);
+      mockFetch.mockClear();
+      await service.getCrsReport({ reportNumber: 'R40097?format=xml' }, ctx);
+      const sent = new URL(mockFetch.mock.calls[0]![0]);
+      expect([...sent.searchParams.entries()]).toEqual([['format', 'json']]);
+    });
+
+    it('refuses an identifier that would not stay its own path segment, before any request', async () => {
+      const ctx = createMockContext();
+      for (const call of [
+        () => service.getCrsReport({ reportNumber: '..' }, ctx),
+        () => service.getCrsReport({ reportNumber: '.' }, ctx),
+        () => service.getCrsReport({ reportNumber: '' }, ctx),
+        () => service.getNomination(119, '..', ctx),
+        () =>
+          service.getNominationSubResource(
+            { congress: 119, nominationNumber: '..', subResource: 'actions' },
+            ctx,
+          ),
+        () => service.getNominee(119, '.', 1, undefined, ctx),
+        () => service.getMember('..', ctx),
+      ]) {
+        await expect(call()).rejects.toMatchObject({
+          code: JsonRpcErrorCode.ValidationError,
+          message: expect.stringContaining('no request was sent'),
+        });
+      }
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('names both report ID shapes when a CRS report is not found', async () => {
+      mockFetch.mockResolvedValue(errorResponse(404, 'Unknown resource', 'Not Found'));
+      await expect(
+        service.getCrsReport({ reportNumber: 'R99999' }, createMockContext()),
+      ).rejects.toMatchObject({
+        code: JsonRpcErrorCode.NotFound,
+        message: expect.stringMatching(/R99999.*R40097.*96-548/),
+      });
+    });
+  });
+
+  // ── #103: the list filters the three list endpoints honor ──
+
+  describe('list filters', () => {
+    const FROM = '2026-10-01T00:00:00Z';
+    const TO = '2026-10-31T23:59:59Z';
+
+    it('sends the update-date window on the CRS, nomination, and committee report lists', async () => {
+      const ctx = createMockContext();
+      await service.listCrsReports({ limit: 5, fromDateTime: FROM, toDateTime: TO }, ctx);
+      await service.listNominations({ congress: 119, fromDateTime: FROM, toDateTime: TO }, ctx);
+      await service.listCommitteeReports(
+        { congress: 118, reportType: 'hrpt', fromDateTime: FROM, toDateTime: TO },
+        ctx,
+      );
+      const urls = mockFetch.mock.calls.map(([url]) => new URL(url));
+      expect(urls.map((url) => url.pathname)).toEqual([
+        '/v3/crsreport',
+        '/v3/nomination/119',
+        '/v3/committee-report/118/hrpt',
+      ]);
+      for (const url of urls) {
+        expect(url.searchParams.get('fromDateTime')).toBe(FROM);
+        expect(url.searchParams.get('toDateTime')).toBe(TO);
+      }
+    });
+
+    it('sends conference as true or false on both committee report list paths, and nothing when absent', async () => {
+      const ctx = createMockContext();
+      for (const reportType of [undefined, 'hrpt'] as const) {
+        mockFetch.mockClear();
+        await service.listCommitteeReports({ congress: 115, reportType, conference: true }, ctx);
+        await service.listCommitteeReports({ congress: 115, reportType, conference: false }, ctx);
+        await service.listCommitteeReports({ congress: 115, reportType }, ctx);
+        expect(
+          mockFetch.mock.calls.map(([url]) => new URL(url).searchParams.get('conference')),
+        ).toEqual(['true', 'false', null]);
+      }
+    });
+  });
+
   describe('error handling', () => {
     it('runs the real fetch deadline and retries through both tool error surfaces (#78)', async () => {
       vi.useFakeTimers();

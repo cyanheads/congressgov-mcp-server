@@ -7,21 +7,25 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { validationError } from '@cyanheads/mcp-ts-core/errors';
 
 import { formatBills } from '@/mcp-server/tools/format-helpers.js';
+import { recordedRollVote, recordedRollVoteSchema } from '@/mcp-server/tools/roll-vote-pointer.js';
 import {
   summaryContinuationCall,
   summaryWindowNotice,
   windowSummaryPage,
 } from '@/mcp-server/tools/summary-window.js';
 import {
+  addNotice,
   buildEffectiveQuery,
   congressErrorContracts,
   documentErrorContracts,
+  documentFormatInput,
   documentWindowInput,
   identityErrorContracts,
   listEnrichment,
   listOrDetail,
   MAX_CONTENT_CHARACTERS,
   normalizeOptionalString,
+  noticeIgnoredInputs,
   notifyIfNoMatches,
   numericIdentifier,
   toIdentifierNumber,
@@ -35,6 +39,7 @@ import {
   describeFormat,
   selectDocumentUrl,
 } from '@/services/congress-documents/document-formats.js';
+import { ordinal } from '@/utils/congress-calendar.js';
 
 const BillTypeEnum = z.preprocess(
   (value) => (typeof value === 'string' ? value.toLowerCase() : value),
@@ -64,9 +69,28 @@ const SUB_RESOURCE_MAP: Record<string, string> = {
   related: 'relatedbills',
 };
 
+/** The bill envelope with `rollVote` declared on its rows. */
+const billOutput = listOrDetail(
+  { bill: 'record', content: 'record' },
+  "Bill record (sponsor, policy area, latest action, CBO estimates, law citation) for `get`; absent for `list` and sub-resources. For `content`, an alternative key 'content' carries {text, format, sourceUrl, documentTitle, totalCharacters, offset, truncated, nextOffset} — one exact character window of the document.",
+  {
+    data: z
+      .array(
+        z
+          .object({ rollVote: recordedRollVoteSchema.optional() })
+          .passthrough()
+          .describe(
+            'Upstream JSON record: a bill (`list`) or a sub-resource row. An `actions` row carries `rollVote` when it records one roll call vote congressgov_roll_votes serves.',
+          ),
+      )
+      .optional()
+      .describe('Result rows for `list` and the sub-resource operations.'),
+  },
+);
+
 export const billLookupTool = tool('congressgov_bill_lookup', {
   title: 'Congress.gov Bill Lookup',
-  description: `Browse and retrieve U.S. legislative bill data from Congress.gov. Discover bills by filtering on congress, bill type, and date range — there is no keyword search. Use 'list' to browse (requires congress, defaults to most-recently-updated first), 'get' for full bill detail (sponsor, policy area, CBO estimates, law info), or drill into a specific bill with 'actions', 'amendments', 'cosponsors', 'committees', 'subjects', 'summaries', 'text', 'titles', or 'related' (each requires congress + billType + billNumber). 'text' lists the published versions and their format URLs; 'content' then reads one version's actual text, a bounded character window at a time. 'summaries' takes an optional versionCode selector and returns each row's text a bounded character window at a time — a row past the window carries textTotalCharacters/textTruncated/textNextOffset, and characterOffset reads on from there.`,
+  description: `Browse and retrieve U.S. legislative bill data from Congress.gov. Discover bills by filtering on congress, bill type, and date range — there is no keyword search. Use 'list' to browse (requires congress, defaults to most-recently-updated first), 'get' for full bill detail (sponsor, policy area, CBO estimates, law info), or drill into a specific bill with 'actions', 'amendments', 'cosponsors', 'committees', 'subjects', 'summaries', 'text', 'titles', or 'related' (each requires congress + billType + billNumber). 'text' lists the published versions and their format URLs; 'content' then reads one version's actual text, a bounded character window at a time. 'summaries' takes an optional versionCode selector and returns each row's text a bounded character window at a time — a row past the window carries textTotalCharacters/textTruncated/textNextOffset, and characterOffset reads on from there. An 'actions' row that records a roll call vote carries rollVote — the chamber, congress, session, and voteNumber congressgov_roll_votes takes to return that vote and each member's position. An 'amendments' row's type and number, with congress, are the amendmentType and amendmentNumber congressgov_amendment_lookup takes to return that amendment's sponsor, actions, cosponsors, and text.`,
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
   errors: [...congressErrorContracts, ...documentErrorContracts, ...identityErrorContracts],
   inputAliases: { type: 'billType', number: 'billNumber' },
@@ -83,12 +107,14 @@ export const billLookupTool = tool('congressgov_bill_lookup', {
       .string()
       .optional()
       .describe(
-        "Start of date range filter (ISO 8601). Filters by the bill's update date — when Congress.gov last touched the record — not by the bill's latest legislative action.",
+        "Start of date range filter (ISO 8601), for 'list' only. Filters by the bill's update date — when Congress.gov last touched the record — not by the bill's latest legislative action. Other operations ignore it and say so in the notice.",
       ),
     toDateTime: z
       .string()
       .optional()
-      .describe('End of date range filter (ISO 8601). Same field semantics as fromDateTime.'),
+      .describe(
+        "End of date range filter (ISO 8601), for 'list' only. Same field semantics as fromDateTime.",
+      ),
     order: z
       .enum(['recent', 'oldest'])
       .default('recent')
@@ -111,7 +137,7 @@ export const billLookupTool = tool('congressgov_bill_lookup', {
       .describe(
         "Which summary version 'summaries' returns — the versionCode a summary row carries ('00' introduced, '49' public law). Selection runs over the bill's whole summary list, which Congress.gov publishes no filter for, and limit/offset then page the matching rows. Omit to return every version. Ignored by other operations.",
       ),
-    ...documentWindowInput,
+    ...documentFormatInput,
     characterOffset: documentWindowInput.characterOffset.describe(
       "First character to return, 0-based — of the document on 'content', and of every returned row's summary text on 'summaries'. Offsets are exact and are never snapped to a section or paragraph break, so feeding back the response's nextOffset (or a summary row's textNextOffset) walks the whole text with every character returned exactly once.",
     ),
@@ -119,10 +145,7 @@ export const billLookupTool = tool('congressgov_bill_lookup', {
       `Maximum characters to return (1-${MAX_CONTENT_CHARACTERS}) — for the document window on 'content', and for each row's summary text on 'summaries'. Legislative documents run past a million characters and an enacted bill's summary past two hundred thousand, so either takes several windows.`,
     ),
   }),
-  output: listOrDetail(
-    { bill: 'record', content: 'record' },
-    "Bill record (sponsor, policy area, latest action, CBO estimates, law citation) for `get`; absent for `list` and sub-resources. For `content`, an alternative key 'content' carries {text, format, sourceUrl, documentTitle, totalCharacters, offset, truncated, nextOffset} — one exact character window of the document.",
-  ),
+  output: billOutput,
   enrichment: listEnrichment,
   format: formatBills,
 
@@ -183,6 +206,9 @@ export const billLookupTool = tool('congressgov_bill_lookup', {
     /** List rows carry `number` as a string; the service takes a number. */
     const billNumber = toIdentifierNumber(input.billNumber);
 
+    // The date pair filters 'list' only; every other operation is served and names it ignored.
+    noticeIgnoredInputs(ctx, input.operation, { fromDateTime, toDateTime });
+
     if (input.operation === 'get') {
       const result = await api.getBill(
         {
@@ -198,7 +224,7 @@ export const billLookupTool = tool('congressgov_bill_lookup', {
         billNumber,
       });
       ctx.enrich.echo(
-        `${input.billType.toUpperCase()} ${billNumber} in the ${input.congress}th Congress`,
+        `${input.billType.toUpperCase()} ${billNumber} in the ${ordinal(input.congress)} Congress`,
       );
       ctx.enrich.total(1);
       return result;
@@ -256,6 +282,7 @@ export const billLookupTool = tool('congressgov_bill_lookup', {
           url,
           characterOffset: input.characterOffset,
           characterLimit: input.characterLimit,
+          reading: 'gpo',
         },
         ctx,
       );
@@ -269,7 +296,7 @@ export const billLookupTool = tool('congressgov_bill_lookup', {
         totalCharacters: document.totalCharacters,
       });
       ctx.enrich.echo(
-        `${versionType} of ${input.billType.toUpperCase()} ${billNumber} (${input.congress}th Congress), ${input.format} characters ${document.offset}–${document.offset + document.text.length}`,
+        `${versionType} of ${input.billType.toUpperCase()} ${billNumber} (${ordinal(input.congress)} Congress), ${input.format} characters ${document.offset}–${document.offset + document.text.length}`,
       );
       ctx.enrich.total(document.totalCharacters);
       return {
@@ -322,7 +349,6 @@ export const billLookupTool = tool('congressgov_bill_lookup', {
       }
 
       const bounded = windowSummaryPage(page, {
-        offset: input.offset,
         characterOffset: input.characterOffset,
         characterLimit: input.characterLimit,
       });
@@ -345,12 +371,11 @@ export const billLookupTool = tool('congressgov_bill_lookup', {
         billNumber,
         versionCode,
         count: bounded.page.data.length,
-        droppedRows: bounded.droppedRows,
         windowedRows: bounded.windowed.length,
       });
       ctx.enrich.echo(
         buildEffectiveQuery(
-          `summaries for ${input.billType.toUpperCase()} ${billNumber} in the ${input.congress}th Congress`,
+          `summaries for ${input.billType.toUpperCase()} ${billNumber} in the ${ordinal(input.congress)} Congress`,
           { versionCode },
         ),
       );
@@ -369,7 +394,8 @@ export const billLookupTool = tool('congressgov_bill_lookup', {
               .filter((code): code is string => typeof code === 'string'),
           ),
         ];
-        ctx.enrich.notice(
+        addNotice(
+          ctx,
           `No summary with versionCode '${versionCode}' for ${input.billType.toUpperCase()} ${billNumber}.${
             available.length > 0
               ? ` Versions published: ${available.join(', ')}.`
@@ -385,7 +411,7 @@ export const billLookupTool = tool('congressgov_bill_lookup', {
         `No summaries found for ${input.billType.toUpperCase()} ${billNumber}.`,
       );
 
-      const notice = summaryWindowNotice(bounded, input.limit, (row) =>
+      const notice = summaryWindowNotice(bounded, (row) =>
         summaryContinuationCall({
           congress: input.congress,
           billType,
@@ -394,7 +420,7 @@ export const billLookupTool = tool('congressgov_bill_lookup', {
           characterOffset: row.nextOffset ?? 0,
         }),
       );
-      if (notice) ctx.enrich.notice(notice);
+      if (notice) addNotice(ctx, notice);
 
       return bounded.page;
     }
@@ -418,7 +444,7 @@ export const billLookupTool = tool('congressgov_bill_lookup', {
       subResource,
     });
     ctx.enrich.echo(
-      `${input.operation} for ${input.billType.toUpperCase()} ${billNumber} in the ${input.congress}th Congress`,
+      `${input.operation} for ${input.billType.toUpperCase()} ${billNumber} in the ${ordinal(input.congress)} Congress`,
     );
     ctx.enrich.total(result.pagination.count);
     notifyIfNoMatches(
@@ -426,6 +452,13 @@ export const billLookupTool = tool('congressgov_bill_lookup', {
       result,
       `No ${input.operation} found for ${input.billType.toUpperCase()} ${billNumber}.`,
     );
-    return result;
+    if (input.operation !== 'actions') return result;
+    return {
+      ...result,
+      data: result.data.map((action) => {
+        const rollVote = recordedRollVote(action.recordedVotes);
+        return rollVote ? { ...action, rollVote } : action;
+      }),
+    };
   },
 });

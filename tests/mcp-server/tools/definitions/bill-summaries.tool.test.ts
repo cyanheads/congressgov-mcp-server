@@ -13,10 +13,7 @@ vi.mock('@/services/congress-api/congress-api-service.js', () => ({
 
 import { billLookupTool } from '@/mcp-server/tools/definitions/bill-lookup.tool.js';
 import { billSummariesTool } from '@/mcp-server/tools/definitions/bill-summaries.tool.js';
-import {
-  DEFAULT_SUMMARY_TEXT_CHARACTERS,
-  SUMMARY_PAGE_CHARACTERS,
-} from '@/mcp-server/tools/tool-helpers.js';
+import { DEFAULT_SUMMARY_TEXT_CHARACTERS } from '@/mcp-server/tools/tool-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 
 describe('billSummariesTool', () => {
@@ -116,7 +113,7 @@ describe('billSummariesTool', () => {
     expect((blocks[0] as { text: string }).text).toContain('Summary text not available');
   });
 
-  // ── #70: a page of summary text stays inside a fixed character budget ──
+  // ── #70: one row's summary text arrives a window at a time; #98: limit alone bounds the page ──
 
   describe('response bounding', () => {
     const summaryRow = (index: number, textCharacters: number) => ({
@@ -163,31 +160,77 @@ describe('billSummariesTool', () => {
       expect(getEnrichment(ctx).notice).toBeUndefined();
     });
 
-    it('stops mid-page at the budget and resumes at the first row not returned', async () => {
+    /**
+     * A mid-sized page — four rows serializing to about 44,000 characters, one
+     * of them past the row window — exactly as the server has always returned
+     * it: every row, upstream pagination, and only the row-window notice.
+     */
+    it('returns a mid-sized page with a windowed row exactly as before', async () => {
       const ctx = createMockContext({ errors: billSummariesTool.errors });
-      mockApi.listSummaries.mockResolvedValue({
-        data: Array.from({ length: 30 }, (_, index) => summaryRow(index, 6_000)),
-        pagination: { count: 500, nextOffset: 60 },
-      });
+      const first = summaryRow(0, 6_000);
+      const second = summaryRow(1, 6_000);
+      const long = summaryRow(2, DEFAULT_SUMMARY_TEXT_CHARACTERS + 1_000);
+      const last = summaryRow(3, 6_000);
+      const upstream = {
+        data: [first, second, long, last],
+        pagination: { count: 40, nextOffset: 4 },
+      };
+      const expected = {
+        data: [
+          first,
+          second,
+          {
+            ...long,
+            text: long.text.slice(0, DEFAULT_SUMMARY_TEXT_CHARACTERS),
+            textTotalCharacters: DEFAULT_SUMMARY_TEXT_CHARACTERS + 1_000,
+            textTruncated: true,
+            textNextOffset: DEFAULT_SUMMARY_TEXT_CHARACTERS,
+          },
+          last,
+        ],
+        pagination: { count: 40, nextOffset: 4 },
+      };
+      mockApi.listSummaries.mockResolvedValue(structuredClone(upstream));
 
       const result = await billSummariesTool.handler(
-        billSummariesTool.input.parse({ limit: 30, offset: 30 }),
+        billSummariesTool.input.parse({ limit: 4 }),
         ctx,
       );
 
-      expect(result.data.length).toBeGreaterThan(0);
-      expect(result.data.length).toBeLessThan(30);
-      expect(result.pagination.nextOffset).toBe(30 + result.data.length);
-      const serialized = result.data.reduce((sum, row) => sum + JSON.stringify(row).length, 0);
-      expect(serialized).toBeLessThanOrEqual(SUMMARY_PAGE_CHARACTERS);
-      expect(getEnrichment(ctx).notice).toMatch(
-        /Returned \d+ of the 30 rows requested — the page reached its 50,000-character budget\. Continue at offset \d+\./,
+      expect(JSON.stringify(billSummariesTool.output.parse(result))).toBe(JSON.stringify(expected));
+      const content = joinText(billSummariesTool.format!(result));
+      expect(content.match(/\*\*Summary text:\*\*/g)).toHaveLength(1);
+      expect(content).toContain('**Summary text:** characters 1–25,000 of 26,000');
+      expect(content).toContain('next characterOffset: 25000');
+      for (const index of [0, 1, 2, 3]) expect(content).toContain(`Sample Act ${index}`);
+      expect(getEnrichment(ctx).notice).toBe(
+        `Summary text on row 3 runs 26,000 characters; characters 1–25,000 returned. Continue with: congressgov_bill_lookup {"operation":"summaries","congress":119,"billType":"hr","billNumber":"1002","versionCode":"00","characterOffset":25000}`,
       );
-      /** The dropped rows are still the caller's to fetch — count is untouched. */
-      expect(result.pagination.count).toBe(500);
     });
 
-    it('returns one row when the first row already fills the budget', async () => {
+    /** #98: `limit` is the only page boundary — no response-size stop. */
+    it('returns every row asked for, whatever the page serializes to', async () => {
+      const upstream = {
+        data: Array.from({ length: 30 }, (_, index) => summaryRow(index, 6_000)),
+        pagination: { count: 500, nextOffset: 60 },
+      };
+      mockApi.listSummaries.mockResolvedValue(structuredClone(upstream));
+
+      const result = await runToolContract(billSummariesTool, { limit: 30, offset: 30 });
+
+      expect(result.isError).toBeFalsy();
+      const structured = billSummariesTool.output.parse(result.structuredContent);
+      expect(JSON.stringify(structured.data).length).toBeGreaterThan(150_000);
+      expect(structured.data).toEqual(upstream.data);
+      expect(structured.pagination).toEqual({ count: 500, nextOffset: 60 });
+      expect(result.structuredContent).not.toHaveProperty('notice');
+      const content = joinText(result.content as Array<{ type: string; text?: string }>);
+      expect(content).toContain('Sample Act 0');
+      expect(content).toContain('Sample Act 29');
+      expect(content).not.toMatch(/budget|rows requested/);
+    });
+
+    it('returns every oversized row, each one windowed', async () => {
       const ctx = createMockContext({ errors: billSummariesTool.errors });
       mockApi.listSummaries.mockResolvedValue({
         data: [
@@ -199,12 +242,24 @@ describe('billSummariesTool', () => {
 
       const result = await billSummariesTool.handler(billSummariesTool.input.parse({}), ctx);
 
-      expect(result.data).toHaveLength(1);
-      expect(result.pagination.nextOffset).toBe(1);
-      expect(result.data[0]).toMatchObject({
-        textTotalCharacters: DEFAULT_SUMMARY_TEXT_CHARACTERS + 5_000,
-        textTruncated: true,
-      });
+      expect(result.data).toHaveLength(2);
+      expect(result.pagination).toEqual({ count: 2, nextOffset: null });
+      for (const row of result.data) {
+        expect(row).toMatchObject({
+          textTotalCharacters: DEFAULT_SUMMARY_TEXT_CHARACTERS + 5_000,
+          textTruncated: true,
+          textNextOffset: DEFAULT_SUMMARY_TEXT_CHARACTERS,
+        });
+      }
+      const notice = getEnrichment(ctx).notice as string;
+      expect(notice).toMatch(/^Summary text on row 1 runs 30,000 characters; /);
+      expect(notice).toContain('2 rows on this page carry windowed text');
+      expect(notice).not.toMatch(/budget|rows requested/);
+    });
+
+    it('describes no response-size stop', () => {
+      expect(billSummariesTool.description).not.toMatch(/budget|stops adding rows/);
+      expect(billSummariesTool.description).toContain('textNextOffset');
     });
 
     it('carries the window fields through the declared output schema and content[]', async () => {
