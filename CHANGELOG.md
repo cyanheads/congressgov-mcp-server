@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.10.0](changelog/0.10.x/0.10.0.md) — 2026-11-03 · ⚠️ Breaking
+
+Adds congressgov_amendment_lookup, CRS report content, committee report parts, roll call member filters, and Voteview-served Senate votes when senate.gov refuses the LIS feed. Breaking: list refuses unused identities; nomination, CRS, and committee inputs reject malformed forms.
+
 ## [0.9.1](changelog/0.9.x/0.9.1.md) — 2026-11-01
 
 Rejected API keys get a distinct error, each tool call shares a 50-second upstream budget, nomination actions point at their Senate roll votes, and the bill mirror stores summaries.
