@@ -13,10 +13,20 @@
  * re-emitted bill never loses a previously-stored summary: the list is requested
  * from the congress's first day with no end, because without `fromDateTime`
  * Congress.gov returns only the last day's summaries, and summaries keep being
- * rewritten long after their congress ends. The durable checkpoint is the bills'
- * `updateDate` high-water mark across every congress, persisted only once the
- * whole walk finishes; refresh re-scans bills from it inclusively
- * (`sort=updateDate asc`), and the upsert makes the overlap harmless.
+ * rewritten long after their congress ends.
+ *
+ * The bill list never pages by offset. It sorts and filters on a second-resolution
+ * update time that each row shows only as its UTC date, with no tiebreaker, and a
+ * batch update stamps dozens of bills with one second; the order inside such a tie
+ * changes with `offset` and `limit`, so a page boundary that splits it repeats some
+ * bills and drops others. The walk instead requests one full page at a time from a
+ * cursor day and keeps only the days that page holds completely (see `walkBills`).
+ *
+ * The durable checkpoint is `YYYY-MM-DD|congresses` (see `formatCheckpoint`): the
+ * highest list date the walks have seen, and the congresses walked completely up
+ * to it. It is persisted only once the whole walk finishes. A refresh re-walks each
+ * covered congress from the start of the checkpoint day and any other configured
+ * congress from its own start; the upsert makes the overlap harmless.
  * @module services/congress-mirror/ingest
  */
 
@@ -28,11 +38,19 @@ import type {
 } from '@cyanheads/mcp-ts-core/mirror';
 import { logger } from '@cyanheads/mcp-ts-core/utils';
 import type { CongressApiService } from '@/services/congress-api/congress-api-service.js';
-import { congressFirstYear } from '@/utils/congress-calendar.js';
+import { congressFirstYear, ordinal } from '@/utils/congress-calendar.js';
 import { htmlToPlainText } from './normalize.js';
 
 /** Congress.gov list endpoints cap the page size at 250 (confirmed live). */
 const PAGE_SIZE = 250;
+
+const DAY_SECONDS = 86_400;
+
+/** A bill-list row's `updateDate`: the UTC date of the time the list sorts on. */
+const LIST_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** `YYYY-MM-DD|ccc,ccc` — see `formatCheckpoint`. */
+const CHECKPOINT = /^(\d{4}-\d{2}-\d{2})\|(\d{3}(?:,\d{3})*)$/;
 
 /** The two service methods the ingester needs — injectable so tests can mock the API. */
 export type MirrorApi = Pick<CongressApiService, 'listBills' | 'listSummaries'>;
@@ -72,18 +90,137 @@ function deriveBillId(congress: number, billType: string, billNumber: number): s
   return `${congress}/${billType.toLowerCase()}/${billNumber}`;
 }
 
-/**
- * The bill list emits date-only `updateDate` ("2026-06-30"); the API's
- * `fromDateTime` filter wants full ISO 8601. Widen a date-only checkpoint to the
- * start of that day so the inclusive re-scan catches same-day updates.
- */
-function toFromDateTime(checkpoint: string): string {
-  return /^\d{4}-\d{2}-\d{2}$/.test(checkpoint) ? `${checkpoint}T00:00:00Z` : checkpoint;
+/** January 1 of a congress's first year — no bill or summary of the congress predates it. */
+function congressStartDay(congress: number): string {
+  return `${congressFirstYear(congress)}-01-01`;
 }
 
 /** January 1 of a congress's first year as a `fromDateTime` that no summary of its bills predates. */
 function congressStartDateTime(congress: number): string {
-  return `${congressFirstYear(congress)}-01-01T00:00:00Z`;
+  return `${congressStartDay(congress)}T00:00:00Z`;
+}
+
+/** Epoch seconds at 00:00:00Z of a `YYYY-MM-DD` date. */
+function dayStart(date: string): number {
+  return Date.parse(`${date}T00:00:00Z`) / 1000;
+}
+
+/** Epoch seconds as the whole-second form the date filters accept; they reject fractions. */
+function isoSecond(seconds: number): string {
+  return new Date(seconds * 1000).toISOString().replace('.000Z', 'Z');
+}
+
+/** A bill-list row's update date. The walk can't place a row without one, so its absence fails the sync. */
+function listDate(row: ApiRecord | undefined): string {
+  const date = row?.updateDate;
+  if (typeof date === 'string' && LIST_DATE.test(date)) return date;
+  throw new Error(
+    `Congress.gov returned a bill-list row without a YYYY-MM-DD updateDate (got ${JSON.stringify(date)}), so the bill walk cannot place it.`,
+  );
+}
+
+/**
+ * The refresh checkpoint: `YYYY-MM-DD|ccc,ccc`. Every bill of each listed
+ * congress whose update time is before that date's 00:00:00Z is stored at its
+ * current version, which stays true as bills update (an update only moves a bill
+ * later), so a refresh walks those congresses from the start of that day.
+ * Congresses are zero-padded and listed in descending order so that, on one date,
+ * a checkpoint covering more congresses compares greater: the framework runner
+ * stores a page's checkpoint only when it compares greater than the stored one.
+ */
+function formatCheckpoint(date: string, congresses: Iterable<number>): string {
+  const listed = [...new Set(congresses)]
+    .sort((a, b) => b - a)
+    .map((congress) => String(congress).padStart(3, '0'));
+  return `${date}|${listed.join(',')}`;
+}
+
+function parseCheckpoint(checkpoint: string): { congresses: number[]; date: string } {
+  const match = CHECKPOINT.exec(checkpoint);
+  if (!match?.[1] || !match[2]) {
+    throw new Error(
+      `The stored bill mirror checkpoint "${checkpoint}" is not the YYYY-MM-DD|congresses form this version writes.`,
+    );
+  }
+  return { date: match[1], congresses: match[2].split(',').map(Number) };
+}
+
+/**
+ * One bill-list request: offset 0, a full page, oldest first, between exclusive
+ * whole-second bounds (`to` omitted for an open end). Answers with that page's
+ * rows and the window's total count.
+ */
+type ListWindow = (from: number, to?: number) => Promise<{ count: number; rows: ApiRecord[] }>;
+
+/**
+ * Walk a congress's bill list from the start of `startDay` to its end, yielding
+ * every bill updated since once. A bill updated during the walk moves to a later
+ * time: past the cursor it is read again; inside the halved windows of the
+ * current day it can land in a window already read, and the next refresh, which
+ * re-walks the checkpoint day, reads it. Every request is offset 0:
+ *
+ * - From a cursor day, request with `fromDateTime` one second before it (the bound
+ *   is exclusive) and no end. A count of 250 or less is the rest of the walk.
+ * - Otherwise the page's rows dated before its last row's date are complete — the
+ *   list is in time order and the last row's time falls on or after that date's
+ *   start — so keep those and move the cursor to that date.
+ * - A full page of one date walks that day as halved windows (`walkWindow`), then
+ *   moves the cursor to the next day.
+ */
+async function* walkBills(
+  list: ListWindow,
+  congress: number,
+  startDay: string,
+  signal: AbortSignal,
+): AsyncGenerator<ApiRecord[]> {
+  let cursor = dayStart(startDay);
+  while (!signal.aborted) {
+    const { rows, count } = await list(cursor - 1);
+    if (count <= PAGE_SIZE) {
+      yield rows;
+      return;
+    }
+    const first = listDate(rows[0]);
+    const last = listDate(rows.at(-1));
+    if (first === last) {
+      const day = dayStart(last);
+      yield* walkWindow(list, congress, day - 1, day + DAY_SECONDS, signal);
+      cursor = day + DAY_SECONDS;
+    } else {
+      yield rows.filter((row) => listDate(row) < last);
+      cursor = dayStart(last);
+    }
+  }
+}
+
+/**
+ * Walk the exclusive window `(from, to)`, halving it at its midpoint second `m`
+ * into `(from, m + 1)` and `(m, to)` — disjoint and gap-free under exclusive
+ * whole-second bounds — while it holds more than a page. A one-second window
+ * over a page can't be split further, and paging it by offset is the defect this
+ * walk avoids, so it fails the sync.
+ */
+async function* walkWindow(
+  list: ListWindow,
+  congress: number,
+  from: number,
+  to: number,
+  signal: AbortSignal,
+): AsyncGenerator<ApiRecord[]> {
+  if (signal.aborted) return;
+  const { rows, count } = await list(from, to);
+  if (count <= PAGE_SIZE) {
+    yield rows;
+    return;
+  }
+  if (to - from <= 2) {
+    throw new Error(
+      `Congress.gov lists ${count} bills of the ${ordinal(congress)} Congress updated in the one second ${isoSecond(from + 1)}, more than the ${PAGE_SIZE} one request returns, so the bill walk cannot read them without offset paging, which skips and repeats bills inside a tie. The sync stopped; the stored checkpoint is unchanged.`,
+    );
+  }
+  const mid = Math.floor((from + to) / 2);
+  yield* walkWindow(list, congress, from, mid + 1, signal);
+  yield* walkWindow(list, congress, mid, to, signal);
 }
 
 /**
@@ -157,12 +294,15 @@ function toBillRow(
 
 /**
  * Build the Congress bill ingester. The returned generator walks the configured
- * congresses; for each, it loads the summary map, then streams bill pages
- * (`sort=updateDate asc`) as full merged rows. The durable checkpoint — the max
- * `updateDate` seen across every congress — rides only the final page, so a run
- * that fails partway leaves the stored checkpoint where it started: a mid-walk
- * checkpoint could already sit past the unvisited updates of a later congress,
- * and the next refresh would skip them.
+ * congresses; for each, it loads the summary map, then streams the bill walk
+ * (`walkBills`) as full merged rows — on refresh from the checkpoint day for a
+ * congress the checkpoint covers, otherwise (and on init) from the congress's
+ * start. The checkpoint rides only the final page, so a run that fails partway
+ * leaves the stored one where it started: a mid-walk checkpoint could already sit
+ * past the unvisited updates of a later congress, and the next refresh would skip
+ * them. It names the configured congresses, plus those the stored checkpoint
+ * covered when its date has not moved, so a congress added to the configuration
+ * is walked from its start until a run completes with it.
  *
  * @param getApi - Accessor for the Congress API service (injectable for tests).
  * @param congresses - Congress numbers to mirror.
@@ -173,13 +313,13 @@ export function createCongressBillIngester(
 ): SyncGenerator {
   return async function* sync({ mode, checkpoint, signal }: SyncContext): AsyncGenerator<SyncPage> {
     const api = getApi();
-    const fromDateTime = mode === 'refresh' && checkpoint ? toFromDateTime(checkpoint) : undefined;
-    let maxUpdate: string | undefined = checkpoint;
+    const stored = checkpoint === undefined ? undefined : parseCheckpoint(checkpoint);
+    let through = stored?.date;
     // Each page is yielded one fetch late, so the last one can carry the checkpoint.
     let held: MirrorRow[] | undefined;
     logger.info(
       `Congress bill mirror sync starting (mode=${mode}, congresses=${congresses.join(',')}${
-        fromDateTime ? `, since=${fromDateTime}` : ''
+        checkpoint ? `, checkpoint=${checkpoint}` : ''
       })`,
     );
 
@@ -188,39 +328,46 @@ export function createCongressBillIngester(
       const summaries = await buildSummaryMap(api, congress, signal);
       logger.info(`Congress ${congress}: ${summaries.size} summaries loaded`);
 
-      let offset = 0;
-      let billsMirrored = 0;
-      while (!signal.aborted) {
+      const startDay =
+        mode === 'refresh' && stored?.congresses.includes(congress)
+          ? stored.date
+          : congressStartDay(congress);
+      let requests = 0;
+      const list: ListWindow = async (from, to) => {
+        requests += 1;
         const result = await api.listBills({
           congress,
           sort: 'updateDate asc',
           limit: PAGE_SIZE,
-          offset,
-          ...(fromDateTime ? { fromDateTime } : {}),
+          fromDateTime: isoSecond(from),
+          ...(to === undefined ? {} : { toDateTime: isoSecond(to) }),
         });
-        const rows = result.data;
-        if (rows.length === 0) break;
+        return { rows: result.data, count: result.pagination.count };
+      };
 
+      let billsMirrored = 0;
+      for await (const rows of walkBills(list, congress, startDay, signal)) {
         const records: MirrorRow[] = [];
         for (const raw of rows) {
-          if (!isRecord(raw)) continue;
+          const date = listDate(raw);
+          if (through === undefined || date > through) through = date;
           const record = toBillRow(raw, congress, summaries);
-          if (!record) continue;
-          records.push(record);
-          const updated = typeof record.updateDate === 'string' ? record.updateDate : undefined;
-          if (updated && (maxUpdate === undefined || updated > maxUpdate)) maxUpdate = updated;
+          if (record) records.push(record);
         }
+        if (records.length === 0) continue;
         billsMirrored += records.length;
         if (held) yield { records: held };
         held = records;
-
-        if (rows.length < PAGE_SIZE || result.pagination.nextOffset == null) break;
-        offset += PAGE_SIZE;
       }
-      logger.info(`Congress ${congress}: ${billsMirrored} bills mirrored`);
+      logger.info(
+        `Congress ${congress}: ${billsMirrored} bills mirrored from ${startDay} in ${requests} bill-list requests`,
+      );
     }
-    if (held && !signal.aborted) {
-      yield { records: held, ...(maxUpdate ? { checkpoint: maxUpdate } : {}) };
+    if (signal.aborted || through === undefined) return;
+    const coveredNow = new Set(congresses);
+    if (stored && through === stored.date) {
+      for (const congress of stored.congresses) coveredNow.add(congress);
     }
+    yield { records: held ?? [], checkpoint: formatCheckpoint(through, coveredNow) };
   };
 }

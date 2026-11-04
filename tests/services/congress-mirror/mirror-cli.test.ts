@@ -17,6 +17,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { CongressMirrorService } from '@/services/congress-mirror/congress-mirror-service.js';
+import { type FakeBill, listBillsPage } from './fake-bill-list.js';
 
 const SCRIPT_TIMEOUT_MS = 30_000;
 
@@ -64,7 +65,7 @@ interface Upstream {
   server: Server;
 }
 
-const UPSTREAM_BILLS = [
+const UPSTREAM_BILLS: FakeBill[] = [
   {
     congress: 119,
     type: 'HR',
@@ -72,7 +73,7 @@ const UPSTREAM_BILLS = [
     title: 'Semiconductor Export Control Act',
     originChamber: 'House',
     latestAction: { actionDate: '2026-01-05', text: 'Referred to committee' },
-    updateDate: '2026-01-10',
+    updatedAt: '2026-01-10T14:00:00Z',
   },
   {
     congress: 119,
@@ -81,7 +82,7 @@ const UPSTREAM_BILLS = [
     title: 'Clean Water Restoration Act',
     originChamber: 'Senate',
     latestAction: { actionDate: '2026-01-18', text: 'Read twice' },
-    updateDate: '2026-02-01',
+    updatedAt: '2026-02-01T09:00:00Z',
   },
 ];
 
@@ -94,26 +95,33 @@ const UPSTREAM_SUMMARIES = [
 ];
 
 /**
- * Loopback stand-in for the two list endpoints the ingester pages. It honors
- * `fromDateTime` the way Congress.gov does: the summaries list without one holds
- * only the last day's updates (none here), with one it holds every summary
- * updated since; the bill list filters on `updateDate`.
+ * Loopback stand-in for the two list endpoints the ingester pages. The summaries
+ * list honors `fromDateTime` the way Congress.gov does: without one it holds only
+ * the last day's updates (none here), with one every summary updated since. The
+ * bill list is the live-shaped fake (`listBillsPage`): exclusive whole-second
+ * bounds on a hidden update time, date-only rows.
  */
 async function startUpstream(): Promise<Upstream> {
   const requests: URL[] = [];
   const server = createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://127.0.0.1');
     requests.push(url);
-    const from = url.searchParams.get('fromDateTime');
+    const param = (name: string) => url.searchParams.get(name) ?? undefined;
     let body: Record<string, unknown>;
     if (url.pathname === '/v3/summaries/119') {
+      const from = param('fromDateTime');
       const rows = from ? UPSTREAM_SUMMARIES.filter((s) => s.updateDate >= from) : [];
       body = { summaries: rows, pagination: { count: rows.length } };
     } else if (url.pathname === '/v3/bill/119') {
-      const rows = from
-        ? UPSTREAM_BILLS.filter((b) => b.updateDate >= from.slice(0, 10))
-        : UPSTREAM_BILLS;
-      body = { bills: rows, pagination: { count: rows.length } };
+      const page = listBillsPage(UPSTREAM_BILLS, {
+        congress: 119,
+        sort: param('sort'),
+        limit: Number(param('limit') ?? 20),
+        offset: Number(param('offset') ?? 0),
+        fromDateTime: param('fromDateTime'),
+        toDateTime: param('toDateTime'),
+      });
+      body = { bills: page.data, pagination: { count: page.pagination.count } };
     } else {
       res.writeHead(404, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ error: { code: 404, message: 'Not found' } }));
@@ -174,10 +182,7 @@ describe('mirror lifecycle scripts', () => {
           mirrorPath: env.CONGRESS_MIRROR_PATH as string,
           congresses: [119],
           getApi: () => ({
-            listBills: async ({ offset }) => ({
-              data: offset ? [] : [UPSTREAM_BILLS[0] as Record<string, unknown>],
-              pagination: { count: 1, nextOffset: null },
-            }),
+            listBills: async (params) => listBillsPage(UPSTREAM_BILLS.slice(0, 1), params),
             listSummaries: async () => ({ data: [], pagination: { count: 0, nextOffset: null } }),
           }),
         });
@@ -241,7 +246,9 @@ describe('mirror lifecycle scripts', () => {
           'Congress bill mirror sync starting (mode=init, congresses=119)',
         );
         expect(init.messages).toContain('Congress 119: 1 summaries loaded');
-        expect(init.messages).toContain('Congress 119: 2 bills mirrored');
+        expect(init.messages).toContain(
+          'Congress 119: 2 bills mirrored from 2025-01-01 in 1 bill-list requests',
+        );
         expect(init.messages.at(-1)).toBe(
           'Congress bill mirror init complete: 2 records applied across 1 pages (total 2).',
         );
@@ -258,10 +265,12 @@ describe('mirror lifecycle scripts', () => {
         );
         expect(refresh.messages).toContain('Starting Congress bill mirror refresh');
         expect(refresh.messages).toContain(
-          'Congress bill mirror sync starting (mode=refresh, congresses=119, since=2026-02-01T00:00:00Z)',
+          'Congress bill mirror sync starting (mode=refresh, congresses=119, checkpoint=2026-02-01|119)',
         );
         expect(refresh.messages).toContain('Congress 119: 1 summaries loaded');
-        expect(refresh.messages).toContain('Congress 119: 1 bills mirrored');
+        expect(refresh.messages).toContain(
+          'Congress 119: 1 bills mirrored from 2026-02-01 in 1 bill-list requests',
+        );
         expect(refresh.messages.at(-1)).toBe(
           'Congress bill mirror refresh complete: 1 records applied (total 2).',
         );
@@ -273,6 +282,15 @@ describe('mirror lifecycle scripts', () => {
         expect(summaryQueries).toEqual([
           ['2025-01-01T00:00:00Z', false],
           ['2025-01-01T00:00:00Z', false],
+        ]);
+        // Init walks the bill list from the congress's start, refresh from the checkpoint
+        // day, each from one second before its day and never by offset.
+        const billQueries = upstream.requests
+          .filter((url) => url.pathname === '/v3/bill/119')
+          .map((url) => [url.searchParams.get('fromDateTime'), url.searchParams.get('offset')]);
+        expect(billQueries).toEqual([
+          ['2024-12-31T23:59:59Z', null],
+          ['2026-01-31T23:59:59Z', null],
         ]);
       },
       SCRIPT_TIMEOUT_MS,

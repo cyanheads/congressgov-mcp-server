@@ -13,18 +13,24 @@ import type { Migration, SqliteMirrorStoreSpec } from '@cyanheads/mcp-ts-core/mi
 export const BILLS_TABLE = 'bills';
 
 /**
- * Version 2 backfills summaries. Stores built before it requested the summaries
- * list without a date window, so every stored summary is null, and a refresh only
- * re-emits bills updated since the checkpoint. Clearing the checkpoint makes the
- * next refresh re-walk every bill; the completion marker stays, so search keeps
- * serving throughout. A no-op on a fresh store, which has no checkpoint yet.
+ * Clear the refresh checkpoint, so the next refresh walks every configured
+ * congress from its start; the completion marker stays, so search keeps serving
+ * throughout. A no-op on a fresh store, which has no checkpoint yet.
+ *
+ * - Version 2 backfills summaries: stores built before it requested the summaries
+ *   list without a date window, so every stored summary is null.
+ * - Version 3 recovers the bills the offset-paged bill walk skipped (a skipped
+ *   bill's update time doesn't change, so no refresh revisits it) and drops the
+ *   date-only checkpoint, which names no congresses.
  */
-const clearRefreshCheckpoint: Migration = {
-  version: 2,
-  up(handle) {
-    handle.prepare('UPDATE mirror_sync_state SET checkpoint = NULL WHERE id = 1').run();
-  },
-};
+function clearRefreshCheckpoint(version: number): Migration {
+  return {
+    version,
+    up(handle) {
+      handle.prepare('UPDATE mirror_sync_state SET checkpoint = NULL WHERE id = 1').run();
+    },
+  };
+}
 
 /**
  * The MirrorService primary-table spec. One row per bill, merged from the bill
@@ -37,8 +43,8 @@ export function billStoreSpec(path: string): SqliteMirrorStoreSpec {
     path,
     table: BILLS_TABLE,
     primaryKey: 'billId',
-    version: 2,
-    migrations: [clearRefreshCheckpoint],
+    version: 3,
+    migrations: [clearRefreshCheckpoint(2), clearRefreshCheckpoint(3)],
     columns: {
       billId: 'TEXT',
       congress: 'INTEGER',

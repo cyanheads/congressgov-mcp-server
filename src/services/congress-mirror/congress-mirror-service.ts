@@ -20,7 +20,7 @@ import {
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 import { createCongressBillIngester, type MirrorApi } from './ingest.js';
 import { toFtsMatch } from './normalize.js';
-import { billStoreSpec } from './schema.js';
+import { BILLS_TABLE, billStoreSpec } from './schema.js';
 import type { SearchBillResult, SearchBillsFilters, SearchBillsPage } from './types.js';
 
 /** Max stored-summary characters surfaced as a search-result preview. */
@@ -81,6 +81,22 @@ export class CongressMirrorService {
   /** `true` once a full sync has ever completed (queryable even mid-refresh). */
   ready(): Promise<boolean> {
     return this.mirror.ready();
+  }
+
+  /**
+   * The congresses the store holds bills for, ascending — what search can answer
+   * for. Read from the store, not `CONGRESS_MIRROR_CONGRESSES`: a congress just
+   * added to the configuration has no rows until a sync walks it, and one dropped
+   * from it stays stored and searchable. A covering scan of the `congress` index.
+   */
+  async mirroredCongresses(): Promise<number[]> {
+    const db = await this.mirror.raw();
+    return db
+      .prepare<{ congress: number }>(
+        `SELECT DISTINCT congress FROM ${BILLS_TABLE} ORDER BY congress`,
+      )
+      .all()
+      .map((row) => row.congress);
   }
 
   /**

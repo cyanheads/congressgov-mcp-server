@@ -1,8 +1,9 @@
 #!/usr/bin/env bun
 /**
  * @fileoverview mirror:refresh — incremental refresh of the Congress bill FTS
- * mirror. Re-scans bills updated since the durable checkpoint and re-walks the
- * CRS summaries, merging them into the existing index; the index stays
+ * mirror. Re-walks each checkpoint-covered congress's bill list from the
+ * checkpoint day and any other configured congress from its start, then re-walks
+ * the CRS summaries, merging them into the existing index; the index stays
  * transactionally queryable throughout. Run out-of-band for stdio deployments
  * (the HTTP server schedules this on a cron when CONGRESS_MIRROR_REFRESH_CRON is
  * set).

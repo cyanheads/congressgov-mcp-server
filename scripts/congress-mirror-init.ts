@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 /**
  * @fileoverview mirror:init — full out-of-band build of the Congress bill FTS
- * mirror. Pages the bill list and CRS summaries for the configured congress
+ * mirror. Walks the bill list and CRS summaries for the configured congress
  * window, merges them into one row per bill, and writes the SQLite index.
  * Idempotent (the framework upserts by primary key) — safe to re-run after an
  * interrupt. Run as a one-shot job or at Docker build, never on server startup.
