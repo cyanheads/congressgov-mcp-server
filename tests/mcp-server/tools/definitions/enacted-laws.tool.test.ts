@@ -4,6 +4,7 @@
  */
 
 import { z } from '@cyanheads/mcp-ts-core';
+import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -74,6 +75,36 @@ describe('enactedLawsTool', () => {
     const ctx = createMockContext({ errors: enactedLawsTool.errors });
     const input = enactedLawsTool.input.parse({ operation: 'get', congress: 118 });
     await expect(enactedLawsTool.handler(input, ctx)).rejects.toThrow(/requires/);
+  });
+
+  // ── #97: 'list' refuses the identity only 'get' reads ──
+
+  describe('lawNumber on list', () => {
+    it.each([['118-2'], ['2'], [2]])(
+      'refuses lawNumber %j before any request',
+      async (lawNumber) => {
+        const ctx = createMockContext({ errors: enactedLawsTool.errors });
+        const input = enactedLawsTool.input.parse({
+          operation: 'list',
+          congress: 118,
+          lawType: 'pub',
+          lawNumber,
+        });
+
+        await expect(enactedLawsTool.handler(input, ctx)).rejects.toMatchObject({
+          code: JsonRpcErrorCode.ValidationError,
+          message: expect.stringContaining("'get'"),
+          data: { reason: 'incompatible_identity', field: 'lawNumber', operation: 'list' },
+        });
+        expect(mockApi.listLaws).not.toHaveBeenCalled();
+      },
+    );
+
+    it('declares the refusal', () => {
+      expect(enactedLawsTool.errors?.map((contract) => contract.reason)).toContain(
+        'incompatible_identity',
+      );
+    });
   });
 
   // ── #54: the citation is the only law identifier list output exposes ──

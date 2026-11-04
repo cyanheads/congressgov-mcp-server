@@ -10,6 +10,7 @@ import { formatLaws } from '@/mcp-server/tools/format-helpers.js';
 import {
   buildEffectiveQuery,
   congressErrorContracts,
+  identityErrorContracts,
   lawNumberIdentifier,
   listEnrichment,
   listOrDetail,
@@ -22,7 +23,7 @@ export const enactedLawsTool = tool('congressgov_enacted_laws', {
   title: 'Congress.gov Enacted Laws',
   description: `Browse enacted public and private laws from Congress.gov by congress and law type ('pub' for public laws, 'priv' for private). 'list' filters by enactment status and law type — the discovery path 'bill_lookup' does not offer. 'get' returns the origin bill record (sponsor, actions, summaries, text), with the public/private law citation on the bill's 'laws' array (e.g. {"number":"118-2","type":"Public Law"}).`,
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
-  errors: congressErrorContracts,
+  errors: [...congressErrorContracts, ...identityErrorContracts],
   input: z.object({
     operation: z.enum(['list', 'get']).describe('Which data to retrieve.'),
     congress: z.number().int().positive().describe('Congress number.'),
@@ -33,7 +34,7 @@ export const enactedLawsTool = tool('congressgov_enacted_laws', {
         "Law type — 'pub' (public laws, general application, most common) or 'priv' (private laws, specific individuals or entities). Required for 'get'.",
       ),
     lawNumber: lawNumberIdentifier(
-      "Law number, as carried by a 'list' row's `laws[].number` — either the full citation ('118-90', rendered as 'Public Law 118-90') or the portion after the hyphen ('90'); the prefix is the congress and must match `congress`. Not the row's own `number`, which is the origin bill. Required for 'get'.",
+      "Law number, as carried by a 'list' row's `laws[].number` — either the full citation ('118-90', rendered as 'Public Law 118-90') or the portion after the hyphen ('90'); the prefix is the congress and must match `congress`. Not the row's own `number`, which is the origin bill. Required for 'get'; 'list' refuses it.",
     ).optional(),
     limit: z.number().int().min(1).max(250).default(20).describe('Results per page (1-250).'),
     offset: z.number().int().min(0).default(0).describe('Pagination offset.'),
@@ -49,6 +50,13 @@ export const enactedLawsTool = tool('congressgov_enacted_laws', {
     const api = getCongressApi();
 
     if (input.operation === 'list') {
+      if (input.lawNumber !== undefined) {
+        throw ctx.fail(
+          'incompatible_identity',
+          "'list' does not use lawNumber. Remove lawNumber to browse, or use 'get' with congress, lawType, and lawNumber.",
+          { field: 'lawNumber', operation: input.operation },
+        );
+      }
       const result = await api.listLaws(
         {
           congress: input.congress,

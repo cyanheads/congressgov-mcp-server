@@ -10,17 +10,19 @@ import { formatMembers } from '@/mcp-server/tools/format-helpers.js';
 import {
   buildEffectiveQuery,
   congressErrorContracts,
+  identityErrorContracts,
   listEnrichment,
   listOrDetail,
+  noticeIgnoredInputs,
   notifyIfNoMatches,
 } from '@/mcp-server/tools/tool-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 
 export const memberLookupTool = tool('congressgov_member_lookup', {
   title: 'Congress.gov Member Lookup',
-  description: `Discover congressional members and their legislative activity. No name search. For 'list', filter by stateCode (optionally with district), by congress, or by both together (e.g., 118th Congress + CA, or CA district 12 in the 118th). Add currentMember=true to restrict to currently serving members. Once you have a bioguideId, use 'get' for full profile or 'sponsored'/'cosponsored' for their legislative portfolio.`,
+  description: `Discover congressional members and their legislative activity. No name search. For 'list', filter by stateCode (optionally with district), by congress, or by both together (e.g., 118th Congress + CA, or CA district 12 in the 118th). Add currentMember=true to restrict to currently serving members. Once you have a bioguideId, use 'get' for full profile or 'sponsored'/'cosponsored' for their legislative portfolio. A 'sponsored'/'cosponsored' row that is an amendment carries amendmentNumber, with its amendment type in the row's url (/amendment/{congress}/{type}/{number}); pass congress, amendmentType, and amendmentNumber to congressgov_amendment_lookup for its sponsor, actions, and text.`,
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
-  errors: congressErrorContracts,
+  errors: [...congressErrorContracts, ...identityErrorContracts],
   input: z.object({
     operation: z
       .enum(['list', 'get', 'sponsored', 'cosponsored'])
@@ -30,25 +32,34 @@ export const memberLookupTool = tool('congressgov_member_lookup', {
       .regex(/^[A-Za-z]\d{6}$/)
       .optional()
       .describe(
-        "Unique member identifier (e.g., 'P000197'). Required for get/sponsored/cosponsored.",
+        "Unique member identifier (e.g., 'P000197'). Required for get/sponsored/cosponsored; 'list' refuses it.",
       ),
-    congress: z.number().int().positive().optional().describe('Congress number to filter by.'),
+    congress: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .describe(
+        "Congress number to filter by, for 'list' only — Congress.gov offers no congress filter on a member's sponsored or cosponsored legislation.",
+      ),
     stateCode: z
       .string()
       .regex(/^[A-Za-z]{2}$/)
       .optional()
-      .describe("Two-letter state code (e.g., 'CA', 'TX')."),
+      .describe("Two-letter state code (e.g., 'CA', 'TX'), for 'list' only."),
     district: z
       .number()
       .int()
       .min(0)
       .optional()
-      .describe('Congressional district number. Requires stateCode. Use 0 for at-large.'),
+      .describe(
+        "Congressional district number, for 'list' only. Requires stateCode. Use 0 for at-large.",
+      ),
     currentMember: z
       .boolean()
       .optional()
       .describe(
-        'Filter to currently serving members. Omit to include both current and former members.',
+        "Filter to currently serving members, for 'list' only. Omit to include both current and former members.",
       ),
     limit: z.number().int().min(1).max(250).default(20).describe('Results per page (1-250).'),
     offset: z.number().int().min(0).default(0).describe('Pagination offset.'),
@@ -64,6 +75,13 @@ export const memberLookupTool = tool('congressgov_member_lookup', {
     const api = getCongressApi();
 
     if (input.operation === 'list') {
+      if (input.bioguideId !== undefined) {
+        throw ctx.fail(
+          'incompatible_identity',
+          "'list' does not use bioguideId. Remove bioguideId to browse, or use 'get', 'sponsored', or 'cosponsored' with bioguideId.",
+          { field: 'bioguideId', operation: input.operation },
+        );
+      }
       if (input.district !== undefined && !input.stateCode) {
         throw validationError(
           "The 'district' parameter requires 'stateCode'. Provide both to look up a specific House representative.",
@@ -105,6 +123,20 @@ export const memberLookupTool = tool('congressgov_member_lookup', {
         { field: 'bioguideId', operation: input.operation },
       );
     }
+
+    noticeIgnoredInputs(
+      ctx,
+      input.operation,
+      {
+        congress: input.congress,
+        stateCode: input.stateCode,
+        district: input.district,
+        currentMember: input.currentMember,
+      },
+      input.operation !== 'get' && input.congress !== undefined
+        ? 'Results span every congress.'
+        : undefined,
+    );
 
     if (input.operation === 'get') {
       const result = await api.getMember(input.bioguideId, ctx);
