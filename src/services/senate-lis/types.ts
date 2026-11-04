@@ -2,9 +2,10 @@
  * @fileoverview Domain types for Senate LIS roll-call vote data.
  *
  * The Congress.gov API v3 exposes House votes only; Senate roll call votes are
- * published solely through the Senate's official LIS XML feed
- * (https://www.senate.gov/legislative/LIS/roll_call_votes/). These types describe
- * the normalized, camelCased shapes the parser produces from that XML — distinct
+ * published through the Senate's official LIS XML feed
+ * (https://www.senate.gov/legislative/LIS/roll_call_votes/), and by Voteview's CSV
+ * files when that feed can't be read. These types describe the normalized,
+ * camelCased shapes the parsers produce from either source — distinct
  * from the House JSON shapes the Congress.gov API returns.
  *
  * Every record carries `chamber: 'senate'` so the shared vote formatter can route
@@ -83,7 +84,13 @@ export type SenatePartyTotal = {
   notVoting: number;
 };
 
-/** A fully parsed Senate roll call vote record (`vote_{congress}_{session}_{nnnnn}.xml`). */
+/**
+ * A Senate roll call vote record: parsed from the LIS feed
+ * (`vote_{congress}_{session}_{nnnnn}.xml`), or from Voteview's files when the feed
+ * can't be read. Voteview publishes a subset — date, question, result,
+ * description, measure, majority, and tally — so its records carry `voteDateIso`
+ * and `issue` and none of the LIS-only fields.
+ */
 export type SenateVoteDetail = {
   chamber: 'senate';
   congress: number;
@@ -91,6 +98,10 @@ export type SenateVoteDetail = {
   voteNumber: number;
   /** Full timestamp, e.g. "January 8, 2024, 05:27 PM". */
   voteDate?: string;
+  /** Calendar date as `YYYY-MM-DD` — Voteview publishes a date, not a time. */
+  voteDateIso?: string;
+  /** Associated measure as Voteview publishes it, e.g. "PN1129", "HR82". */
+  issue?: string;
   modifyDate?: string;
   /** Short question, e.g. "On the Cloture Motion". */
   question?: string;
@@ -127,6 +138,24 @@ export type SenateMemberVote = {
   voteCast?: string;
   /** Senate LIS member identifier, e.g. "S354". */
   lisMemberId?: string;
+  /** Name as Voteview publishes it, surname first, e.g. "BALDWIN, Tammy". */
+  name?: string;
+  /** Biographical Directory ID, from Voteview's members file. The LIS feed carries none. */
+  bioguideId?: string;
+};
+
+/**
+ * Where a Senate response came from when the LIS feed could not be read and
+ * Voteview's per-congress files served it instead. Absent on LIS responses.
+ */
+export type SenateVoteSource = {
+  name: 'Voteview';
+  url: string;
+  congress: number;
+  /** Voteview's newest Senate roll call for `congress`; while that congress sits, later votes are not in it yet. */
+  latestVote: { session: number; voteNumber: number; date: string };
+  /** The citation Voteview asks its users to give. */
+  citation: string;
 };
 
 /** Parsed individual-vote payload: the vote record plus its full member roster. */

@@ -2,7 +2,7 @@
  * @fileoverview Senate LIS roll-call vote client — fetch, retry, XML parse, normalize.
  *
  * The Congress.gov API v3 exposes House votes only (validated 2026-05-31: the
- * `/senate-vote/...` namespace 404s). Senate roll call votes live solely in the
+ * `/senate-vote/...` namespace 404s). Senate roll call votes are published by the
  * Senate's official LIS XML feed, which has no API key and no JSON. This service
  * fetches and normalizes that feed into the same list/detail/members envelopes the
  * House path returns, so a single tool can serve both chambers.
@@ -14,6 +14,13 @@
  *
  * The host returns HTTP 200 with an HTML error page for unknown congress/session/
  * vote, so "not found" is detected from the body, not the status code.
+ *
+ * When the feed can't answer — senate.gov refuses automated clients with HTTP 403,
+ * and a 5xx, timeout, or empty body leaves it unread just the same — every
+ * operation is served from Voteview's per-congress files (`VoteviewSource`) under
+ * the same call budget, and the result carries a `source` naming Voteview and its
+ * latest vote. The feed's own "not found", a caller's cancellation, and a spent
+ * budget are answers or ends, not failures to work around: none of them falls back.
  *
  * @module services/senate-lis/senate-vote-service
  */
@@ -38,8 +45,16 @@ import {
   parseRollCallVote,
   parseVoteMenu,
   SENATE_VOTE_COVERAGE,
+  SENATE_VOTE_FIRST_CONGRESS,
 } from './parse.js';
-import type { SenateMemberVote, SenateVoteDetail, SenateVoteSummary } from './types.js';
+import type {
+  ParsedRollCallVote,
+  SenateMemberVote,
+  SenateVoteDetail,
+  SenateVoteSource,
+  SenateVoteSummary,
+} from './types.js';
+import { UNAVAILABLE_RECOVERY, VoteviewSource } from './voteview-source.js';
 
 const DEFAULT_BASE_URL = 'https://www.senate.gov/legislative/LIS';
 const REQUEST_TIMEOUT_MS = 12_000;
@@ -48,6 +63,13 @@ const BASE_BACKOFF_MS = 1000;
 
 /** A 200 response whose body is an HTML page (the host's "not found" surface). */
 const HTML_RESPONSE_RE = /^\s*<(!DOCTYPE|html[\s>])/i;
+/**
+ * The pages senate.gov serves the clients it refuses: its firewall's ("Senate.gov
+ * - Unauthorized") and its CDN's ("Access Denied"), each seen with HTTP 403 in
+ * November 2026. Served with a 200, either is still a refusal, not the host's
+ * page for an unknown vote.
+ */
+const REFUSAL_PAGE_RE = /<title>\s*(?:Senate\.gov - Unauthorized|Access Denied)\s*<\/title>/i;
 /** A valid feed body opens with one of these roots once the XML declaration is past. */
 const FEED_ROOT_RE = /<(vote_summary|roll_call_vote)[\s>]/;
 
@@ -97,21 +119,48 @@ type Pagination = {
   count: number;
   nextOffset: number | null;
 };
+/** `source` is present only when Voteview served the call. */
 export type SenateVoteListResult = {
   chamber: 'senate';
   data: SenateVoteSummary[];
   pagination: Pagination;
+  source?: SenateVoteSource;
 };
 export type SenateVoteDetailResult = {
   chamber: 'senate';
   vote: SenateVoteDetail;
+  source?: SenateVoteSource;
 };
 export type SenateVoteMembersResult = {
   chamber: 'senate';
   data: SenateMemberVote[];
   vote: SenateVoteDetail;
   pagination: Pagination;
+  source?: SenateVoteSource;
 };
+
+/**
+ * Whether the LIS feed failed to answer at all — a refusal, an outage, a timeout
+ * the retries could not outlast, an empty body — as distinct from answering
+ * "not found", the caller cancelling, or the call's budget running out.
+ */
+function lisCouldNotAnswer(error: unknown): error is McpError {
+  return error instanceof McpError && error.code === JsonRpcErrorCode.ServiceUnavailable;
+}
+
+/** Voteview answers for the congresses the LIS feed publishes, when the feed can't. */
+function voteviewAnswersFor(congress: number): boolean {
+  return congress >= SENATE_VOTE_FIRST_CONGRESS;
+}
+
+/** The HTTP status the feed answered with, from the first error in the chain that carries one. */
+function httpStatusOf(error: Error): number | undefined {
+  for (let current: unknown = error; current instanceof Error; current = current.cause) {
+    const status = current instanceof McpError ? current.data?.status : undefined;
+    if (typeof status === 'number') return status;
+  }
+  return;
+}
 
 function isNativeAbortSignal(value: unknown): value is AbortSignal {
   if (
@@ -131,6 +180,7 @@ function isNativeAbortSignal(value: unknown): value is AbortSignal {
 
 export class SenateVoteService {
   private readonly baseUrl: string;
+  private readonly voteview = new VoteviewSource();
 
   constructor(baseUrl: string = DEFAULT_BASE_URL) {
     this.baseUrl = baseUrl.replace(/\/$/, '');
@@ -138,15 +188,28 @@ export class SenateVoteService {
 
   async listVotes(params: ListVotesParams, ctx?: Context): Promise<SenateVoteListResult> {
     const url = `${this.baseUrl}/roll_call_lists/vote_menu_${params.congress}_${params.session}.xml`;
-    const xml = await this.fetchXml(
+    const { votes: all, source } = await this.lisOrVoteview<{
+      votes: SenateVoteSummary[];
+      source?: SenateVoteSource;
+    }>(
+      params.congress,
       url,
-      `SenateVoteService GET vote_menu_${params.congress}_${params.session}`,
       ctx,
-      `No Senate roll call votes found for the ${ordinal(params.congress)} Congress, session ${params.session}. Valid sessions are 1 and 2; ${SENATE_VOTE_COVERAGE}.`,
-      { congress: params.congress, session: params.session },
+      async () => ({
+        votes: parseVoteMenu(
+          await this.fetchXml(
+            url,
+            `SenateVoteService GET vote_menu_${params.congress}_${params.session}`,
+            ctx,
+            `No Senate roll call votes found for the ${ordinal(params.congress)} Congress, session ${params.session}. Valid sessions are 1 and 2; ${SENATE_VOTE_COVERAGE}.`,
+            { congress: params.congress, session: params.session },
+          ),
+        ),
+      }),
+      () =>
+        this.voteview.sessionVotes(params.congress, params.session, ctx, this.getAbortSignal(ctx)),
     );
 
-    const all = parseVoteMenu(xml);
     /** Roll number is chronological within a session; sort explicitly so order does
      * not depend on feed ordering. */
     const sorted = [...all].sort((a, b) =>
@@ -155,20 +218,29 @@ export class SenateVoteService {
     const slice = sorted.slice(params.offset, params.offset + params.limit);
     const nextOffset =
       params.offset + slice.length < sorted.length ? params.offset + slice.length : null;
-    return { chamber: 'senate', data: slice, pagination: { count: sorted.length, nextOffset } };
+    return {
+      chamber: 'senate',
+      data: slice,
+      pagination: { count: sorted.length, nextOffset },
+      ...(source ? { source } : {}),
+    };
   }
 
   async getVote(params: GetVoteParams, ctx?: Context): Promise<SenateVoteDetailResult> {
-    const { vote, members } = await this.fetchVote(params, ctx);
+    const { vote, members, source } = await this.fetchVote(params, ctx);
     /** Derive the party breakdown from the roster — the feed publishes none. */
-    return { chamber: 'senate', vote: { ...vote, partyTotals: computePartyTotals(members) } };
+    return {
+      chamber: 'senate',
+      vote: { ...vote, partyTotals: computePartyTotals(members) },
+      ...(source ? { source } : {}),
+    };
   }
 
   async getVoteMembers(
     params: GetVoteMembersParams,
     ctx?: Context,
   ): Promise<SenateVoteMembersResult> {
-    const { vote, members } = await this.fetchVote(params, ctx);
+    const { vote, members, source } = await this.fetchVote(params, ctx);
     const slice = members.slice(params.offset, params.offset + params.limit);
     const nextOffset =
       params.offset + slice.length < members.length ? params.offset + slice.length : null;
@@ -177,20 +249,77 @@ export class SenateVoteService {
       data: slice,
       vote,
       pagination: { count: members.length, nextOffset },
+      ...(source ? { source } : {}),
     };
   }
 
-  private async fetchVote(params: GetVoteParams, ctx?: Context) {
+  private fetchVote(
+    params: GetVoteParams,
+    ctx?: Context,
+  ): Promise<ParsedRollCallVote & { source?: SenateVoteSource }> {
     const padded = String(params.voteNumber).padStart(5, '0');
     const url = `${this.baseUrl}/roll_call_votes/vote${params.congress}${params.session}/vote_${params.congress}_${params.session}_${padded}.xml`;
-    const xml = await this.fetchXml(
+    const voteParams = {
+      congress: params.congress,
+      session: params.session,
+      voteNumber: params.voteNumber,
+    };
+    return this.lisOrVoteview<ParsedRollCallVote & { source?: SenateVoteSource }>(
+      params.congress,
       url,
-      `SenateVoteService GET vote_${params.congress}_${params.session}_${padded}`,
       ctx,
-      `Senate roll call vote ${params.voteNumber} was not found in the ${ordinal(params.congress)} Congress, session ${params.session}.`,
-      { congress: params.congress, session: params.session, voteNumber: params.voteNumber },
+      async () =>
+        parseRollCallVote(
+          await this.fetchXml(
+            url,
+            `SenateVoteService GET vote_${params.congress}_${params.session}_${padded}`,
+            ctx,
+            `Senate roll call vote ${params.voteNumber} was not found in the ${ordinal(params.congress)} Congress, session ${params.session}.`,
+            voteParams,
+          ),
+        ),
+      () => this.voteview.rollCallVote(voteParams, ctx, this.getAbortSignal(ctx)),
     );
-    return parseRollCallVote(xml);
+  }
+
+  /**
+   * Answer from the LIS feed, or from Voteview when the feed could not answer.
+   * Both spend the call's one budget. A congress before the feed's coverage keeps
+   * the feed's failure: Voteview is consulted only for votes the feed publishes.
+   */
+  private async lisOrVoteview<T>(
+    congress: number,
+    url: string,
+    ctx: Context | undefined,
+    fromLis: () => Promise<T>,
+    fromVoteview: () => Promise<T>,
+  ): Promise<T> {
+    try {
+      return await fromLis();
+    } catch (lisError) {
+      if (!lisCouldNotAnswer(lisError) || !voteviewAnswersFor(congress)) throw lisError;
+      const status = httpStatusOf(lisError);
+      ctx?.log.notice('Senate LIS feed could not be read; serving the call from Voteview.', {
+        congress,
+        url,
+        ...(status === undefined ? {} : { status }),
+        lisError: lisError.message,
+      });
+      try {
+        return await fromVoteview();
+      } catch (voteviewError) {
+        if (!lisCouldNotAnswer(voteviewError)) throw voteviewError;
+        throw serviceUnavailable(
+          'The Senate LIS feed could not be read, and Voteview, the source this server falls back to, is unavailable too.',
+          {
+            reason: 'upstream_error',
+            recovery: UNAVAILABLE_RECOVERY,
+            ...(voteviewError.data?.retryable === false ? { retryable: false } : {}),
+          },
+          { cause: voteviewError },
+        );
+      }
+    }
   }
 
   private async fetchXml(
@@ -198,30 +327,40 @@ export class SenateVoteService {
     operation: string,
     ctx: Context | undefined,
     notFoundMessage: string,
-    data: Record<string, unknown>,
+    data: { congress: number; session: number; voteNumber?: number },
   ): Promise<string> {
     const requestContext = this.getRequestContext(ctx, operation);
     const signal = this.getAbortSignal(ctx);
+    const refusalFallsBack = voteviewAnswersFor(data.congress);
 
-    const text = await withCallBudget((attempt) => this.doFetch(url, requestContext, attempt), {
-      call: ctx,
-      attemptTimeoutMs: REQUEST_TIMEOUT_MS,
-      upstream: 'senate.gov',
-      request: 'the Senate LIS feed',
-      recovery: UPSTREAM_ERROR_RECOVERY.recovery,
-      operation,
-      context: requestContext,
-      baseDelayMs: BASE_BACKOFF_MS,
-      maxRetries: MAX_ATTEMPTS - 1,
-      isTransient: (error: unknown) => this.isRetryableError(error),
-      ...(signal ? { signal } : {}),
-    });
+    const text = await withCallBudget(
+      (attempt) => this.doFetch(url, requestContext, attempt, refusalFallsBack),
+      {
+        call: ctx,
+        attemptTimeoutMs: REQUEST_TIMEOUT_MS,
+        upstream: 'senate.gov',
+        request: 'the Senate LIS feed',
+        recovery: UPSTREAM_ERROR_RECOVERY.recovery,
+        operation,
+        context: requestContext,
+        baseDelayMs: BASE_BACKOFF_MS,
+        maxRetries: MAX_ATTEMPTS - 1,
+        isTransient: (error: unknown) => this.isRetryableError(error),
+        ...(signal ? { signal } : {}),
+      },
+    );
 
     const trimmed = text.trim();
     if (!trimmed) {
       throw serviceUnavailable('The Senate LIS feed returned an empty response.', {
         ...UPSTREAM_ERROR_RECOVERY,
       });
+    }
+    if (REFUSAL_PAGE_RE.test(trimmed)) {
+      throw serviceUnavailable(
+        'senate.gov refused the request for the Senate LIS feed (it answered with its firewall page).',
+        REFUSED_RECOVERY,
+      );
     }
     /** The host serves a 200 HTML page for unknown congress/session/vote — treat any
      * non-feed body as not found rather than letting the parser choke on it. */
@@ -231,15 +370,23 @@ export class SenateVoteService {
     return trimmed;
   }
 
+  /**
+   * `refusalFallsBack`: a 403 will be answered from Voteview, so it is an expected
+   * outcome while senate.gov refuses automated clients — `fetchWithTimeout` logs it
+   * at debug instead of as an error carrying the refusal page. The refusal itself
+   * is logged once, at notice, when the call falls back.
+   */
   private async doFetch(
     url: string,
     requestContext: RequestContext,
     attempt: BudgetedAttempt,
+    refusalFallsBack: boolean,
   ): Promise<string> {
     try {
       const response = await fetchWithTimeout(url, attempt.timeoutMs, requestContext, {
         headers: { Accept: 'application/xml, text/xml, */*' },
         signal: attempt.signal,
+        expectedStatuses: refusalFallsBack ? [403] : [],
       });
       return await response.text();
     } catch (error) {

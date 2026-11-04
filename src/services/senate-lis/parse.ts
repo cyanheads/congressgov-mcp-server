@@ -79,7 +79,7 @@ function toArray<T>(value: T | T[] | undefined | null): T[] {
  * Spread the result alongside the required fields so optional fields are simply
  * absent when empty — clean output, and assignable under `exactOptionalPropertyTypes`.
  */
-function defined<T extends XmlRecord>(
+export function defined<T extends XmlRecord>(
   obj: T,
 ): Partial<{ [K in keyof T]: Exclude<T[K], undefined> }> {
   const out: XmlRecord = {};
