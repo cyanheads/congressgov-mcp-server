@@ -9,6 +9,7 @@ import { existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { amendmentLookupTool } from '@/mcp-server/tools/definitions/amendment-lookup.tool.js';
 import { billLookupTool } from '@/mcp-server/tools/definitions/bill-lookup.tool.js';
 import { committeeLookupTool } from '@/mcp-server/tools/definitions/committee-lookup.tool.js';
 import { committeeReportsTool } from '@/mcp-server/tools/definitions/committee-reports.tool.js';
@@ -21,6 +22,7 @@ import { senateNominationsTool } from '@/mcp-server/tools/definitions/senate-nom
 
 const LIST_OR_DETAIL_TOOLS = [
   billLookupTool,
+  amendmentLookupTool,
   enactedLawsTool,
   memberLookupTool,
   committeeLookupTool,
@@ -33,6 +35,7 @@ const LIST_OR_DETAIL_TOOLS = [
 
 const EXPECTED_TITLES = {
   congressgov_bill_lookup: 'Congress.gov Bill Lookup',
+  congressgov_amendment_lookup: 'Congress.gov Amendment Lookup',
   congressgov_enacted_laws: 'Congress.gov Enacted Laws',
   congressgov_member_lookup: 'Congress.gov Member Lookup',
   congressgov_committee_lookup: 'Congress.gov Committee Lookup',
@@ -47,12 +50,13 @@ const EXPECTED_TITLES = {
 
 const EXPECTED_DETAIL_ROOTS = {
   congressgov_bill_lookup: ['bill', 'content'],
+  congressgov_amendment_lookup: ['amendment', 'content'],
   congressgov_enacted_laws: ['law'],
   congressgov_member_lookup: ['member'],
   congressgov_committee_lookup: ['committee'],
   congressgov_roll_votes: ['vote'],
   congressgov_senate_nominations: ['nomination'],
-  congressgov_crs_reports: ['report'],
+  congressgov_crs_reports: ['report', 'content'],
   congressgov_committee_reports: ['report', 'text', 'content'],
   congressgov_daily_record: ['content'],
 } as const;
@@ -260,6 +264,58 @@ describe('tool catalog contract', () => {
     expect(properties.characterLimit?.description).toContain("'summaries'");
   });
 
+  it('advertises committee report parts: an optional part input and an optional parts output', () => {
+    const advertised = tools.find(({ name }) => name === committeeReportsTool.name);
+    const input = advertised?.inputSchema;
+    expect(input?.properties?.part).toMatchObject({ type: 'integer', exclusiveMinimum: 0 });
+    expect(input?.properties?.part).not.toHaveProperty('default');
+    expect(input?.required ?? []).not.toContain('part');
+
+    const parts = advertised?.outputSchema?.properties?.parts;
+    expect(parts).toMatchObject({ type: 'array', items: { type: 'integer' } });
+    expect(advertised?.outputSchema?.required ?? []).not.toContain('parts');
+  });
+
+  it('advertises the CRS content window with no format input and no reportNumber length cap', () => {
+    const advertised = tools.find(({ name }) => name === crsReportsTool.name);
+    const properties = advertised?.inputSchema?.properties ?? {};
+    expect(properties.operation).toMatchObject({ enum: ['list', 'get', 'content'] });
+    expect(properties.characterOffset).toMatchObject({ default: 0, minimum: 0 });
+    expect(properties.characterLimit).toMatchObject({
+      default: 25_000,
+      minimum: 1,
+      maximum: 100_000,
+    });
+    expect(properties).not.toHaveProperty('format');
+    expect(properties.reportNumber).not.toHaveProperty('maxLength');
+  });
+
+  it('advertises the Voteview source on roll votes as an optional object naming its latest vote', () => {
+    const advertised = tools.find(({ name }) => name === rollVotesTool.name);
+    const source = advertised?.outputSchema?.properties?.source;
+    expect(source).toMatchObject({
+      type: 'object',
+      properties: {
+        name: { const: 'Voteview' },
+        url: { type: 'string' },
+        congress: { type: 'integer' },
+        latestVote: {
+          type: 'object',
+          properties: {
+            session: { type: 'integer' },
+            voteNumber: { type: 'integer' },
+            date: { type: 'string' },
+          },
+        },
+        citation: { type: 'string' },
+      },
+    });
+    expect(source?.required).toEqual(
+      expect.arrayContaining(['name', 'url', 'congress', 'latestVote', 'citation']),
+    );
+    expect(advertised?.outputSchema?.required ?? []).not.toContain('source');
+  });
+
   it('advertises the exact explicit title inventory', () => {
     expect(Object.fromEntries(tools.map(({ name, title }) => [name, title]))).toEqual(
       EXPECTED_TITLES,
@@ -268,7 +324,7 @@ describe('tool catalog contract', () => {
 
   it('describes committee filter behavior without internal fetch details', () => {
     const description = committeeLookupTool.input.shape.filter.description;
-    expect(description).toContain("Only meaningful for 'list'");
+    expect(description).toContain("for 'list' only");
     expect(description).toContain('fuzzy-matched rows are labeled approximate');
     expect(description).not.toMatch(/fetch|client-side/i);
   });
@@ -277,13 +333,20 @@ describe('tool catalog contract', () => {
     const nested = { outer: { inner: { value: 'kept' } } };
     const samples = [
       [billLookupTool, { bill: nested }, { content: nested }],
+      [amendmentLookupTool, { amendment: nested }, { content: nested }],
       [enactedLawsTool, { law: nested }],
       [memberLookupTool, { member: nested }],
       [committeeLookupTool, { committee: nested }],
       [rollVotesTool, { vote: nested }],
       [senateNominationsTool, { nomination: nested }],
-      [crsReportsTool, { report: nested }],
-      [committeeReportsTool, { report: nested }, { text: [nested] }, { content: nested }],
+      [crsReportsTool, { report: nested }, { content: nested }],
+      [
+        committeeReportsTool,
+        { report: nested },
+        { text: [nested] },
+        { content: nested },
+        { report: nested, parts: [1, 2] },
+      ],
       [dailyRecordTool, { content: nested }],
     ] as const;
 

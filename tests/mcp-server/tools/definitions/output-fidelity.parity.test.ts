@@ -5,12 +5,13 @@
  * structuredContent, Claude Desktop reads content[]), so a value present in one
  * and absent from the other is invisible to half the fleet.
  *
- * Resolves cyanheads/congressgov-mcp-server#45, #50, #51, #55, #58, #67, #73.
+ * Resolves cyanheads/congressgov-mcp-server#45, #50, #51, #55, #58, #67, #73, #95, #100, #101, #102.
  *
  * @module tests/mcp-server/tools/definitions/output-fidelity.parity.test
  */
 
 import { readFileSync } from 'node:fs';
+import { z } from '@cyanheads/mcp-ts-core';
 import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -19,9 +20,11 @@ vi.mock('@/services/congress-api/congress-api-service.js', () => ({
   initCongressApi: vi.fn(),
 }));
 
+import { amendmentLookupTool } from '@/mcp-server/tools/definitions/amendment-lookup.tool.js';
 import { billLookupTool } from '@/mcp-server/tools/definitions/bill-lookup.tool.js';
 import { billSummariesTool } from '@/mcp-server/tools/definitions/bill-summaries.tool.js';
 import { committeeLookupTool } from '@/mcp-server/tools/definitions/committee-lookup.tool.js';
+import { committeeReportsTool } from '@/mcp-server/tools/definitions/committee-reports.tool.js';
 import { crsReportsTool } from '@/mcp-server/tools/definitions/crs-reports.tool.js';
 import { dailyRecordTool } from '@/mcp-server/tools/definitions/daily-record.tool.js';
 import { enactedLawsTool } from '@/mcp-server/tools/definitions/enacted-laws.tool.js';
@@ -29,6 +32,7 @@ import { memberLookupTool } from '@/mcp-server/tools/definitions/member-lookup.t
 import { rollVotesTool } from '@/mcp-server/tools/definitions/roll-votes.tool.js';
 import { senateNominationsTool } from '@/mcp-server/tools/definitions/senate-nominations.tool.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
+import { initCongressDocuments } from '@/services/congress-documents/congress-documents-service.js';
 import { initSenateVoteService } from '@/services/senate-lis/senate-vote-service.js';
 
 const mockApi = {
@@ -117,6 +121,7 @@ describe('#45 — law citation reaches structuredContent and content[]', () => {
       'api_key_rejected',
       'upstream_error',
       'upstream_timeout',
+      'incompatible_identity',
     ]);
     for (const contract of enactedLawsTool.errors ?? []) {
       expect(contract.recovery).toBeTruthy();
@@ -600,5 +605,523 @@ describe('#62 — a nomination action citing its Senate vote points at it on bot
     };
     expect(structured.data?.[0]?.rollVote).toEqual(rollVote);
     expect(joinText(result.content as Array<{ type: string; text?: string }>)).toContain(line);
+  });
+});
+
+describe('#102 — a bill action recording a roll call points at it on both surfaces', () => {
+  /** /bill/117/hr/3684/actions — House passage (Roll no. 369). */
+  const passage = {
+    actionCode: 'H41610',
+    actionDate: '2021-11-05',
+    recordedVotes: [
+      {
+        chamber: 'House',
+        congress: 117,
+        date: '2021-11-06T03:27:28Z',
+        rollNumber: 369,
+        sessionNumber: 1,
+        url: 'https://clerk.house.gov/evs/2021/roll369.xml',
+      },
+    ],
+    sourceSystem: { code: 2, name: 'House floor actions' },
+    text: 'On motion that the House agree to the Senate amendment Agreed to by the Yeas and Nays: 228 - 206 (Roll no. 369). (consideration: CR H6230-6231)',
+    type: 'ResolvingDifferences',
+  };
+
+  it('declares rollVote on action rows with either chamber', () => {
+    const schema = z.toJSONSchema(billLookupTool.output) as unknown as {
+      properties: {
+        data: {
+          items: {
+            properties: {
+              rollVote: { properties: { chamber: { enum: string[] } }; required: string[] };
+            };
+          };
+        };
+      };
+    };
+    const rollVote = schema.properties.data.items.properties.rollVote;
+    expect(rollVote.properties.chamber.enum).toEqual(['house', 'senate']);
+    expect(rollVote.required).toEqual(['chamber', 'congress', 'session', 'voteNumber']);
+  });
+
+  it('carries the pointer in structuredContent and its call in content[]', async () => {
+    mockApi.getBillSubResource.mockResolvedValue({
+      data: [passage],
+      pagination: { count: 101, nextOffset: 1 },
+    });
+    const result = await runToolContract(billLookupTool, {
+      operation: 'actions',
+      congress: 117,
+      billType: 'hr',
+      billNumber: 3684,
+      limit: 1,
+    });
+    expect(result.isError).toBeFalsy();
+    const structured = billLookupTool.output.parse(result.structuredContent) as {
+      data?: Array<{ rollVote?: unknown }>;
+    };
+    expect(structured.data?.[0]?.rollVote).toEqual({
+      chamber: 'house',
+      congress: 117,
+      session: 1,
+      voteNumber: 369,
+    });
+    const content = joinText(result.content as Array<{ type: string; text?: string }>);
+    expect(content).toContain(
+      '**House Roll Vote:** congressgov_roll_votes chamber=house, congress=117, session=1, voteNumber=369',
+    );
+    expect(content).toContain('https://clerk.house.gov/evs/2021/roll369.xml');
+  });
+});
+
+/**
+ * Every string value of a record, keyed by its path — the values a `content[]`
+ * reader must see — whitespace-collapsed into the inline form the renderers
+ * print. Numbers are left out: a short count or code is a substring of too much
+ * else on the page to prove it was rendered. A `{count, url}` sub-resource
+ * reference is the renderer's one documented exception ("N available", the
+ * tool's own operation being the path to those rows), so its URL is skipped.
+ */
+function stringLeaves(value: unknown, path = ''): Array<[string, string]> {
+  if (typeof value === 'string') return [[path, value.replace(/\s+/g, ' ').trim()]];
+  if (Array.isArray(value)) return value.flatMap((item, i) => stringLeaves(item, `${path}[${i}]`));
+  if (typeof value !== 'object' || value === null) return [];
+  if ('count' in value && Object.keys(value).length <= 2) return [];
+  return Object.entries(value).flatMap(([key, item]) =>
+    stringLeaves(item, path ? `${path}.${key}` : key),
+  );
+}
+
+describe('#100 — an amendment record and its roll call actions reach both surfaces', () => {
+  /** /amendment/118/hamdt/255 (2026-11-03). */
+  const roy = {
+    actionDate: '2023-07-14',
+    actionTime: '10:44:04',
+    text: 'On agreeing to the Roy amendment (A040) Agreed to by recorded vote: 217 - 216 (Roll no. 326).',
+  };
+  const hamdt255 = {
+    actions: {
+      count: 7,
+      url: 'https://api.congress.gov/v3/amendment/118/hamdt/255/actions?format=json',
+    },
+    amendedBill: {
+      congress: 118,
+      number: '2670',
+      originChamber: 'House',
+      originChamberCode: 'H',
+      title: 'National Defense Authorization Act for Fiscal Year 2024',
+      type: 'HR',
+      updateDateIncludingText: '2026-09-08',
+      url: 'https://api.congress.gov/v3/bill/118/hr/2670?format=json',
+    },
+    chamber: 'House of Representatives',
+    congress: 118,
+    description:
+      "An amendment numbered 64 printed in House Report 118-142 to prohibit the DOD from carrying out the President's Administration climate change executive orders.",
+    latestAction: {
+      ...roy,
+      links: [{ name: 'Roll no. 326', url: 'https://www.congress.gov/votes/house/118-1/326' }],
+    },
+    number: '255',
+    purpose:
+      "Amendment prohibits the Department of Defense from carrying out the Administration's climate change executive orders.",
+    sponsors: [
+      {
+        bioguideId: 'R000614',
+        district: 21,
+        firstName: 'Chip',
+        fullName: 'Rep. Roy, Chip [R-TX-21]',
+        lastName: 'Roy',
+        party: 'R',
+        state: 'TX',
+        url: 'https://api.congress.gov/v3/member/R000614?format=json',
+      },
+    ],
+    submittedDate: '2023-07-14T04:00:00Z',
+    textVersions: {
+      count: 1,
+      url: 'https://api.congress.gov/v3/amendment/118/hamdt/255/text?format=json',
+    },
+    type: 'HAMDT',
+    updateDate: '2025-05-13T11:06:20Z',
+  };
+
+  /** /amendment/118/hamdt/255/actions — the House roll 326 row and the row offering it. */
+  const houseRows = [
+    {
+      actionCode: 'H32111',
+      actionDate: '2023-07-14',
+      actionTime: '10:44:04',
+      recordedVotes: [
+        {
+          chamber: 'House',
+          congress: 118,
+          date: '2023-07-14T14:44:04Z',
+          rollNumber: 326,
+          sessionNumber: 1,
+          url: 'https://clerk.house.gov/evs/2023/roll326.xml',
+        },
+      ],
+      sourceSystem: { code: 2, name: 'House floor actions' },
+      text: roy.text,
+      type: 'Floor',
+    },
+    {
+      actionCode: 'H3A100',
+      actionDate: '2023-07-14',
+      actionTime: '09:30:06',
+      sourceSystem: { code: 2, name: 'House floor actions' },
+      text: 'Amendment (A040) offered by Mr. Roy. (consideration: CR H3582-3584, H3598; text: CR H3582-3583)',
+      type: 'Floor',
+    },
+  ];
+
+  /** /amendment/117/samdt/2137/actions — the Senate vote 312 row and a row recording none. */
+  const senateRows = [
+    {
+      actionDate: '2021-08-08',
+      recordedVotes: [
+        {
+          chamber: 'Senate',
+          congress: 117,
+          date: '2021-08-09T00:45:48Z',
+          rollNumber: 312,
+          sessionNumber: 1,
+          url: 'https://www.senate.gov/legislative/LIS/roll_call_votes/vote1171/vote_117_1_00312.xml',
+        },
+      ],
+      sourceSystem: { code: 0, name: 'Senate' },
+      text: 'Amendment SA 2137 agreed to in Senate by Yea-Nay Vote. 69 - 28. Record Vote Number: 312. ',
+      type: 'Floor',
+    },
+    {
+      actionDate: '2021-08-08',
+      sourceSystem: { code: 0, name: 'Senate' },
+      text: 'Considered by Senate. (consideration: CR S6034, S6056-6057)',
+      type: 'Floor',
+    },
+  ];
+
+  it('declares rollVote on action rows with either chamber', () => {
+    const schema = z.toJSONSchema(amendmentLookupTool.output) as unknown as {
+      properties: {
+        data: {
+          items: {
+            properties: {
+              rollVote: { properties: { chamber: { enum: string[] } }; required: string[] };
+            };
+          };
+        };
+      };
+    };
+    const rollVote = schema.properties.data.items.properties.rollVote;
+    expect(rollVote.properties.chamber.enum).toEqual(['house', 'senate']);
+    expect(rollVote.required).toEqual(['chamber', 'congress', 'session', 'voteNumber']);
+  });
+
+  it("'get' carries every string value of the record on both surfaces", async () => {
+    vi.mocked(getCongressApi).mockReturnValue({
+      getAmendment: vi.fn(async () => ({ amendment: hamdt255 })),
+    } as never);
+    const result = await runToolContract(amendmentLookupTool, {
+      operation: 'get',
+      congress: 118,
+      amendmentType: 'HAMDT',
+      amendmentNumber: '255',
+    });
+    expect(result.isError).toBeFalsy();
+    const structured = amendmentLookupTool.output.parse(result.structuredContent) as {
+      amendment?: unknown;
+    };
+    expect(structured.amendment).toEqual(hamdt255);
+
+    const content = joinText(result.content as Array<{ type: string; text?: string }>);
+    for (const [path, value] of stringLeaves(hamdt255)) expect(content, path).toContain(value);
+    expect(content).toContain('**actions:** 7 available');
+    expect(content).toContain('**textVersions:** 1 available');
+  });
+
+  it.each([
+    [
+      'House roll 326',
+      { congress: 118, amendmentType: 'hamdt', amendmentNumber: 255 },
+      houseRows,
+      { count: 7, nextOffset: 2 },
+      { chamber: 'house', congress: 118, session: 1, voteNumber: 326 },
+      '**House Roll Vote:** congressgov_roll_votes chamber=house, congress=118, session=1, voteNumber=326',
+    ],
+    [
+      'Senate vote 312',
+      { congress: 117, amendmentType: 'samdt', amendmentNumber: 2137 },
+      senateRows,
+      { count: 3, nextOffset: 2 },
+      { chamber: 'senate', congress: 117, session: 1, voteNumber: 312 },
+      '**Senate Roll Vote:** congressgov_roll_votes chamber=senate, congress=117, session=1, voteNumber=312',
+    ],
+  ])(
+    "'actions' carries the %s pointer in structuredContent, its call in content[], and every row value on both",
+    async (_vote, identity, rows, pagination, rollVote, line) => {
+      vi.mocked(getCongressApi).mockReturnValue({
+        getAmendmentSubResource: vi.fn(async () => ({ data: rows, pagination })),
+      } as never);
+      const result = await runToolContract(amendmentLookupTool, {
+        operation: 'actions',
+        ...identity,
+        limit: 2,
+      });
+      expect(result.isError).toBeFalsy();
+      const structured = amendmentLookupTool.output.parse(result.structuredContent) as {
+        data?: Array<Record<string, unknown>>;
+        pagination?: unknown;
+      };
+      expect(structured.data).toEqual([{ ...rows[0], rollVote }, rows[1]]);
+      expect(structured.pagination).toEqual(pagination);
+
+      const content = joinText(result.content as Array<{ type: string; text?: string }>);
+      expect(content.split(line)).toHaveLength(2);
+      expect(content).toContain(`**${pagination.count} results** | next offset: 2`);
+      for (const [path, value] of stringLeaves(structured.data)) {
+        expect(content, path).toContain(value);
+      }
+    },
+  );
+});
+
+describe('#102 — a filtered roster carries its filter and counts on both surfaces', () => {
+  /** /house-vote/117/1/369/members (2026-11-03), trimmed: the vote context and three members. */
+  const vote = {
+    congress: 117,
+    rollCallNumber: 369,
+    sessionNumber: 1,
+    result: 'Passed',
+    voteQuestion: 'On Motion to Concur in the Senate Amendment',
+  };
+  const roster = [
+    {
+      bioguideId: 'S000168',
+      firstName: 'Maria',
+      lastName: 'Salazar',
+      voteCast: 'Nay',
+      voteParty: 'R',
+      voteState: 'FL',
+    },
+    {
+      bioguideId: 'S001216',
+      firstName: 'Kim',
+      lastName: 'Schrier',
+      voteCast: 'Yea',
+      voteParty: 'D',
+      voteState: 'WA',
+    },
+    {
+      bioguideId: 'J000298',
+      firstName: 'Pramila',
+      lastName: 'Jayapal',
+      voteCast: 'Yea',
+      voteParty: 'D',
+      voteState: 'WA',
+    },
+  ];
+
+  beforeEach(() => {
+    /** Pages the way the service does: the whole roster fetched, sliced by limit/offset. */
+    vi.mocked(getCongressApi).mockReturnValue({
+      getVoteMembers: vi.fn(async ({ limit, offset }: { limit: number; offset: number }) => {
+        const data = roster.slice(offset, offset + limit);
+        const next = offset + data.length;
+        return {
+          data,
+          vote,
+          pagination: { count: roster.length, nextOffset: next < roster.length ? next : null },
+        };
+      }),
+    } as never);
+  });
+
+  it('renders every structured value of a filtered page in content[]', async () => {
+    const result = await runToolContract(rollVotesTool, {
+      operation: 'members',
+      congress: 117,
+      session: 1,
+      voteNumber: 369,
+      stateCode: 'WA',
+      limit: 1,
+      offset: 1,
+    });
+    expect(result.isError).toBeFalsy();
+    const structured = rollVotesTool.output.parse(result.structuredContent) as {
+      data: Array<Record<string, unknown>>;
+      pagination: { count: number; nextOffset: number | null };
+      memberFilter?: Record<string, unknown>;
+    };
+    expect(structured.data).toEqual([roster[2]]);
+    expect(structured.pagination).toEqual({ count: 2, nextOffset: null });
+    expect(structured.memberFilter).toEqual({ stateCode: 'WA', rosterCount: 3 });
+
+    const content = joinText(result.content as Array<{ type: string; text?: string }>);
+    expect(content).toContain('**Filter:** stateCode=WA — matches 2 of 3 member positions');
+    expect(content).toContain('**Members 2–2 of 2**');
+    expect(content).toContain('- Pramila Jayapal (D-WA) → Yea');
+    expect(content).toContain('J000298');
+  });
+
+  it('reports a filter matching nothing on both surfaces without claiming an empty roster', async () => {
+    const result = await runToolContract(rollVotesTool, {
+      operation: 'members',
+      congress: 117,
+      session: 1,
+      voteNumber: 369,
+      bioguideId: 'Z000017',
+    });
+    const structured = result.structuredContent as {
+      data: unknown[];
+      memberFilter?: Record<string, unknown>;
+      notice?: string;
+    };
+    expect(structured.data).toEqual([]);
+    expect(structured.memberFilter).toEqual({ bioguideId: 'Z000017', rosterCount: 3 });
+    expect(structured.notice).toContain('bioguideId=Z000017');
+
+    const content = joinText(result.content as Array<{ type: string; text?: string }>);
+    expect(content).toContain('**Filter:** bioguideId=Z000017 — matches 0 of 3 member positions');
+    expect(content).toContain('bioguideId=Z000017');
+    expect(content).not.toContain('No member positions recorded');
+  });
+});
+
+/** Every value of a `content` window, as `content[]` renders it. */
+function expectWindowRendered(window: Record<string, unknown>, rendered: string): void {
+  const total = window.totalCharacters as number;
+  const offset = window.offset as number;
+  const text = window.text as string;
+  expect(rendered).toContain(`# ${window.documentTitle as string}`);
+  expect(rendered).toContain(`**Format:** ${window.format as string}`);
+  expect(rendered).toContain(
+    `**Characters ${(offset + 1).toLocaleString('en-US')}–${(offset + text.length).toLocaleString('en-US')} of ${total.toLocaleString('en-US')}**`,
+  );
+  expect(rendered).toContain(`**Truncated:** ${String(window.truncated)}`);
+  expect(rendered).toContain(`offset: ${offset}`);
+  expect(rendered).toContain(
+    window.nextOffset === null
+      ? '_end of document_'
+      : `next offset: ${window.nextOffset as number}`,
+  );
+  expect(rendered).toContain(`**Source:** ${window.sourceUrl as string}`);
+  expect(rendered).toContain(`\`\`\`\n${text}\n\`\`\``);
+}
+
+describe('#95 — a multi-part committee report carries its parts on both surfaces', () => {
+  const records = [
+    { citation: 'H. Rept. 117-70,Part 2', part: 2, title: 'Part two title' },
+    { citation: 'H. Rept. 117-70', part: 1, title: 'Part one title' },
+  ];
+  const text = [
+    {
+      formats: [
+        {
+          isErrata: 'N',
+          type: 'PDF',
+          url: 'https://www.congress.gov/117/crpt/hrpt70/CRPT-117hrpt70-pt2.pdf',
+        },
+      ],
+    },
+    {
+      formats: [
+        {
+          isErrata: 'N',
+          type: 'PDF',
+          url: 'https://www.congress.gov/117/crpt/hrpt70/CRPT-117hrpt70.pdf',
+        },
+      ],
+    },
+  ];
+
+  beforeEach(() => {
+    vi.mocked(getCongressApi).mockReturnValue({
+      getCommitteeReport: vi.fn(async () => ({ reports: records })),
+      getCommitteeReportText: vi.fn(async () => ({ text })),
+    } as never);
+  });
+
+  it("'get' renders the selected record and every part number", async () => {
+    const result = await runToolContract(committeeReportsTool, {
+      operation: 'get',
+      congress: 117,
+      reportType: 'hrpt',
+      reportNumber: 70,
+      part: 2,
+    });
+    const structured = committeeReportsTool.output.parse(result.structuredContent) as {
+      report: Record<string, unknown>;
+      parts: number[];
+    };
+    expect(structured.report).toEqual(records[0]);
+    expect(structured.parts).toEqual([1, 2]);
+    const content = joinText(result.content as Array<{ type: string; text?: string }>);
+    for (const value of ['H. Rept. 117-70,Part 2', 'Part two title', '**Parts:** 1, 2']) {
+      expect(content).toContain(value);
+    }
+    expect(content).not.toContain('Part one title');
+  });
+
+  it("'text' renders the selected part's format URLs and every part number", async () => {
+    const result = await runToolContract(committeeReportsTool, {
+      operation: 'text',
+      congress: 117,
+      reportType: 'hrpt',
+      reportNumber: 70,
+    });
+    expect(result.structuredContent).toMatchObject({ text: [text[1]], parts: [1, 2] });
+    const content = joinText(result.content as Array<{ type: string; text?: string }>);
+    expect(content).toContain('https://www.congress.gov/117/crpt/hrpt70/CRPT-117hrpt70.pdf');
+    expect(content).not.toContain('-pt2.pdf');
+    expect(content).toContain('**Parts:** 1, 2');
+  });
+});
+
+describe('#101 — a CRS report window carries every value on both surfaces', () => {
+  const HTML_URL = 'https://www.congress.gov/crs_external_products/IN/HTML/IN12753.html';
+  const PAGE =
+    '<html><body><h1>Insight</h1><p>One &amp; two.</p><script>Highcharts.x()</script></body></html>';
+
+  beforeEach(() => {
+    vi.mocked(getCongressApi).mockReturnValue({
+      getCrsReport: vi.fn(async () => ({
+        report: { id: 'IN12753', formats: [{ format: 'HTML', url: HTML_URL }] },
+      })),
+    } as never);
+    initCongressDocuments();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(PAGE, { headers: { 'content-type': 'text/html' } })),
+    );
+  });
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it.each([
+    [0, 25_000],
+    [3, 8],
+  ])('renders the window at offset %i, limit %i', async (characterOffset, characterLimit) => {
+    const result = await runToolContract(crsReportsTool, {
+      operation: 'content',
+      reportNumber: 'IN12753',
+      characterOffset,
+      characterLimit,
+    });
+    expect(result.isError).toBeFalsy();
+    const window = (result.structuredContent as { content: Record<string, unknown> }).content;
+    expect(window).toMatchObject({
+      text: 'Insight\n\nOne & two.'.slice(characterOffset, characterOffset + characterLimit),
+      totalCharacters: 'Insight\n\nOne & two.'.length,
+      format: 'html',
+      documentTitle: 'CRS Report IN12753',
+      sourceUrl: HTML_URL,
+    });
+    expectWindowRendered(
+      window,
+      joinText(result.content as Array<{ type: string; text?: string }>),
+    );
   });
 });

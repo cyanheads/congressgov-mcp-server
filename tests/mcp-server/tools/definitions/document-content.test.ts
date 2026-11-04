@@ -169,6 +169,18 @@ describe('congressgov_bill_lookup — content', () => {
     expect(String(enrichment.effectiveQuery)).toContain('Enrolled Bill');
   });
 
+  it('spells the congress ordinal in the content echo (#94)', async () => {
+    const ctx = createMockContext({ errors: billLookupTool.errors });
+    const input = billLookupTool.input.parse({
+      operation: 'content',
+      congress: 102,
+      billType: 'hr',
+      billNumber: 1,
+    });
+    await billLookupTool.handler(input, ctx);
+    expect(String(getEnrichment(ctx).effectiveQuery)).toContain('(102nd Congress)');
+  });
+
   it('fetches exactly the selected text version, one upstream row', async () => {
     const ctx = createMockContext({ errors: billLookupTool.errors });
     const input = billLookupTool.input.parse({
@@ -202,7 +214,7 @@ describe('congressgov_bill_lookup — content', () => {
     );
   });
 
-  it('passes the character window through to the document service unchanged', async () => {
+  it('passes the character window through to the document service unchanged, read as GPO', async () => {
     const ctx = createMockContext({ errors: billLookupTool.errors });
     const input = billLookupTool.input.parse({
       operation: 'content',
@@ -214,7 +226,7 @@ describe('congressgov_bill_lookup — content', () => {
     });
     await billLookupTool.handler(input, ctx);
     expect(mockDocuments.fetchDocument).toHaveBeenCalledWith(
-      { url: HTM, characterOffset: 12, characterLimit: 34 },
+      { url: HTM, characterOffset: 12, characterLimit: 34, reading: 'gpo' },
       ctx,
     );
   });
@@ -443,6 +455,21 @@ describe('congressgov_committee_reports — content', () => {
     expect((result.content as Record<string, unknown>).sourceUrl).toBe(CRPT);
   });
 
+  it('reads the report as a GPO publication', async () => {
+    const ctx = createMockContext({ errors: committeeReportsTool.errors });
+    const input = committeeReportsTool.input.parse({
+      operation: 'content',
+      congress: 118,
+      reportType: 'hrpt',
+      reportNumber: 1,
+    });
+    await committeeReportsTool.handler(input, ctx);
+    expect(mockDocuments.fetchDocument).toHaveBeenCalledWith(
+      { url: CRPT, characterOffset: 0, characterLimit: 25_000, reading: 'gpo' },
+      ctx,
+    );
+  });
+
   it('fails with format_unavailable for xml, which committee reports never publish', async () => {
     const ctx = createMockContext({ errors: committeeReportsTool.errors });
     const input = committeeReportsTool.input.parse({
@@ -520,6 +547,10 @@ describe('congressgov_daily_record — content', () => {
     expect(rendered).toContain('COMMITTEE MEETINGS');
     expectFencedDocument(rendered, DOC_TEXT.slice(0, 30));
     expect(getEnrichment(ctx).totalCount).toBe(DOC_TEXT.length);
+    expect(mockDocuments.fetchDocument).toHaveBeenCalledWith(
+      { url: CREC, characterOffset: 0, characterLimit: 30, reading: 'gpo' },
+      ctx,
+    );
   });
 
   it('accepts the digit-string identifiers list rows carry', async () => {

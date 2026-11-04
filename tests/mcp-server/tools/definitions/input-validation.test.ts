@@ -13,6 +13,7 @@ vi.mock('@/services/congress-api/congress-api-service.js', () => ({
   initCongressApi: vi.fn(),
 }));
 
+import { amendmentLookupTool } from '@/mcp-server/tools/definitions/amendment-lookup.tool.js';
 import { billLookupTool } from '@/mcp-server/tools/definitions/bill-lookup.tool.js';
 import { billSummariesTool } from '@/mcp-server/tools/definitions/bill-summaries.tool.js';
 import { committeeLookupTool } from '@/mcp-server/tools/definitions/committee-lookup.tool.js';
@@ -415,6 +416,44 @@ describe('committeeReportsTool — handler validation', () => {
     // congress is required in the schema — parse throws before the handler runs
     expect(() => committeeReportsTool.input.parse({ operation: 'list' })).toThrow();
   });
+
+  const report = { operation: 'get', congress: 117, reportType: 'hrpt', reportNumber: 70 };
+
+  it.each([0, -1, 1.5, '2'])('rejects part %j at parse time', (part) => {
+    expect(committeeReportsTool.input.safeParse({ ...report, part }).success).toBe(false);
+  });
+
+  it('accepts a positive integer part and leaves an omitted one unset', () => {
+    expect(committeeReportsTool.input.parse({ ...report, part: 3 }).part).toBe(3);
+    expect(committeeReportsTool.input.parse(report).part).toBeUndefined();
+  });
+});
+
+describe('crsReportsTool — content window validation', () => {
+  it.each([
+    { characterOffset: -1 },
+    { characterLimit: 0 },
+    { characterLimit: 100_001 },
+    { characterOffset: 1.5 },
+  ])('rejects %j at parse time', (window) => {
+    expect(
+      crsReportsTool.input.safeParse({ operation: 'content', reportNumber: 'R46406', ...window })
+        .success,
+    ).toBe(false);
+  });
+
+  it('defaults the window to the first 25,000 characters and takes no format', () => {
+    expect(
+      crsReportsTool.input.parse({ operation: 'content', reportNumber: 'R46406' }),
+    ).toMatchObject({ characterOffset: 0, characterLimit: 25_000 });
+    expect(
+      crsReportsTool.input.safeParse({
+        operation: 'content',
+        reportNumber: 'R46406',
+        format: 'text',
+      }).success,
+    ).toBe(false);
+  });
 });
 
 describe('crsReportsTool — handler validation', () => {
@@ -604,7 +643,7 @@ describe('committeeReportsTool — enrichment', () => {
   });
 
   it('sets effectiveQuery on get', async () => {
-    mockApi.getCommitteeReport.mockResolvedValue({ report: { title: 'Report' } });
+    mockApi.getCommitteeReport.mockResolvedValue({ reports: [{ title: 'Report' }] });
     const ctx = createMockContext({ errors: committeeReportsTool.errors });
     const input = committeeReportsTool.input.parse({
       operation: 'get',
@@ -631,6 +670,7 @@ describe('error contracts', () => {
     'upstream_timeout',
   ];
   const contractTools = {
+    amendment_lookup: amendmentLookupTool,
     bill_lookup: billLookupTool,
     bill_summaries: billSummariesTool,
     committee_lookup: committeeLookupTool,
@@ -649,6 +689,28 @@ describe('error contracts', () => {
       expect(reasons).toEqual(expect.arrayContaining(REQUIRED_REASONS));
     });
   }
+
+  it.each([
+    ['amendment_lookup', amendmentLookupTool],
+    ['bill_lookup', billLookupTool],
+    ['committee_reports', committeeReportsTool],
+    ['crs_reports', crsReportsTool],
+    ['daily_record', dailyRecordTool],
+  ] as const)(
+    '%s advertises the document error contract its content operation raises',
+    (_name, contentTool) => {
+      const reasons = (contentTool.errors ?? []).map((entry) => entry.reason);
+      expect(reasons).toEqual(
+        expect.arrayContaining([
+          'document_unavailable',
+          'format_unavailable',
+          'document_fetch_failed',
+          'document_too_large',
+          'offset_past_end',
+        ]),
+      );
+    },
+  );
 });
 
 // ── Strict inputs ────────────────────────────────────────────────────────────
@@ -662,6 +724,7 @@ describe('error contracts', () => {
  */
 describe('strict tool inputs', () => {
   const strictTools = {
+    amendment_lookup: [amendmentLookupTool, { operation: 'list', congress: 118 }],
     bill_lookup: [billLookupTool, { operation: 'list', congress: 118 }],
     bill_summaries: [billSummariesTool, { congress: 118 }],
     committee_lookup: [committeeLookupTool, { operation: 'list', chamber: 'house' }],

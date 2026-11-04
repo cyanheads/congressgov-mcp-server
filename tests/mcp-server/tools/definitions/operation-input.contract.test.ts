@@ -11,10 +11,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('@/services/congress-api/congress-api-service.js', () => ({ getCongressApi: vi.fn() }));
 vi.mock('@/services/senate-lis/senate-vote-service.js', () => ({ getSenateVoteService: vi.fn() }));
 
+import { amendmentLookupTool } from '@/mcp-server/tools/definitions/amendment-lookup.tool.js';
 import { billLookupTool } from '@/mcp-server/tools/definitions/bill-lookup.tool.js';
+import { committeeLookupTool } from '@/mcp-server/tools/definitions/committee-lookup.tool.js';
 import { committeeReportsTool } from '@/mcp-server/tools/definitions/committee-reports.tool.js';
 import { crsReportsTool } from '@/mcp-server/tools/definitions/crs-reports.tool.js';
 import { dailyRecordTool } from '@/mcp-server/tools/definitions/daily-record.tool.js';
+import { enactedLawsTool } from '@/mcp-server/tools/definitions/enacted-laws.tool.js';
+import { memberLookupTool } from '@/mcp-server/tools/definitions/member-lookup.tool.js';
 import { rollVotesTool } from '@/mcp-server/tools/definitions/roll-votes.tool.js';
 import { senateNominationsTool } from '@/mcp-server/tools/definitions/senate-nominations.tool.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
@@ -25,6 +29,9 @@ const api = {
   listBills: vi.fn(),
   getBill: vi.fn(),
   getBillSubResource: vi.fn(),
+  listAmendments: vi.fn(),
+  getAmendment: vi.fn(),
+  getAmendmentSubResource: vi.fn(),
   listVotes: vi.fn(),
   getVote: vi.fn(),
   listNominations: vi.fn(),
@@ -35,14 +42,25 @@ const api = {
   getCommitteeReport: vi.fn(),
   listDailyRecord: vi.fn(),
   getDailyIssues: vi.fn(),
+  listMembers: vi.fn(),
+  getMember: vi.fn(),
+  getMemberLegislation: vi.fn(),
+  listLaws: vi.fn(),
+  getLaw: vi.fn(),
+  listCommittees: vi.fn(),
+  getCommittee: vi.fn(),
+  getCommitteeSubResource: vi.fn(),
 };
 
 beforeEach(() => {
   vi.resetAllMocks();
   for (const mock of Object.values(api)) mock.mockResolvedValue(emptyPage);
   api.getBill.mockResolvedValue({ bill: { title: 'Test bill', number: '27', type: 'HR' } });
+  api.getAmendment.mockResolvedValue({
+    amendment: { type: 'HAMDT', number: '255', purpose: 'Test amendment' },
+  });
   api.getCrsReport.mockResolvedValue({ report: { id: 'IF13328', title: 'Test CRS report' } });
-  api.getCommitteeReport.mockResolvedValue({ report: { title: 'Test committee report' } });
+  api.getCommitteeReport.mockResolvedValue({ reports: [{ title: 'Test committee report' }] });
   api.getNomination.mockResolvedValue({ nomination: { number: '1000' } });
   api.getVote.mockResolvedValue({ vote: { rollCallNumber: 1 } });
   vi.mocked(getCongressApi).mockReturnValue(api as never);
@@ -83,13 +101,13 @@ describe('existing operation behavior', () => {
     expect(rendered(result)).toContain('Test bill');
   });
 
-  it('keeps canonical CRS case folding and numeric-to-string repair', async () => {
+  it('keeps canonical CRS key case folding and upper-cases the report ID', async () => {
     const result = await runToolContract(crsReportsTool, {
       operation: 'get',
-      report_number: 40097,
+      report_number: 'r40097',
     });
     expect(result.isError).not.toBe(true);
-    expect(api.getCrsReport).toHaveBeenCalledWith({ reportNumber: '40097' }, expect.anything());
+    expect(api.getCrsReport).toHaveBeenCalledWith({ reportNumber: 'R40097' }, expect.anything());
     expect(rendered(result)).toContain('Test CRS report');
   });
 
@@ -146,6 +164,27 @@ describe('existing operation behavior', () => {
     expect(schema.properties).not.toHaveProperty('type');
     expect(schema.properties).not.toHaveProperty('number');
   });
+
+  it('keeps declared amendment schema enum, optionality, bounds, and defaults', () => {
+    const schema = z.toJSONSchema(amendmentLookupTool.input, { io: 'input' });
+    expect(schema.properties?.operation).toMatchObject({
+      enum: ['list', 'get', 'actions', 'cosponsors', 'amendments', 'text', 'content'],
+      description: 'Which data to retrieve.',
+    });
+    /** Rows emit `HAMDT`; the schema accepts any case but advertises the path form. */
+    expect(schema.properties?.amendmentType).toMatchObject({
+      type: 'string',
+      enum: ['hamdt', 'samdt', 'suamdt'],
+    });
+    expect(schema.properties?.amendmentNumber).toMatchObject({
+      anyOf: [{ type: 'integer' }, { type: 'string', pattern: '^0*[1-9]\\d*$' }],
+    });
+    expect(schema.required).toEqual(['operation', 'congress']);
+    expect(schema.properties?.limit).toMatchObject({ default: 20, minimum: 1, maximum: 250 });
+    expect(schema.properties?.textVersionIndex).toMatchObject({ default: 0, minimum: 0 });
+    expect(schema.properties).not.toHaveProperty('type');
+    expect(schema.properties).not.toHaveProperty('number');
+  });
 });
 
 describe('explicit list operations', () => {
@@ -154,6 +193,12 @@ describe('explicit list operations', () => {
       billLookupTool,
       { operation: 'list', congress: 119, billNumber: '999999' },
       'billNumber',
+      'get',
+    ],
+    [
+      amendmentLookupTool,
+      { operation: 'list', congress: 118, amendmentType: 'HAMDT', amendmentNumber: '255' },
+      'amendmentNumber',
       'get',
     ],
     [
@@ -181,7 +226,22 @@ describe('explicit list operations', () => {
       'reportNumber',
       'get',
     ],
+    [committeeReportsTool, { operation: 'list', congress: 119, part: 2 }, 'part', 'get'],
     [dailyRecordTool, { operation: 'list', volumeNumber: '172' }, 'volumeNumber', 'issues'],
+    [memberLookupTool, { operation: 'list', bioguideId: 'J000298' }, 'bioguideId', 'get'],
+    [
+      enactedLawsTool,
+      { operation: 'list', congress: 118, lawType: 'pub', lawNumber: '118-2' },
+      'lawNumber',
+      'get',
+    ],
+    [committeeLookupTool, { operation: 'list', committeeCode: 'ssju00' }, 'committeeCode', 'get'],
+    [
+      committeeLookupTool,
+      { operation: 'list', committeeCode: 'Judiciary' },
+      'committeeCode',
+      'filter',
+    ],
   ] as const;
 
   for (const [definition, input, field, compatibleOperation] of cases) {
@@ -280,6 +340,48 @@ describe('Congress.gov identifier aliases', () => {
     expect(api.getBillSubResource).not.toHaveBeenCalled();
   });
 
+  it.each(['HAMDT', 'hamdt', 'Hamdt', 'SAMDT', 'sAmDt', 'SUAMDT'])(
+    'accepts amendment type %s with the digit-string number rows carry',
+    async (amendmentType) => {
+      const result = await runToolContract(amendmentLookupTool, {
+        operation: 'get',
+        congress: 118,
+        amendmentType,
+        amendmentNumber: '255',
+      });
+      expect(result.isError).not.toBe(true);
+      expect(api.getAmendment).toHaveBeenCalledWith(
+        { congress: 118, amendmentType: amendmentType.toLowerCase(), amendmentNumber: 255 },
+        expect.anything(),
+      );
+      expect(rendered(result)).toContain('Test amendment');
+    },
+  );
+
+  it.each([
+    {
+      operation: 'get',
+      congress: 118,
+      amendmentType: 'hamdt',
+      type: 'samdt',
+      amendmentNumber: 255,
+    },
+    { operation: 'get', congress: 118, amendmentType: 'hamdt', amendmentNumber: 255, number: 256 },
+    { operation: 'get', congress: 118, amendmentType: 'hres', amendmentNumber: 255 },
+    { operation: 'get', congress: 118, amendmentType: 'hamdt', amendmentNumber: 'A040' },
+    { operation: 'get', congress: 118, amendmentType: 'hamdt', amendmentNumber: 0 },
+    { operation: 'votes', congress: 118, amendmentType: 'hamdt', amendmentNumber: 255 },
+    { congress: 118, amendmentType: 'hamdt', amendmentNumber: 255 },
+  ])('rejects invalid or colliding amendment inputs %j', async (input) => {
+    const result = await runToolContract(amendmentLookupTool, input);
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      error: { code: JsonRpcErrorCode.InvalidParams },
+    });
+    expect(api.getAmendment).not.toHaveBeenCalled();
+    expect(api.getAmendmentSubResource).not.toHaveBeenCalled();
+  });
+
   it.each([
     { operation: 'get', reportNumber: 'IF13328', id: 'R40097' },
     { operation: 'get', id: 'IF13328', reportId: 'R40097' },
@@ -294,11 +396,17 @@ describe('Congress.gov identifier aliases', () => {
     expect(api.getCrsReport).not.toHaveBeenCalled();
   });
 
-  it.each(['id', 'reportId', 'report_id'])('repairs numeric CRS %s', async (alias) => {
-    const result = await runToolContract(crsReportsTool, { operation: 'get', [alias]: 40097 });
-    expect(result.isError).not.toBe(true);
-    expect(api.getCrsReport).toHaveBeenCalledWith({ reportNumber: '40097' }, expect.anything());
-  });
+  it.each(['id', 'reportId', 'report_id'])(
+    'refuses a numeric CRS %s, which no report ID is, before any request',
+    async (alias) => {
+      const result = await runToolContract(crsReportsTool, { operation: 'get', [alias]: 40097 });
+      expect(result.structuredContent).toMatchObject({
+        error: { code: JsonRpcErrorCode.InvalidParams },
+      });
+      expect(rendered(result)).toContain('reportNumber');
+      expect(api.getCrsReport).not.toHaveBeenCalled();
+    },
+  );
 
   it('checks bill alias identity against the explicit list operation', async () => {
     const result = await runToolContract(billLookupTool, {
@@ -366,10 +474,37 @@ describe('allowed browse and detail inputs', () => {
       expect.objectContaining({ reportType: 'hrpt' }),
       expect.anything(),
     );
+    expect(
+      (
+        await runToolContract(amendmentLookupTool, {
+          operation: 'list',
+          congress: 118,
+          type: 'HAMDT',
+          limit: 250,
+          offset: 250,
+        })
+      ).isError,
+    ).not.toBe(true);
+    expect(api.listAmendments).toHaveBeenCalledWith(
+      expect.objectContaining({ congress: 118, amendmentType: 'hamdt', limit: 250, offset: 250 }),
+      expect.anything(),
+    );
   });
 
   it('keeps detail operations with harmless pagination and selectors', async () => {
     const calls = [
+      [
+        amendmentLookupTool,
+        {
+          operation: 'get',
+          congress: 118,
+          amendmentType: 'hamdt',
+          amendmentNumber: 255,
+          limit: 2,
+          offset: 9,
+        },
+        { amendment: { type: 'HAMDT', number: '255' } },
+      ],
       [
         rollVotesTool,
         { operation: 'get', congress: 119, session: 1, voteNumber: 1, limit: 2, offset: 9 },
