@@ -1,5 +1,7 @@
 /**
- * @fileoverview Bundle agent-doc filtering preserves executable dependency subdirectories.
+ * @fileoverview Bundle agent-doc filtering preserves executable dependency subdirectories
+ * and strips package-root agent trees, package-root AGENTS.md/CLAUDE.md, and every
+ * dependency SKILL.md.
  * @module tests/scripts/agent-doc-packaging.test
  */
 
@@ -18,7 +20,6 @@ const runtimeEntries = [
   'node_modules/example/dist/framework-skills/index.js',
   'node_modules/example/dist/.claude/index.js',
   'node_modules/example/dist/.agents/index.js',
-  'node_modules/example/dist/SKILL.md',
   'node_modules/outer/node_modules/@scope/inner/dist/skills/index.mjs',
   'node_modules/@scope/outer/node_modules/inner/lib/skills/index.js',
   'node_modules/outer/node_modules/inner/node_modules/@scope/deep/dist/skills/index.mjs',
@@ -31,6 +32,11 @@ const agentDocEntries = [
   'node_modules/example/.claude/settings.json',
   'node_modules/example/.agents/skills/research/SKILL.md',
   'node_modules/example/SKILL.md',
+  'node_modules/example/dist/SKILL.md',
+  'node_modules/example/AGENTS.md',
+  'node_modules/example/CLAUDE.md',
+  'node_modules/@scope/example/AGENTS.md',
+  'node_modules/outer/node_modules/inner/CLAUDE.md',
   'node_modules/@scope/example/skills/research/references/guide.md',
   'node_modules/@scope/example/framework-skills/add-tool/SKILL.md',
   'node_modules/@scope/example/.claude/settings.json',
