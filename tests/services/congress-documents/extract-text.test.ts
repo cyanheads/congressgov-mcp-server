@@ -10,7 +10,22 @@ import { describe, expect, it } from 'vitest';
 import {
   extractDocumentText,
   extractHtmlText,
+  isWhitespace,
 } from '@/services/congress-documents/extract-text.js';
+
+describe('isWhitespace', () => {
+  /** The whitespace `String.prototype.trim` removes, which decides what a cell holds before a table (#118). */
+  it('agrees with String.prototype.trim on every BMP code unit', () => {
+    const disagreements: string[] = [];
+    for (let code = 0; code <= 0xffff; code++) {
+      const ch = String.fromCharCode(code);
+      if (isWhitespace(ch) !== (ch.trim() === '')) {
+        disagreements.push(`U+${code.toString(16).toUpperCase().padStart(4, '0')}`);
+      }
+    }
+    expect(disagreements).toEqual([]);
+  });
+});
 
 describe('extractDocumentText', () => {
   it('unwraps a bare <pre> body and keeps the print layout verbatim', () => {
@@ -474,6 +489,116 @@ describe('extractHtmlText', () => {
           '<table><tr><td>x<table><tr><td>a</td><td>b</td></tr></table>y</td><td>z</td></tr></table>',
         ),
       ).toBe('x\n\na\tb\n\ny\tz');
+    });
+
+    it('keeps a top-level one-row table a row of tab-joined cells', () => {
+      expect(extractHtmlText('<p>a</p><table><tr><td>$838</td><td>.2</td></tr></table>')).toBe(
+        'a\n\n$838\t.2',
+      );
+    });
+
+    /**
+     * CRS reports wrap a figure in a one-row table at the start of its cell —
+     * one cell to right-align it, two to split it at the decimal point. A table
+     * that opens a cell before any of the cell's text is the cell's content:
+     * its rows separate like any block inside a cell, and its cells add nothing.
+     */
+    describe('a table that opens a cell', () => {
+      it.each([
+        [
+          'a figure split at its decimal point',
+          '<table><tr><td><p>2021</p></td><td><p><table><tr><td>$838</td><td>.2</td></tr></table></p></td></tr></table>',
+          '2021\t$838.2',
+        ],
+        [
+          'an empty one after a no-break space',
+          '<table><tr><td>a</td><td>&nbsp;<p><table><tr><td></td></tr></table></p></td><td>c</td></tr></table>',
+          'a\t \tc',
+        ],
+        [
+          'one the rest of its cell follows',
+          '<table><tr><td><table><tr><td>750</td></tr></table><p>(est.)</p></td><td>c</td></tr></table>',
+          '750 (est.)\tc',
+        ],
+        [
+          'one of several rows',
+          '<table><tr><td><table><tr><td>a</td></tr><tr><td>b</td></tr></table></td><td>c</td></tr></table>',
+          'a b\tc',
+        ],
+        [
+          'one left open, which ends at the next </table>',
+          '<table><tr><td><table><tr><td>1</td></tr></td><td>2</td></tr></table><p>after</p>',
+          '1 2 after',
+        ],
+        [
+          'one inside another',
+          '<table><tr><td><table><tr><td><table><tr><td>$1</td><td>.5</td></tr></table></td></tr></table></td><td>c</td></tr></table>',
+          '$1.5\tc',
+        ],
+        [
+          'one after an empty one in the same cell',
+          '<table><tr><td><table><tr><td></td></tr></table><table><tr><td>750</td></tr></table></td><td>c</td></tr></table>',
+          '750\tc',
+        ],
+        [
+          'one in a cell whose end tag was omitted',
+          '<table><tr><td>a<td><table><tr><td>1</td></tr></table><td>c</table>',
+          'a\t1\tc',
+        ],
+        [
+          'one after an em space',
+          '<table><tr><td>a</td><td>&#x2003;<table><tr><td>1</td></tr></table></td></tr></table>',
+          'a\t  1',
+        ],
+        [
+          'one never closed, to the end of the document',
+          '<table><tr><td><table><tr><td>a</td></tr><tr><td>b<p>c</p>',
+          'a b c',
+        ],
+      ])('reads %s as the cell’s content', (_label, body, expected) => {
+        expect(extractHtmlText(body)).toBe(expected);
+      });
+
+      it('lays out a table that opens after text in its cell as its own block', () => {
+        expect(
+          extractHtmlText(
+            '<table><tr><td><table><tr><td>a</td></tr></table><table><tr><td>b</td><td>c</td></tr></table>d</td><td>e</td></tr></table>',
+          ),
+        ).toBe('a\n\nb\tc\n\nd\te');
+        expect(
+          extractHtmlText(
+            '<table><tr><td>&lt;<table><tr><td>a</td><td>b</td></tr></table></td></tr></table>',
+          ),
+        ).toBe('<\n\na\tb');
+      });
+
+      it('reads a cell-opening table inside a nested table as that inner cell’s content', () => {
+        expect(
+          extractHtmlText(
+            '<table><tr><td>x<table><tr><td><table><tr><td>1</td></tr></table></td><td>2</td></tr></table>y</td><td>z</td></tr></table>',
+          ),
+        ).toBe('x\n\n1\t2\n\ny\tz');
+      });
+
+      it('keeps each row of a CRS figure table on one line', () => {
+        const label = (text: string) =>
+          `<td style="width:114.7pt;" valign="top">\n<p class="TableText" style="padding-left:18pt;">${text}</p>\n</td>\n`;
+        const figure = (value: string) =>
+          `<td style="width:39.2pt;" valign="top">\n<p class="TableText" style="">\n<table border="0" cellpadding="0" cellspacing="0">\n<tr>\n<td style="width:59.75pt;text-align:right;" valign="top">${value}</td>\n</tr>\n</table>\n</p>\n</td>\n`;
+        const blank =
+          '<td style="width:39.2pt;" valign="top"> <p class="TableText" style="">\n<table border="0" cellpadding="0" cellspacing="0">\n<tr>\n<td style="width:59.75pt;text-align:right;" valign="top"></td>\n</tr>\n</table>\n</p>\n</td>\n';
+        const body = `<table>\n<tr style="height:15pt;">\n${label('<strong>Title III. Trade</strong>')}${blank}${blank}</tr>\n<tr style="height:15pt;">\n${label('Authorization of appropriations')}${figure('750')}${figure('750')}</tr>\n<tr style="height:15pt;">\n${label('Estimated outlays')}${figure('627')}${figure('750')}</tr>\n</table>`;
+        expect(extractHtmlText(body)).toBe(
+          'Title III. Trade\t \t \nAuthorization of appropriations\t750\t750\nEstimated outlays\t627\t750',
+        );
+      });
+
+      it('joins each CRS figure split at its decimal point', () => {
+        const split = (whole: string, fraction: string) =>
+          `<td valign="middle">\n<p class="TableText" style="text-align:center;">\n<table border="0" cellpadding="0" cellspacing="0">\n<tr>\n<td style="width:36pt;text-align:right;" valign="top">${whole}</td><td valign="top">${fraction}</td>\n</tr>\n</table>\n</p>\n</td>\n`;
+        const body = `<table><tr style="">\n<td valign="middle">\n<p class="TableText" style="text-align:center;">2021</p>\n</td>\n${split('$838', '.2')}${split('$142', '.4')}${split('$980', '.6')}</tr></table>`;
+        expect(extractHtmlText(body)).toBe('2021\t$838.2\t$142.4\t$980.6');
+      });
     });
 
     it('reads a footnote list as number, tab, text', () => {

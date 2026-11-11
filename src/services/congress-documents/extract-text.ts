@@ -3,7 +3,8 @@
  * index into — the normative, whole-string form of each reading
  * (`DocumentReading`): {@link extractDocumentText} for GPO publications and
  * {@link extractHtmlText} for HTML pages. `extract-text-stream.ts` reproduces
- * both incrementally.
+ * both incrementally, laying the `html` reading out through the same
+ * {@link HtmlLayout}.
  * @module services/congress-documents/extract-text
  */
 
@@ -109,7 +110,8 @@ export function extractDocumentText(body: string): string {
  * - `paragraph` — a blank line before and after (a space inside a table cell)
  * - `line` — a line break before and after (a space inside a table cell)
  * - `row` — a line break; a table row is one line
- * - `table` — a blank line before and after
+ * - `table` — a blank line before and after; a table that opens a cell is
+ *   that cell's content instead ({@link HtmlLayout})
  * - `cell` — a tab between cells of one row
  * - `raw` — `script` and `style`: dropped with everything inside them
  */
@@ -145,6 +147,28 @@ export const MAX_HTML_TAG_NAME = Math.max(...[...HTML_TAG_ROLES.keys()].map((nam
 /** ASCII whitespace as HTML defines it — tab, LF, FF, CR, space. U+00A0 is text. */
 export function isHtmlWhitespace(ch: string): boolean {
   return ch === ' ' || ch === '\n' || ch === '\t' || ch === '\r' || ch === '\f';
+}
+
+/**
+ * Whitespace as `String.prototype.trim` defines it — WhiteSpace plus
+ * LineTerminator, which is also exactly the `\s` character class: tab through
+ * carriage return, space, U+00A0, the other Unicode spaces, and U+FEFF.
+ */
+export function isWhitespace(ch: string): boolean {
+  const code = ch.charCodeAt(0);
+  if (code === 0x20 || (code >= 0x09 && code <= 0x0d)) return true;
+  if (code < 0x80) return false;
+  return (
+    code === 0xa0 ||
+    code === 0x1680 ||
+    (code >= 0x2000 && code <= 0x200a) ||
+    code === 0x2028 ||
+    code === 0x2029 ||
+    code === 0x202f ||
+    code === 0x205f ||
+    code === 0x3000 ||
+    code === 0xfeff
+  );
 }
 
 function isAsciiLetter(ch: string | undefined): boolean {
@@ -257,19 +281,50 @@ function rawTextEnd(body: string, from: number, name: string): number {
   }
 }
 
+/** Where {@link HtmlLayout} puts the `html` reading, piece by piece, in order. */
+export interface HtmlTextSink {
+  /** The reading's next characters: `source[from, to)`. */
+  append(source: string, from: number, to: number): void;
+}
+
+/** Whether `source[from, to)` holds a character that is not whitespace. */
+function holdsText(source: string, from: number, to: number): boolean {
+  for (let k = from; k < to; k++) {
+    if (!isWhitespace(source[k] as string)) return true;
+  }
+  return false;
+}
+
 /**
- * Collects the `html` reading's text and the separators owed between pieces
- * of it. A separator is written only once more text follows, so nothing leads
- * or trails the document, and the strongest one owed wins: a blank line over a
- * line break over tabs over a space.
+ * The `html` reading's layout, which both readers feed in document order:
+ * text, ASCII whitespace, and tag roles in; the reading out, through a sink.
+ * Separators are owed between pieces of text and written only once more text
+ * follows, so nothing leads or trails the document, and the strongest one
+ * owed wins: a blank line over a line break over tabs over a space.
+ *
+ * A table that opens in a cell before any of the cell's text (whitespace,
+ * U+00A0 included, is not text) is the cell's content until its own
+ * `</table>`, the way CRS reports wrap a figure to align it: its table and row
+ * tags are block breaks inside the cell (a space), its cell tags add nothing,
+ * and tables opened inside it are part of it. A table that opens after text in
+ * its cell lays out as any table does. That takes a flag and a counter, never
+ * an element stack.
  */
-class HtmlLayout {
+export class HtmlLayout {
+  /** Whether the open cell has written anything but whitespace. */
+  private cellHasText = false;
+  /** Tables open as a cell's content: the one that opened the cell and those inside it. */
+  private contentTables = 0;
   private inCell = false;
   private newlines = 0;
-  private readonly parts: string[] = [];
+  private readonly sink: HtmlTextSink;
   private space = false;
   private started = false;
   private tabs = 0;
+
+  constructor(sink: HtmlTextSink) {
+    this.sink = sink;
+  }
 
   /** Decoded text: each run of ASCII whitespace separates, everything else is written. */
   text(decoded: string): void {
@@ -282,23 +337,57 @@ class HtmlLayout {
       }
       let end = i + 1;
       while (end < decoded.length && !isHtmlWhitespace(decoded[end] as string)) end++;
-      this.write(decoded.slice(i, end));
+      this.write(decoded, i, end);
       i = end;
     }
   }
 
+  /** ASCII whitespace: a space is owed before the next text. */
+  whitespace(): void {
+    this.space = true;
+  }
+
+  /** Write `source[from, to)`, which holds no ASCII whitespace, after whatever separator is owed. */
+  write(source: string, from: number, to: number): void {
+    if (this.started) {
+      if (this.newlines > 0 || this.tabs > 0) {
+        const separator = '\n'.repeat(this.newlines) + '\t'.repeat(this.tabs);
+        this.sink.append(separator, 0, separator.length);
+      } else if (this.space) {
+        this.sink.append(' ', 0, 1);
+      }
+    }
+    this.sink.append(source, from, to);
+    this.started = true;
+    this.newlines = 0;
+    this.tabs = 0;
+    this.space = false;
+    if (this.inCell && !this.cellHasText) this.cellHasText = holdsText(source, from, to);
+  }
+
   tag(role: HtmlTagRole, isEnd: boolean): void {
+    if (this.contentTables > 0) {
+      if (role === 'table') this.contentTables += isEnd ? -1 : 1;
+      if (role !== 'cell' && role !== 'raw') this.space = true;
+      return;
+    }
     switch (role) {
       case 'cell':
         /** A cell opened inside another closed it: the end tag was omitted. */
         if (isEnd || this.inCell) this.tabs++;
         this.inCell = !isEnd;
+        this.cellHasText = false;
         return;
       case 'row':
         this.inCell = false;
         this.lineBreak(1);
         return;
       case 'table':
+        if (!isEnd && this.inCell && !this.cellHasText) {
+          this.contentTables = 1;
+          this.space = true;
+          return;
+        }
         this.inCell = false;
         this.lineBreak(2);
         return;
@@ -315,29 +404,10 @@ class HtmlLayout {
     }
   }
 
-  finish(): string {
-    return this.parts.join('');
-  }
-
   /** Tabs still owed when a line break arrives trail the row it ends, so they go. */
   private lineBreak(newlines: number): void {
     this.newlines = Math.max(this.newlines, newlines);
     this.tabs = 0;
-  }
-
-  private write(text: string): void {
-    if (this.started) {
-      if (this.newlines > 0 || this.tabs > 0) {
-        this.parts.push('\n'.repeat(this.newlines), '\t'.repeat(this.tabs));
-      } else if (this.space) {
-        this.parts.push(' ');
-      }
-    }
-    this.parts.push(text);
-    this.started = true;
-    this.newlines = 0;
-    this.tabs = 0;
-    this.space = false;
   }
 }
 
@@ -355,12 +425,19 @@ class HtmlLayout {
  * The text is laid out the way a browser shows it, as plain text: each run of
  * ASCII whitespace collapses to one space, {@link HTML_TAG_ROLES} puts line
  * breaks and blank lines between blocks, a table row is one line of trimmed
- * cells joined by tabs, and no line starts or ends with a space. There is no
- * element stack: the only state that outlives a tag is whether a table cell is
- * open, so nesting depth costs nothing.
+ * cells joined by tabs (a table that opens a cell is part of that cell), and
+ * no line starts or ends with a space. There is no element stack: the state
+ * {@link HtmlLayout} keeps across tags is whether a table cell is open,
+ * whether it holds text yet, and a count of the tables that are a cell's
+ * content, so nesting depth costs nothing.
  */
 export function extractHtmlText(body: string): string {
-  const layout = new HtmlLayout();
+  const parts: string[] = [];
+  const layout = new HtmlLayout({
+    append: (source, from, to) => {
+      parts.push(source.slice(from, to));
+    },
+  });
   let runStart = 0;
   let at = 0;
   for (;;) {
@@ -381,5 +458,5 @@ export function extractHtmlText(body: string): string {
     runStart = at;
   }
   layout.text(decodeCharacterReferences(body.slice(runStart)));
-  return layout.finish();
+  return parts.join('');
 }

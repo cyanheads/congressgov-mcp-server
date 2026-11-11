@@ -355,6 +355,32 @@ const HTML_ACCEPTANCE: ReadonlyArray<readonly [string, string]> = [
   ['<scr<b>ipt>x</scr<b>ipt>y', 'ipt>xipt>y'],
   ['<![CDATA[x<y]]>z', 'z'],
   ['<table><tr><td><p>a</p><p>b</p></td><td>c</td></tr></table>', 'a b\tc'],
+  [
+    '<table><tr><td><p>2021</p></td><td><p><table><tr><td>$838</td><td>.2</td></tr></table></p></td></tr></table>',
+    '2021\t$838.2',
+  ],
+  [
+    '<table><tr><td>a</td><td>&nbsp;<p><table><tr><td></td></tr></table></p></td><td>c</td></tr></table>',
+    'a\t \tc',
+  ],
+  [
+    '<table><tr><td><table><tr><td>750</td></tr></table><p>(est.)</p></td><td>c</td></tr></table>',
+    '750 (est.)\tc',
+  ],
+  [
+    '<table><tr><td><table><tr><td>a</td></tr><tr><td>b</td></tr></table></td><td>c</td></tr></table>',
+    'a b\tc',
+  ],
+  [
+    '<table><tr><td><table><tr><td>1</td></tr></td><td>2</td></tr></table><p>after</p>',
+    '1 2 after',
+  ],
+  /** A script, or a stray style end tag, inside a cell-opening table separates nothing. */
+  [
+    '<table><tr><td><table><tr><td>$838<script>x</script ></td><td>.2</td></tr></table></td></tr></table>',
+    '$838.2',
+  ],
+  ['<table><tr><td><table><tr><td>$1</style>.5</td></tr></table></td></tr></table>', '$1.5'],
 ];
 
 /**
@@ -418,6 +444,24 @@ const HTML_CORPUS: Record<string, string> = {
   omittedCellEnd: '<table><tr><td>a<td>b<tr><td>c</table>',
   nestedTable:
     '<table><tr><td>x<table><tr><td>a</td><td>b</td></tr></table>y</td><td>z</td></tr></table>',
+  topLevelOneRowTable: '<p>a</p><table><tr><td>$838</td><td>.2</td></tr></table>',
+  crsFigureRows:
+    '<table>\n<tr style="height:15pt;">\n<td valign="top">\n<p class="TableText"><strong>Title III. Trade</strong></p>\n</td>\n<td valign="top"> <p class="TableText" style="">\n<table border="0" cellpadding="0" cellspacing="0">\n<tr>\n<td style="text-align:right;" valign="top"></td>\n</tr>\n</table>\n</p>\n</td>\n</tr>\n<tr style="height:15pt;">\n<td valign="top">\n<p class="TableText" style="padding-left:18pt;">Authorization of appropriations</p>\n</td>\n<td valign="top">\n<p class="TableText" style="">\n<table border="0" cellpadding="0" cellspacing="0">\n<tr>\n<td style="text-align:right;" valign="top">750</td>\n</tr>\n</table>\n</p>\n</td>\n</tr>\n</table>',
+  crsDecimalSplit:
+    '<table><tr style="">\n<td valign="middle">\n<p class="TableText">2021</p>\n</td>\n<td valign="middle">\n<p class="TableText">\n<table border="0" cellpadding="0" cellspacing="0">\n<tr>\n<td style="width:36pt;text-align:right;" valign="top">$838</td><td valign="top">.2</td>\n</tr>\n</table>\n</p>\n</td>\n<td valign="middle"> <p>\n<table><tr><td>$142</td><td>.4</td></tr></table></p></td></tr></table>',
+  cellOpeningTableInside:
+    '<table><tr><td><table><tr><td><table><tr><td>$1</td><td>.5</td></tr></table></td></tr></table></td><td>c</td></tr></table>',
+  cellOpeningTablesInOneCell:
+    '<table><tr><td><table><tr><td></td></tr></table><table><tr><td>750</td></tr></table><table><tr><td>b</td><td>c</td></tr></table>d</td><td>e</td></tr></table>',
+  cellOpeningTableAfterOmittedEnd:
+    '<table><tr><td>a<td><table><tr><td>1</td></tr></table><td>c</table>',
+  cellOpeningTableInNestedTable:
+    '<table><tr><td>x<table><tr><td><table><tr><td>1</td></tr></table></td><td>2</td></tr></table>y</td><td>z</td></tr></table>',
+  spacesBeforeCellOpeningTable:
+    '<table><tr><td>&#x2003; 　&#160;<table><tr><td>1</td></tr></table></td><td>&lt;<table><tr><td>2</td></tr></table></td><td>&nope;<table><tr><td>3</td></tr></table></td></tr></table>',
+  cellOpeningTableNeverClosed: '<table><tr><td><table><tr><td>a</td></tr><tr><td>b<p>c</p>',
+  cellOpeningTableBlocks:
+    '<table><tr><td> <table><tr><th><div>a</div><br>b</th></tr><tr><td><ul><li>c</li></ul><hr>d</td></tr></table> e</td><td>f</td></tr></table><p>g</p>',
   longTagName: '<blockquotes>a</blockquotes>b<blockquote>c<scripts>d</scripts>e<tdx>f',
   surrogates: '𝔄 a\ud800b',
 };
@@ -552,6 +596,7 @@ describe('createStreamingExtractor — html reading', () => {
       '&#10;',
       '&#x2014;',
       '&nbsp;',
+      ' ',
       '&nope;',
       '&#0;',
       ' ',
@@ -659,33 +704,54 @@ describe('html reading timing', () => {
   /** CPU microseconds per character a linear reader stays well inside; a quadratic one at 20k is far outside. */
   const MICROS_PER_CHARACTER = 1;
 
+  /** ~640k characters per batch, so even the cheapest shape's batch spans far more than the timer's 1 µs resolution. */
+  const batchFor = (body: string) => Math.max(1, Math.round(640_000 / body.length));
+
   /**
    * Doubles from 5k to `maxChars` and times both readers, checking the absolute
    * bound at each size before running the next, so a quadratic regression fails
-   * in seconds. Returns each reader's per-call times.
+   * in seconds. The 5k body is timed again beside each larger size. Returns
+   * each reader's per-call times and its 5k baselines, first one included.
    */
   function timeShape(build: (chars: number) => string, maxChars: number) {
+    const baseline = build(5_000);
     const whole: number[] = [];
     const stream: number[] = [];
+    const wholeBaselines: number[] = [];
+    const streamBaselines: number[] = [];
     for (let chars = 5_000; chars <= maxChars; chars *= 2) {
       const body = build(chars);
-      /** ~640k characters per batch, so even the cheapest shape's batch spans far more than the timer's 1 µs resolution. */
-      const batch = Math.max(1, Math.round(640_000 / body.length));
-      const wholeMicros = leastCpuMicrosPerCall(() => extractHtmlText(body), batch);
+      const wholeMicros = leastCpuMicrosPerCall(() => extractHtmlText(body), batchFor(body));
       expect(wholeMicros, `whole-string, ${body.length} chars`).toBeLessThan(
         body.length * MICROS_PER_CHARACTER,
       );
-      const streamMicros = leastCpuMicrosPerCall(() => streamHtml(body), batch);
+      const streamMicros = leastCpuMicrosPerCall(() => streamHtml(body), batchFor(body));
       expect(streamMicros, `streaming, ${body.length} chars`).toBeLessThan(
         body.length * MICROS_PER_CHARACTER,
       );
       whole.push(wholeMicros);
       stream.push(streamMicros);
+      wholeBaselines.push(
+        chars === 5_000
+          ? wholeMicros
+          : leastCpuMicrosPerCall(() => extractHtmlText(baseline), batchFor(baseline)),
+      );
+      streamBaselines.push(
+        chars === 5_000
+          ? streamMicros
+          : leastCpuMicrosPerCall(() => streamHtml(baseline), batchFor(baseline)),
+      );
     }
-    return { whole, stream };
+    return { whole, stream, wholeBaselines, streamBaselines };
   }
 
-  const ratio = (perCall: number[]) => (perCall.at(-1) as number) / (perCall[0] as number);
+  /**
+   * The largest size's time over the slowest 5k baseline: the least growth any
+   * baseline-to-largest pairing shows, so one fast baseline measurement can't
+   * fail a linear reader while a quadratic one still grows ~4096× across 64×.
+   */
+  const growth = (perCall: number[], baselines: number[]) =>
+    (perCall.at(-1) as number) / Math.max(...baselines);
   const repeatTo = (unit: string, chars: number) => unit.repeat(Math.ceil(chars / unit.length));
 
   /** Shapes that stay below Bun's regex mode switch at every size, so each carries the full 64× span. */
@@ -704,6 +770,15 @@ describe('html reading timing', () => {
     ['one long line ending in a break', (chars) => `${repeatTo('<p>x', chars)}\ny`],
     ['breaks throughout', (chars) => repeatTo('  \r\n', chars)],
     ['table cells', (chars) => repeatTo('<td>x</td>', chars)],
+    [
+      'repeated cell-opening tables',
+      (chars) => repeatTo('<td><table><tr><td>x</td><td>.5</td></tr></table></td>', chars),
+    ],
+    ['cell-opening tables never closed', (chars) => repeatTo('<td><table><tr><td>x', chars)],
+    [
+      'white space before a cell-opening table',
+      (chars) => `<td>${repeatTo('&nbsp;   ', chars)}<table>x`,
+    ],
     ['a long tag name', (chars) => `<${repeatTo('a', chars)}>b`],
     ['zero-padded references', (chars) => `&#${repeatTo('0', chars)}65;`],
     ['ampersands', (chars) => repeatTo('&', chars)],
@@ -713,10 +788,10 @@ describe('html reading timing', () => {
 
   for (const [label, build] of FULL_SPAN) {
     it(`stays linear on ${label} across a 64× span`, () => {
-      const { whole, stream } = timeShape(build, 320_000);
+      const { whole, stream, wholeBaselines, streamBaselines } = timeShape(build, 320_000);
       expect(whole).toHaveLength(7);
-      expect(ratio(whole), 'whole-string').toBeLessThan(256);
-      expect(ratio(stream), 'streaming').toBeLessThan(256);
+      expect(growth(whole, wholeBaselines), 'whole-string').toBeLessThan(256);
+      expect(growth(stream, streamBaselines), 'streaming').toBeLessThan(256);
     }, 60_000);
   }
 });

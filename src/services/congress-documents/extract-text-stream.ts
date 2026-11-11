@@ -11,8 +11,11 @@
  *
  * The `html` reading ({@link extractHtmlText}) is one forward pass with no
  * rewinds: markup left open runs to the end of the body, so nothing it spans
- * is ever written and taken back. The rest of this header describes the `gpo`
- * reading ({@link extractDocumentText}), which is not so lucky.
+ * is ever written and taken back. Its text goes through the same
+ * {@link HtmlLayout} the whole-string reading uses, so the two differ only in
+ * how they tokenize a body that arrives in chunks. The rest of this header
+ * describes the `gpo` reading ({@link extractDocumentText}), which is not so
+ * lucky.
  *
  * The whole-string pipeline is `normalize newlines → strip comments → choose
  * verbatim <pre> or sibling-normalized XML → strip tags → decode entities →
@@ -39,8 +42,10 @@
 import { decodeCharacterReference } from '@/utils/character-references.js';
 import {
   HTML_TAG_ROLES,
-  type HtmlTagRole,
+  HtmlLayout,
+  type HtmlTextSink,
   isHtmlWhitespace,
+  isWhitespace,
   MAX_HTML_TAG_NAME,
 } from './extract-text.js';
 import type { DocumentReading } from './types.js';
@@ -69,27 +74,6 @@ export interface StreamingExtractor {
   finish(): ExtractedWindow;
   /** Feed the next decoded chunk of the body. */
   push(chunk: string): void;
-}
-
-/**
- * Whitespace as `String.prototype.trim` defines it — WhiteSpace plus
- * LineTerminator, which is also exactly the `\s` character class.
- */
-function isWhitespace(ch: string): boolean {
-  const code = ch.charCodeAt(0);
-  if (code === 0x20 || (code >= 0x09 && code <= 0x0d)) return true;
-  if (code < 0x80) return false;
-  return (
-    code === 0xa0 ||
-    code === 0x1680 ||
-    (code >= 0x2000 && code <= 0x200a) ||
-    code === 0x2028 ||
-    code === 0x2029 ||
-    code === 0x202f ||
-    code === 0x205f ||
-    code === 0x3000 ||
-    code === 0xfeff
-  );
 }
 
 function isAsciiLetter(ch: string): boolean {
@@ -957,35 +941,12 @@ function asciiLower(ch: string): string {
 }
 
 /**
- * The `html` reading over a chunked body: a tokenizer state machine feeding a
- * reference decoder feeding the layout, each holding a few fields whatever the
- * document does. Unlike the `gpo` reading it never rewinds — markup left open
- * runs to the end of the body, and a reference never spans markup — so every
- * character written is final and the window is kept as plain string pieces.
+ * The requested window of the `html` reading and the reading's whole length.
+ * The reading never rewinds, so every character appended is final and the
+ * window is kept as plain string pieces.
  */
-class HtmlTextStream implements StreamingExtractor {
+class HtmlWindow implements HtmlTextSink {
   private emitted = 0;
-  private inCell = false;
-  private newlines = 0;
-  private rawMatched = 0;
-  private rawName = '';
-  /** A decoded reference is text like any other: whitespace it decodes to collapses. */
-  private readonly reference = new ReferenceDecoder({
-    decoded: (text) => {
-      for (const ch of text) {
-        if (isHtmlWhitespace(ch)) this.space = true;
-        else this.writeText(ch);
-      }
-    },
-    literal: (text) => this.writeText(text),
-  });
-  private space = false;
-  private started = false;
-  private state = HTML_DATA;
-  private tabs = 0;
-  private tagIsEnd = false;
-  private tagName = '';
-  private tagNameOverflow = false;
   private readonly windowEnd: number;
   private readonly windowParts: string[] = [];
   private readonly windowStart: number;
@@ -993,6 +954,56 @@ class HtmlTextStream implements StreamingExtractor {
   constructor(request: TextWindowRequest) {
     this.windowStart = request.characterOffset;
     this.windowEnd = request.characterOffset + request.characterLimit;
+  }
+
+  /** Count `source[from, to)` as written, keeping whatever of it falls in the window. */
+  append(source: string, from: number, to: number): void {
+    const start = this.emitted;
+    this.emitted = start + (to - from);
+    if (start >= this.windowEnd || this.emitted <= this.windowStart) return;
+    this.windowParts.push(
+      source.slice(
+        from + Math.max(0, this.windowStart - start),
+        Math.min(to, from + (this.windowEnd - start)),
+      ),
+    );
+  }
+
+  result(): ExtractedWindow {
+    return { text: this.windowParts.join(''), totalCharacters: this.emitted };
+  }
+}
+
+/**
+ * The `html` reading over a chunked body: a tokenizer state machine feeding a
+ * reference decoder feeding the same {@link HtmlLayout} the whole-string
+ * reading uses, each holding a few fields whatever the document does. Unlike
+ * the `gpo` reading it never rewinds — markup left open runs to the end of the
+ * body, and a reference never spans markup.
+ */
+class HtmlTextStream implements StreamingExtractor {
+  private readonly layout: HtmlLayout;
+  private rawMatched = 0;
+  private rawName = '';
+  /** A decoded reference is text like any other: whitespace it decodes to collapses. */
+  private readonly reference = new ReferenceDecoder({
+    decoded: (text) => {
+      for (const ch of text) {
+        if (isHtmlWhitespace(ch)) this.layout.whitespace();
+        else this.writeText(ch);
+      }
+    },
+    literal: (text) => this.writeText(text),
+  });
+  private state = HTML_DATA;
+  private tagIsEnd = false;
+  private tagName = '';
+  private tagNameOverflow = false;
+  private readonly window: HtmlWindow;
+
+  constructor(request: TextWindowRequest) {
+    this.window = new HtmlWindow(request);
+    this.layout = new HtmlLayout(this.window);
   }
 
   push(chunk: string): void {
@@ -1005,7 +1016,7 @@ class HtmlTextStream implements StreamingExtractor {
     if (this.state === HTML_DATA) this.reference.flush();
     else if (this.state === HTML_TAG_OPEN) this.writeText('<');
     else if (this.state === HTML_END_TAG_OPEN) this.writeText('</');
-    return { text: this.windowParts.join(''), totalCharacters: this.emitted };
+    return this.window.result();
   }
 
   /** Consume from `chunk[i]` in the current state; returns where to continue. */
@@ -1111,7 +1122,7 @@ class HtmlTextStream implements StreamingExtractor {
     let end = i + 1;
     if (isHtmlWhitespace(ch)) {
       while (end < chunk.length && isHtmlWhitespace(chunk[end] as string)) end++;
-      this.space = true;
+      this.layout.whitespace();
       return end;
     }
     while (end < chunk.length) {
@@ -1119,8 +1130,7 @@ class HtmlTextStream implements StreamingExtractor {
       if (next === '<' || next === '&' || isHtmlWhitespace(next)) break;
       end++;
     }
-    this.writeSeparators();
-    this.appendSlice(chunk, i, end);
+    this.layout.write(chunk, i, end);
     return end;
   }
 
@@ -1165,75 +1175,12 @@ class HtmlTextStream implements StreamingExtractor {
       this.state = HTML_RAW;
       return;
     }
-    this.applyRole(role, this.tagIsEnd);
+    this.layout.tag(role, this.tagIsEnd);
   }
 
-  /** The layout rules of `HtmlLayout.tag` in `extract-text.ts`. */
-  private applyRole(role: HtmlTagRole, isEnd: boolean): void {
-    switch (role) {
-      case 'cell':
-        if (isEnd || this.inCell) this.tabs++;
-        this.inCell = !isEnd;
-        return;
-      case 'row':
-        this.inCell = false;
-        this.lineBreak(1);
-        return;
-      case 'table':
-        this.inCell = false;
-        this.lineBreak(2);
-        return;
-      case 'line':
-        if (this.inCell) this.space = true;
-        else this.lineBreak(1);
-        return;
-      case 'paragraph':
-        if (this.inCell) this.space = true;
-        else this.lineBreak(2);
-        return;
-      case 'raw':
-        return;
-    }
-  }
-
-  private lineBreak(newlines: number): void {
-    this.newlines = Math.max(this.newlines, newlines);
-    this.tabs = 0;
-  }
-
-  /** Write text with no whitespace in it, after whatever separator is owed. */
+  /** Write text with no ASCII whitespace in it. */
   private writeText(text: string): void {
-    this.writeSeparators();
-    this.appendSlice(text, 0, text.length);
-  }
-
-  /** The strongest separator owed, once text follows it: blank line, line, tabs, then a space. */
-  private writeSeparators(): void {
-    if (this.started) {
-      if (this.newlines > 0 || this.tabs > 0) {
-        const separator = '\n'.repeat(this.newlines) + '\t'.repeat(this.tabs);
-        this.appendSlice(separator, 0, separator.length);
-      } else if (this.space) {
-        this.appendSlice(' ', 0, 1);
-      }
-    }
-    this.started = true;
-    this.newlines = 0;
-    this.tabs = 0;
-    this.space = false;
-  }
-
-  /** Count `source[from, to)` as written, keeping whatever of it falls in the window. */
-  private appendSlice(source: string, from: number, to: number): void {
-    const start = this.emitted;
-    this.emitted = start + (to - from);
-    if (start >= this.windowEnd || this.emitted <= this.windowStart) return;
-    this.windowParts.push(
-      source.slice(
-        from + Math.max(0, this.windowStart - start),
-        Math.min(to, from + (this.windowEnd - start)),
-      ),
-    );
+    this.layout.write(text, 0, text.length);
   }
 }
 
