@@ -78,7 +78,7 @@ Bill, member, and committee data is also reachable through `congressgov_bill_loo
 
 - `list` browses one `congress`, narrowed by `billType` and a `fromDateTime`/`toDateTime` range on the record's update date, newest first unless `order: 'oldest'`; `get`, `actions`, `amendments`, `cosponsors`, `committees`, `subjects`, `summaries`, `text`, `titles`, `related`, and `content` need `congress` + `billType` + `billNumber`
 - `type` and `number` from a bill row are accepted as `billType` and `billNumber`; bill type codes are case-insensitive. Send one name per field, since canonical and alias keys together are rejected
-- `content` reads the text version at `textVersionIndex` (0 is the most recent) and returns one character window in `content.text` with `totalCharacters`, `truncated`, and `nextOffset`
+- `content` reads the text version at `textVersionIndex`, the version's 0-based position in the rows `text` returns (each `text` row carries it as `textVersionIndex`; dated versions run newest first, an enrolled bill's undated Enrolled Bill version is 0, and an enacted bill's Public Law version is last), and returns one character window in `content.text` with `totalCharacters`, `truncated`, and `nextOffset`
 - `summaries` takes an optional `versionCode` (`00` introduced, `49` public law) and pages like `congressgov_bill_summaries`, using `characterOffset`/`characterLimit`
 - `fromDateTime`/`toDateTime` apply to `list` only; other operations are served with a notice naming them as ignored
 - An `actions` row that records exactly one roll call vote carries `rollVote`, the `congressgov_roll_votes` arguments for it (House votes from the 115th Congress, Senate from the 101st)
@@ -91,13 +91,13 @@ Bill, member, and committee data is also reachable through `congressgov_bill_loo
 - `list` browses one `congress`, optionally one `amendmentType`, newest update first unless `order: 'oldest'`, with `fromDateTime`/`toDateTime` on the record's update date; it refuses `amendmentNumber` (`incompatible_identity`). Other operations are served with a notice naming a date bound as ignored
 - `get` returns the sponsor, purpose, description, the bill or amendment amended, and the latest action; `actions`, `cosponsors`, `amendments` (amendments to this amendment), and `text` page the sub-resources
 - An `actions` row that records exactly one roll call vote carries `rollVote`, the `congressgov_roll_votes` arguments for it
-- `text` lists the published text versions, each a Congressional Record page; `content` reads the HTML of the version at `textVersionIndex` as one `characterOffset`/`characterLimit` window. The page prints the amendment amid the surrounding floor proceedings, so it is often far longer than the amendment
+- `text` lists the published text versions, each a Congressional Record page carrying its `textVersionIndex`; `content` reads the HTML of the version at `textVersionIndex` as one `characterOffset`/`characterLimit` window. The page prints the amendment amid the surrounding floor proceedings, so it is often far longer than the amendment
 
 ---
 
 ### `congressgov_enacted_laws` <sub>tool</sub>
 
-- `list` browses one `congress`, optionally by `lawType` (`pub` or `priv`), the enactment filter `congressgov_bill_lookup` lacks; `get` needs `lawType` + `lawNumber`, taken from a list row's `laws[].number` (`118-90`) or its bare number (`90`)
+- `list` browses one `congress`, optionally by `lawType` (`pub` or `priv`, in any letter case), the enactment filter `congressgov_bill_lookup` lacks; `get` needs `lawType` + `lawNumber`, taken from a list row's `laws[].number` (`118-90`) or its bare number (`90`)
 - `get` returns the origin bill record, with the law citation on its `laws[]` array
 
 ---
@@ -111,9 +111,10 @@ Bill, member, and committee data is also reachable through `congressgov_bill_loo
 
 ### `congressgov_committee_lookup` <sub>tool</sub>
 
-- `committeeCode` is a chamber prefix (`h`/`s`/`j`), letters, and a 2-digit suffix (e.g. `hsju00`); `get`, `bills`, `reports`, and the Senate-only `nominations` infer `chamber` from the prefix, and read it from the committee roster when the prefix's chamber doesn't hold the code (`jsat00` is a Senate committee); `chamber` is accepted in any letter case, as committee rows carry it (`Senate`)
+- `committeeCode` is the `systemCode` of a `list` row, in any letter case: most are a chamber prefix (`h`/`s`/`j`), letters, and two digits (`hsju00`), and some historical ones are not (`n79043125`, `no2010049600`, `sp2k00`). `get`, `bills`, `reports`, and the Senate-only `nominations` infer `chamber` from the prefix, and read it from the committee roster when the prefix names no chamber or one that doesn't hold the code (`jsat00` is a Senate committee); `chamber` is accepted in any letter case, as committee rows carry it (`Senate`)
 - A committee name in `committeeCode` resolves when exactly one committee matches, and otherwise returns candidate rows with a notice. With `chamber` set, only that chamber's committees are searched, so a name unique within one chamber (`judiciary` with `chamber: 'senate'`) resolves in one step, and a lone fuzzy match there comes back as a candidate row; without `chamber`, a lone fuzzy match resolves and the notice says it is approximate. The resolved committee is read in the chamber its roster row names. `list` with `filter` name-matches every committee in scope, and fuzzy hits carry `approximate: true`
-- `bills` is newest first by default (`order`), and its rows carry no titles, so chain `congressgov_bill_lookup` `get` per row
+- `bills` and `reports` take `fromDateTime`/`toDateTime`, a window on the dates Congress.gov updated each row: a row with any update inside the window matches, so a window returns the rows added in it plus older rows touched in it. `nominations` ignores the window
+- `bills` reverses Congress.gov's order by default (`order: 'recent'`), which runs roughly from least to most recently updated; `order: 'oldest'` keeps it. Its rows carry no titles, so chain `congressgov_bill_lookup` `get` per row
 
 ---
 
@@ -123,7 +124,7 @@ Bill, member, and committee data is also reachable through `congressgov_bill_loo
 - `members` filters by `bioguideId` (House only), `stateCode`, and `party`, all applied before paging: `pagination.count` counts the matches and `memberFilter.rosterCount` is the roster size. A Senate call with `bioguideId` fails `unsupported_filter`, whichever source answers, since the Senate feed identifies senators by its own IDs; filter senators by `stateCode`
 - `list` and `get` serve the call and name any of those filters as ignored
 - A congress's first year is session 1 and its second year session 2, but a second session can run into January 1–3 of the following year (the 116th Congress's second session voted on 2021-01-01)
-- `list` is newest first unless `order: 'oldest'`; `get` returns the question, result, tallies, and party breakdown, and `members` returns each member's position
+- `list` runs by roll call number in both chambers, latest first unless `order: 'oldest'` (roll call 1 first); `get` returns the question, result, tallies, and party breakdown, and `members` returns each member's position
 - House votes are covered from the 115th Congress (2017) and Senate votes from the 101st (1989), and Senate rows pair the feed's year-less `voteDate` with a derived `voteDateIso` (rows Voteview serves carry `voteDateIso` alone)
 - A House `get` or `members` call below the 115th Congress fails `not_found` before any request, naming that coverage and pointing at the Clerk's vote XML in a bill action's `recordedVotes`
 - When the Senate LIS feed can't answer a `list`, `get`, or `members` call (senate.gov refusing automated clients with HTTP 403 or its firewall page, another 4xx, a 5xx or timeout after retries, an empty body), [Voteview](https://voteview.com/)'s per-congress files answer instead, and the response carries `source` (name, url, `latestVote`, and Voteview's requested citation). Voteview's President's positions are dropped, and a vote after `source.latestVote` is `not_found` naming that vote. The feed's own not-found page, a cancelled call, a spent call budget, and congresses before the 101st never fall back. When the feed answers, the output is unchanged and Voteview is not contacted. Voteview's files are cached for 1 hour. House votes are unaffected
@@ -140,7 +141,7 @@ Bill, member, and committee data is also reachable through `congressgov_bill_loo
 
 ### `congressgov_bill_summaries` <sub>tool</sub>
 
-- Optional `congress` and `billType` (which requires `congress`); `fromDateTime`/`toDateTime` filter on the summary's update time, not the bill's action date, and cover the last 7 days when both are omitted
+- Optional `congress` and `billType` (in any letter case; requires `congress`); `fromDateTime`/`toDateTime` filter on the summary's update time, not the bill's action date, and cover the last 7 days when both are omitted
 - A page returns `limit` rows, and `pagination.nextOffset` resumes; a summary over 25,000 characters arrives windowed with `textTotalCharacters`, `textTruncated`, and `textNextOffset`
 - For one bill's summaries, or to read a windowed summary to the end, use `congressgov_bill_lookup` `summaries`
 
@@ -150,14 +151,14 @@ Bill, member, and committee data is also reachable through `congressgov_bill_loo
 
 - `list` browses the catalog, newest update first; `fromDateTime`/`toDateTime` filter on the date Congress.gov last updated a report, not its publication date. `get` and `content` take a `reportNumber`: letters then digits (`R40097`, `RL33612`, `IF12345`) or, for older reports, two digit groups joined by a hyphen (`96-548`), in any case
 - `id`, `reportId`, and `report_id` are accepted as `reportNumber`; send only one identifier key
-- `get` returns authors, topics, summary, and download formats
+- `get` returns authors, topics, summary, download formats, and related materials, paged by `limit`/`offset`; a page that leaves rows out adds `relatedMaterialsCount` and `relatedMaterialsNextOffset`
 - `content` reads the report's HTML version as plain text in a `characterOffset`/`characterLimit` window (script, style, and comments dropped; tables as tab-separated rows). A PDF-only report fails `format_unavailable`, naming its PDF URL
 
 ---
 
 ### `congressgov_committee_reports` <sub>tool</sub>
 
-- `list` browses one `congress`, optionally by `reportType` (`hrpt` House, `srpt` Senate, `erpt` Executive). `fromDateTime`/`toDateTime` filter on the date Congress.gov last updated a report record, and `conference` selects conference reports (`true`) or the others (`false`); `get`, `text`, and `content` need `reportType` + `reportNumber`
+- `list` browses one `congress`, optionally by `reportType` (`hrpt` House, `srpt` Senate, `erpt` Executive; in any letter case, as report rows carry `HRPT`). `fromDateTime`/`toDateTime` filter on the date Congress.gov last updated a report record, and `conference` selects conference reports (`true`) or the others (`false`); `get`, `text`, and `content` need `reportType` + `reportNumber`
 - `get` returns the citation, title, committees, and associated bill; `text` lists `{type, url}` format links, and `content` reads the report as one character window
 - A multi-part report is filed as one record per part: `part` (default 1) selects one on `get`, `text`, and `content`, and `parts` lists every part number when there is more than one. A part the report lacks fails `not_found`, naming the parts it has
 
@@ -172,7 +173,9 @@ Bill, member, and committee data is also reachable through `congressgov_bill_loo
 
 ### `congressgov_search_bills` <sub>tool</sub>
 
-- `query` keywords (AND-combined) over bill titles and CRS summaries, narrowed by `congress`, `billType`, and `originChamber`; `limit` 1–100, `offset` pagination
+- `query` searches bill titles and CRS summaries: words AND together, `"two words"` is an exact phrase, `word*` a prefix, `-word` or `NOT word` excludes, `A OR B` takes either, and `( )` groups terms; only uppercase `AND`/`OR`/`NOT` are operators. Groups that hold `OR` or an exclusion, or are excluded, nest up to 10 levels deep; a group around a single term or group never counts. An unmatched `(`, `)`, or `"` is ignored with a notice; a query left with no term to search for, with an operator missing a term, or nested past that limit fails `invalid_query`
+- A search that excluded anything says so in a notice, whatever it found: `NOT` was read as an exclusion (quote it, `"NOT"`, to search for the word), or a `-` at the start of a word was (join it to the word before, `covid-19`, to search for a hyphenated term)
+- Results are narrowed by `congress`, `billType`, and `originChamber` (`House` or `Senate`), the last two in any letter case; `limit` 1–100, `offset` pagination
 - BM25-ranked rows carry `billId` plus `congress`/`billType`/`billNumber` for `congressgov_bill_lookup`, and a `summaryPreview`; policy area and full bill text are not indexed
 - Every response names the searchable congresses in `mirroredCongresses`; a `congress` outside them returns an empty result with a notice pointing at `congressgov_bill_lookup`
 - Listed only when `CONGRESS_MIRROR_ENABLED=true`; until `bun run mirror:init` builds the index, it returns an empty result with a notice
@@ -195,22 +198,22 @@ Bill, member, and committee data is also reachable through `congressgov_bill_loo
 
 ### `congress://member/{bioguideId}` <sub>resource</sub>
 
-- `bioguideId` is one uppercase letter and 6 digits (e.g. `P000197`)
+- `bioguideId` is one letter and 6 digits (e.g. `P000197`), in any letter case
 - Returns the member profile: name, state, party, terms, leadership, office, legislation counts
 
 ---
 
 ### `congress://bill/{congress}/{billType}/{billNumber}` <sub>resource</sub>
 
-- `congress` and `billNumber` are positive integers; `billType` is one of the 8 bill type codes
+- `congress` and `billNumber` are positive integers; `billType` is one of the 8 bill type codes, in any letter case (`HR`, as bill rows carry it, reads like `hr`)
 - Returns bill detail: sponsor, status, policy area, committees, latest action
 
 ---
 
 ### `congress://committee/{committeeCode}` <sub>resource</sub>
 
-- `committeeCode` is `h`/`s`/`j` followed by 3–8 lowercase alphanumeric characters (e.g. `hsju00`); chamber comes from the first letter
-- Returns committee detail: name, chamber, subcommittees, history, legislation counts
+- `committeeCode` is any committee `systemCode`, letters and digits in any letter case (e.g. `hsju00`, `n79043125`); the code's prefix chamber is read first, and the committee roster supplies the chamber when the prefix names none or one that doesn't hold the code
+- Returns committee detail: name, the chamber it was read in, subcommittees, history, legislation counts
 
 ---
 
@@ -302,7 +305,7 @@ See [`.env.example`](./.env.example) for the full list of optional overrides.
 
 ## Running the server
 
-Requires [Bun v1.4.0](https://bun.sh/) or higher (or Node.js v24+).
+Requires [Bun v1.4.4](https://bun.sh/) or higher (or Node.js v24+).
 
 ```sh
 git clone https://github.com/cyanheads/congressgov-mcp-server.git
@@ -320,15 +323,23 @@ cp .env.example .env
   bun run start:http   # or start:stdio
   ```
 
-- **Build the bill search mirror from this checkout** (with `CONGRESS_MIRROR_ENABLED=true`):
+- **Build the bill search mirror** (with `CONGRESS_MIRROR_ENABLED=true`). The mirror CLI compiles with the server into `dist/cli/`, so build the checkout first:
 
   ```sh
+  bun run build
   bun run mirror:init      # full build
   bun run mirror:refresh   # incremental refresh
   bun run mirror:verify    # readiness and integrity check
   ```
 
-  The mirror CLI requires this checkout or the Docker image's path mapping; an npm installation cannot run these scripts.
+  From an npm install, run the same compiled files under Bun or Node, with the environment variables the server reads:
+
+  ```sh
+  bun node_modules/@cyanheads/congressgov-mcp-server/dist/cli/mirror-init.js
+  node node_modules/@cyanheads/congressgov-mcp-server/dist/cli/mirror-verify.js
+  ```
+
+  `mirror-init.js`, `mirror-refresh.js`, and `mirror-verify.js` sit side by side in `dist/cli/`.
 
 - **Run checks and tests:**
 
@@ -344,7 +355,7 @@ cp .env.example .env
 docker run --rm -e CONGRESS_API_KEY=your-api-key -p 3010:3010 ghcr.io/cyanheads/congressgov-mcp-server:latest
 ```
 
-The image defaults to HTTP transport, stateless session mode, and logs to `/var/log/congressgov-mcp-server`. For stdio, use `docker run -i --rm -e MCP_TRANSPORT_TYPE=stdio ghcr.io/cyanheads/congressgov-mcp-server:latest`. To build locally, run `docker build -t congressgov-mcp-server .`; OpenTelemetry peer dependencies are installed by default, with `--build-arg OTEL_ENABLED=false` to omit them. The image carries the mirror scripts, so `docker exec <container> bun run mirror:init` builds the index in place.
+The image defaults to HTTP transport, stateless session mode, and logs to `/var/log/congressgov-mcp-server`. For stdio, use `docker run -i --rm -e MCP_TRANSPORT_TYPE=stdio ghcr.io/cyanheads/congressgov-mcp-server:latest`. To build locally, run `docker build -t congressgov-mcp-server .`; OpenTelemetry peer dependencies are installed by default, with `--build-arg OTEL_ENABLED=false` to omit them. The image carries the compiled mirror CLI, so `docker exec <container> bun run mirror:init` builds the index in place.
 
 ## Project structure
 
@@ -362,7 +373,8 @@ The image defaults to HTTP transport, stateless session mode, and logs to `/var/
 | `src/services/congress-mirror/` | Local SQLite FTS5 bill-search mirror: ingest, normalize, schema. |
 | `src/services/senate-lis/` | Senate LIS XML client for Senate roll call votes, with a Voteview CSV fallback. |
 | `src/utils/` | HTML/XML character-reference decoding and congress-number arithmetic. |
-| `scripts/` | Build, devcheck, and release tooling, plus the `mirror:init` / `mirror:refresh` / `mirror:verify` CLIs. |
+| `src/cli/` | The `mirror:init` / `mirror:refresh` / `mirror:verify` CLI, compiled to `dist/cli/`. |
+| `scripts/` | Build, devcheck, and release tooling. |
 | `tests/` | Unit and integration tests, mirroring the `src/` structure. |
 
 ## Development guide

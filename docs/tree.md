@@ -1,6 +1,6 @@
 # congressgov-mcp-server - Directory Structure
 
-Generated on: 2026-11-04 04:51:13
+Generated on: 2026-11-11 17:43:10
 
 ```text
 congressgov-mcp-server/
@@ -127,7 +127,6 @@ congressgov-mcp-server/
 │   └── tool-defs-analysis/
 │       └── SKILL.md
 ├── scripts/
-│   ├── _mirror-context.ts
 │   ├── build-changelog.ts
 │   ├── build.ts
 │   ├── check-dependency-specifiers.ts
@@ -137,9 +136,6 @@ congressgov-mcp-server/
 │   ├── check-skills-sync.ts
 │   ├── clean-mcpb.ts
 │   ├── clean.ts
-│   ├── congress-mirror-init.ts
-│   ├── congress-mirror-refresh.ts
-│   ├── congress-mirror-verify.ts
 │   ├── devcheck.ts
 │   ├── install-otel.ts
 │   ├── lint-mcp.ts
@@ -153,6 +149,11 @@ congressgov-mcp-server/
 │   └── congressgov-guide/
 │       └── SKILL.md
 ├── src/
+│   ├── cli/
+│   │   ├── mirror-context.ts
+│   │   ├── mirror-init.ts
+│   │   ├── mirror-refresh.ts
+│   │   └── mirror-verify.ts
 │   ├── config/
 │   │   └── server-config.ts
 │   ├── mcp-server/
@@ -184,9 +185,11 @@ congressgov-mcp-server/
 │   │       ├── format-helpers.ts
 │   │       ├── roll-vote-pointer.ts
 │   │       ├── summary-window.ts
+│   │       ├── text-version-index.ts
 │   │       └── tool-helpers.ts
 │   ├── services/
 │   │   ├── congress-api/
+│   │   │   ├── committee-roster.ts
 │   │   │   ├── congress-api-service.ts
 │   │   │   └── types.ts
 │   │   ├── congress-documents/
@@ -218,7 +221,10 @@ congressgov-mcp-server/
 │   ├── config/
 │   │   └── server-config.test.ts
 │   ├── helpers/
-│   │   └── budget-fixtures.ts
+│   │   ├── budget-fixtures.ts
+│   │   ├── committee-lists.ts
+│   │   ├── resources-read.ts
+│   │   └── text-versions.ts
 │   ├── mcp-server/
 │   │   ├── prompts/
 │   │   │   └── definitions/
@@ -260,11 +266,13 @@ congressgov-mcp-server/
 │   │       ├── roll-vote-pointer.test.ts
 │   │       ├── senate-votes.format.test.ts
 │   │       ├── summary-window.test.ts
+│   │       ├── text-version-index.test.ts
 │   │       └── tool-helpers.test.ts
 │   ├── scripts/
 │   │   └── agent-doc-packaging.test.ts
 │   ├── services/
 │   │   ├── congress-api/
+│   │   │   ├── committee-roster.test.ts
 │   │   │   ├── congress-api-service.test.ts
 │   │   │   └── normalizers.test.ts
 │   │   ├── congress-documents/

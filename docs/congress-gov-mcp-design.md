@@ -108,7 +108,7 @@ operation: z.enum([
 | `congress` | all | Congress number (e.g., 118, 119). Required. |
 | `billType` | list, get, sub-resources | Bill type code: `hr`, `s`, `hjres`, `sjres`, `hconres`, `sconres`, `hres`, `sres`. Required for `get` and sub-resources. |
 | `billNumber` | get, sub-resources | Bill number (e.g., 3076). Required for `get` and sub-resource operations. |
-| `textVersionIndex` | content | Which text version to read, 0-based against the order `text` returns. Default 0 (most recent). |
+| `textVersionIndex` | content | Which text version to read: its 0-based position in the rows `text` returns, counted across pages. Dated versions run newest first; an enrolled bill's undated Enrolled Bill version is 0, and an enacted bill's Public Law version is last. Each `text` row carries the `textVersionIndex` that reads it. Default 0. |
 | `format` | content | `text` (GPO Formatted Text) or `xml` (USLM, falling back to Formatted XML). Default `text`. |
 | `characterOffset` | content | First character of the window, 0-based. Default 0. |
 | `characterLimit` | content | Maximum characters in the window (1-100,000). Default 25,000. |
@@ -140,6 +140,7 @@ For enacted laws, use 'congressgov_enacted_laws' instead.
 - **actions**: each row that records exactly one roll call vote carries `rollVote` — `{ chamber, congress, session, voteNumber }`, the `congressgov_roll_votes` arguments for it. A row recording no vote or several gets none, nor does a vote that tool has no data for (House before the 115th Congress, Senate before the 101st).
 - **list**: `bills[]` — `congress`, `type`, `number`, `title`, `originChamber`, `latestAction { date, text }` + `pagination { count, nextOffset }`
 - **get**: Full detail — `sponsor { bioguideId, name, party, state }`, `policyArea`, `cboEstimates`, `committees`, `latestAction`, `constitutionalAuthority`, `laws` (if enacted)
+- **text**: each row carries `textVersionIndex`, the index `content` reads that version by
 - **Sub-resources**: Parent bill ref (`congress`, `type`, `number`) + resource-specific data + pagination where applicable
 
 **Format**: List → markdown table (type+number, title, latest action date). Detail → structured sections. Sub-resources → list or detail as appropriate.
@@ -168,7 +169,7 @@ operation: z.enum([
 |:------|:--------|:------------|
 | `operation` | all | Which data to retrieve. |
 | `congress` | all | Congress number. Required. |
-| `lawType` | list (optional), get | `pub` (public law) or `priv` (private law). Required for `get`. |
+| `lawType` | list (optional), get | `pub` (public law) or `priv` (private law), in any letter case (CRS related materials carry `PUB`). Required for `get`. |
 | `lawNumber` | get | Law number, as a list row's `laws[].number` (`118-90`) or its bare number (`90`). Required for `get`; `list` refuses it. |
 | `limit` | list | Results per page (1-250, default 20). |
 | `offset` | list | Pagination offset. |
@@ -272,8 +273,10 @@ operation: z.enum([
 | `operation` | all | Which data to retrieve. |
 | `congress` | list | Congress number. A committee's bills, reports, and nominations span every congress, so the detail operations name it as ignored. |
 | `filter` | list | Committee name match; fuzzy hits are labeled `approximate`. Detail operations name it as ignored. |
-| `chamber` | list, get, bills, reports, nominations | `house`, `senate`, or `joint`, in any letter case. Optional: `list` filters by it, and for detail operations the committee's chamber is inferred from the code prefix when omitted, or read from the committee roster when the prefix's chamber doesn't hold the code. It also scopes name resolution: a committee name passed as `committeeCode` resolves among that chamber's committees only, and the resolved committee is fetched in the chamber its roster row names; a lone approximate match within the chamber comes back as a candidate rather than resolving. |
-| `committeeCode` | get, bills, reports, nominations | Committee system code (e.g., `hsju00` for House Judiciary). Required for detail operations. Codes ending in `00` are parent committees; other suffixes are subcommittees. A value with no code shape resolves as a committee name and must contain a letter or digit. `list` refuses it; a committee name belongs in `filter`. |
+| `chamber` | list, get, bills, reports, nominations | `house`, `senate`, or `joint`, in any letter case. Optional: `list` filters by it, and for detail operations the committee's chamber is inferred from the code prefix when omitted, or read from the committee roster when the prefix names no chamber or one that doesn't hold the code. It also scopes name resolution: a committee name passed as `committeeCode` resolves among that chamber's committees only, and the resolved committee is fetched in the chamber its roster row names; a lone approximate match within the chamber comes back as a candidate rather than resolving. |
+| `committeeCode` | get, bills, reports, nominations | Committee system code (e.g., `hsju00` for House Judiciary), in any letter case. Required for detail operations. Most codes are a chamber prefix, letters, and two digits; historical ones such as `n79043125` and `sp2k00` are not, and a `00` suffix marks most parent committees but not all (the `n…` committees carry none, and a few subcommittees end in `00`). A value of the letters-plus-two-digits shape is read as a code in its prefix's chamber; any other value is matched against the roster's codes first, at no extra request, then resolved as a committee name, and must contain a letter or digit. `list` refuses it; a committee name belongs in `filter`. |
+| `fromDateTime` / `toDateTime` | bills, reports | ISO 8601 bounds of an update-date window. A row matches when Congress.gov updated it at any time inside the window, so a window returns the rows added in it plus older rows touched in it. Validated on every operation; `list`, `get`, and `nominations` name them as ignored (Congress.gov ignores the window on a committee's nominations). |
+| `order` | bills | `recent` (default) reverses Congress.gov's order, which runs roughly from least to most recently updated; `oldest` keeps it. |
 | `limit` | all | Results per page (1-250). |
 | `offset` | all | Pagination offset. |
 
@@ -281,26 +284,26 @@ operation: z.enum([
 ```
 Browse congressional committees and their legislation, reports, and nominations.
 
-Committee codes follow the pattern: chamber prefix (h/s/j) + abbreviation + number.
-Use 'list' to discover codes, then drill into bills, reports, or nominations.
+Use 'list' to discover committee codes, the systemCode on each row, then drill
+into bills, reports, or nominations. bills and reports take an update-date window.
 
 The 'nominations' operation is available for Senate committees only.
 The committeeCode also works with the congress://committee/{committeeCode} resource.
 ```
 
 **Output:**
-- **list**: `committees[]` — `systemCode`, `name`, `chamber`, `committeeType`, `subcommittees[]` + pagination
-- **get**: Full detail — `name`, `chamber`, `history`, `subcommittees[]`, bill/report/nomination counts
-- **bills**: `bills[]` — `congress`, `type`, `number`, `title`, `latestAction` + pagination
-- **reports**: `reports[]` — `congress`, `type`, `number`, `title` + pagination
+- **list**: `committees[]` — `systemCode`, `name`, `chamber`, `committeeTypeCode`, `updateDate`, `url`, and `parent` on a subcommittee + pagination
+- **get**: Full detail — `history`, `subcommittees[]`, `type`, bill/report/nomination counts
+- **bills**: `bills[]` — `congress`, `type`, `number`, `actionDate`, `relationshipType`, `updateDate`, `url` (no title) + pagination
+- **reports**: `reports[]` — `citation`, `congress`, `type`, `number`, `part`, `chamber`, `updateDate`, `url` + pagination
 - **nominations**: `nominations[]` — `congress`, `number`, `description`, `latestAction` + pagination
 
 **Format**: List → markdown table (code, name, chamber). Sub-resources → table of items with key fields.
 
 **Error guidance:**
-- Nominations on House committee: "Nominations are only referred to Senate committees. Use chamber='senate' or a Senate committee code (s-prefix)."
+- Nominations on House committee: "Nominations are only referred to Senate committees. Use chamber='senate' or a Senate committee code."
 - Committee not found: "Committee '{code}' not found. Use 'list' with congress and chamber to discover available committees."
-- Empty sub-resource: "No {resource} found for committee {code}. The committee may not have reported any {resource} yet."
+- Empty sub-resource: "No {resource} found for committee {code}." With a window: "No {resource} found for committee {code} with an update inside the fromDateTime/toDateTime window. Widen or remove the window."
 
 ---
 
@@ -328,6 +331,7 @@ operation: z.enum([
 | `bioguideId` | members | Return only the member with this bioguide ID (one letter and six digits, any case). House only: a Senate `members` call fails `unsupported_filter`, whichever source answers. `list` and `get` serve the call and name it as ignored. |
 | `stateCode` | members | Return only one state's or territory's members, by two-letter code in any case. `list` and `get` name it as ignored. |
 | `party` | members | Return only one party, by the one- or two-letter roster code (`D`, `R`, `I`) in any case. `list` and `get` name it as ignored. |
+| `order` | list | `recent` (default, the session's latest roll call first) or `oldest` (roll call 1 first), by roll call number in both chambers. |
 | `limit` | list, members | Results per page (1-250). |
 | `offset` | list, members | Pagination offset. |
 
@@ -435,7 +439,7 @@ The activity feed. Single-purpose tool — no operation enum.
 | Param | Description |
 |:------|:------------|
 | `congress` | Congress number. Optional — omit for summaries across all congresses. |
-| `billType` | Bill type filter (hr, s, etc.). Requires `congress`. |
+| `billType` | Bill type filter (hr, s, etc.), in any letter case (summary rows carry `HR`). Requires `congress`. |
 | `fromDateTime` | Start of date range (ISO 8601). Defaults to 7 days ago if neither date param is set. |
 | `toDateTime` | End of date range (ISO 8601). Defaults to now. |
 | `limit` | Results per page (1-250, default 20). |
@@ -483,8 +487,8 @@ operation: z.enum([
 | `reportNumber` | get, content | CRS report ID: letters then digits (`R40097`, `IF12345`) or, for older reports, two digit groups joined by a hyphen (`96-548`). Case and surrounding whitespace are ignored; the value is trimmed and upper-cased before use. Required for `get` and `content`; `list` refuses it. `id`, `reportId`, and `report_id` are accepted as aliases. |
 | `fromDateTime` | list | Start of an update-date window (ISO 8601): when Congress.gov last updated the report, not its publication date. `get` and `content` name it as ignored. |
 | `toDateTime` | list | End of the update-date window. Same semantics and notice as `fromDateTime`. |
-| `limit` | list | Results per page (1-250). |
-| `offset` | list | Pagination offset. |
+| `limit` | list, get | Results per page (1-250, default 20): reports on `list`, related materials on `get`. |
+| `offset` | list, get | Pagination offset: into the report list on `list`, into the report's related materials on `get`. |
 | `characterOffset` | content | First character of the window, 0-based. Default 0. |
 | `characterLimit` | content | Maximum characters in the window (1-100,000). Default 25,000. |
 
@@ -500,15 +504,16 @@ Report IDs are letters then digits (R40097, RL33612, IF12345) or, for older
 reports, two digit groups joined by a hyphen (96-548).
 
 Use 'list' to browse available reports (newest update first; fromDateTime/toDateTime
-filter on update date), 'get' for full detail including authors, topics, summary,
-and available download formats, or 'content' to read the report itself a bounded
-character window at a time. The oldest reports publish only a PDF, which
+filter on update date), 'get' for full detail (authors, topics, summary, download
+formats, and related materials, which limit and offset page: relatedMaterialsCount
+and relatedMaterialsNextOffset appear when a page leaves rows out), or 'content' to
+read the report itself a bounded character window at a time. The oldest reports publish only a PDF, which
 'content' cannot read; the error names its URL.
 ```
 
 **Output:**
 - **list**: `reports[]` — `reportNumber`, `title`, `date`, `topics[]` + pagination
-- **get**: Full detail — `reportNumber`, `title`, `authors[]`, `date`, `topics[]`, `summary`, `formats[]` (PDF, HTML links)
+- **get**: Full detail — `reportNumber`, `title`, `authors[]`, `date`, `topics[]`, `summary`, `formats[]` (PDF, HTML links), `relatedMaterials[]` (one `limit`/`offset` page of the deduplicated list). A page that leaves rows out adds `relatedMaterialsCount` (the full total) and `relatedMaterialsNextOffset` (the next page's `offset`, null on the last page), with a notice; a list that fits the first page at offset 0 is returned whole. Congress.gov does not page this endpoint, so the page is a slice of one response and costs no extra request
 - **content**: `content { text, format, sourceUrl, documentTitle, totalCharacters, offset, truncated, nextOffset }`
 
 **Format**: List → markdown table (report ID, title, date). Detail → structured sections with summary text.
@@ -539,7 +544,7 @@ operation: z.enum([
 |:------|:--------|:------------|
 | `operation` | all | Which data to retrieve. |
 | `congress` | all | Congress number. Required. |
-| `reportType` | list (optional), get, text, content | `hrpt` (House), `srpt` (Senate), `erpt` (Executive). Required for detail operations. |
+| `reportType` | list (optional), get, text, content | `hrpt` (House), `srpt` (Senate), `erpt` (Executive), in any letter case (report rows and bill `committeeReports` URLs carry `HRPT`). Required for detail operations. |
 | `reportNumber` | get, text, content | Committee report number. Required for detail operations; `list` refuses it. |
 | `part` | get, text, content | Which part of a multi-part report to serve; Part 1 when omitted. `get` prefers a non-Errata record for the part. A part the report lacks fails `not_found`, naming the parts it has. `list` refuses it. |
 | `fromDateTime` | list | Start of an update-date window (ISO 8601): when Congress.gov last updated the report record, not its publication date. Detail operations name it as ignored. |
@@ -662,7 +667,7 @@ operation: z.enum([
 | `fromDateTime` | list | Start of an update-date window (ISO 8601): when Congress.gov last touched the record, not when the amendment was offered. Other operations serve the call and name it as ignored. |
 | `toDateTime` | list | End of the update-date window. Same semantics and notice as `fromDateTime`. |
 | `order` | list | `recent` (default, newest update first) or `oldest`. |
-| `textVersionIndex` | content | Which text version to read, 0-based against the order `text` returns. Default 0. |
+| `textVersionIndex` | content | Which text version to read, 0-based against the order `text` returns; each `text` row carries the `textVersionIndex` that reads it. Default 0. |
 | `characterOffset` | content | First character of the window, 0-based. Default 0. |
 | `characterLimit` | content | Maximum characters in the window (1-100,000). Default 25,000. |
 | `limit` | list, sub-resources | Results per page (1-250, default 20). |
@@ -687,7 +692,8 @@ character window at a time.
 - **list**: `data[]` — amendment rows + pagination
 - **get**: `amendment` — sponsor, purpose, description, `amendedBill` or `amendedAmendment`, dates, latest action, sub-resource counts
 - **actions**: action rows; a row that records exactly one roll call vote carries `rollVote` — `{ chamber, congress, session, voteNumber }`, the `congressgov_roll_votes` arguments for it (none for a vote that tool has no data for)
-- **cosponsors**, **amendments**, **text**: sub-resource rows + pagination
+- **cosponsors**, **amendments**: sub-resource rows + pagination
+- **text**: version rows + pagination; each row carries `textVersionIndex`, the index `content` reads that version by
 - **content**: `content` — `text`, `format`, `sourceUrl`, `documentTitle`, `totalCharacters`, `offset`, `truncated`, `nextOffset`
 
 **Text:** an amendment's text version is the Congressional Record page that prints it, published as HTML and PDF on `www.congress.gov`. The HTML is GPO `<pre>` print output, read with the `gpo` reading, and the page often runs well past the amendment into the surrounding floor proceedings. `CongressDocumentsService` serves it under the same ceiling, call budget, and character window as the other `content` operations.
@@ -713,7 +719,7 @@ All tools share these error patterns. The service layer handles them uniformly.
 | Empty results | "No {entity} found for the given filters. Try broadening the search — adjust the congress number, date range, or remove optional filters." |
 | Invalid congress number | "Congress {n} is not valid. The current congress is {current}. Congress numbers are positive integers starting at 1 (1789)." |
 | Network error | "Congress.gov returned an unexpected error." (`upstream_error`) |
-| Upstream timeout | "Congress.gov did not complete the request within the 10000-millisecond deadline." for one attempt's own timeout, or "{upstream} did not deliver {request} within this call's 50-second budget for upstream requests ({n} attempts)." once the call's budget runs out (`upstream_timeout`, with `budgetMs` and `retryAttempts`). See "Every call runs on one time budget" below. |
+| Upstream timeout | "Congress.gov did not complete the request within the {ms}-millisecond deadline." for one attempt's own timeout, naming that attempt's deadline (10000 in a tool call or resource read, 30000 in a mirror sync, which runs no call), or "{upstream} did not deliver {request} within this call's 50-second budget for upstream requests ({n} attempts)." once the call's budget runs out (`upstream_timeout`, with `budgetMs` and `retryAttempts`). See "Every call runs on one time budget" below. |
 
 ---
 
@@ -817,9 +823,17 @@ The Congress.gov API's core limitation — no keyword search (see "Key API const
 
 The bill list is walked without offset paging, since offset paging over a list sorted by update time skips and repeats bills inside a tie: every request is offset 0, limit 250, `sort=updateDate asc`. From a cursor day the walk requests with `fromDateTime` one second before it (the bound is exclusive) and no end; a count of 250 or less is the rest of the walk. When a full page holds a single date, the walk covers that UTC day in halved windows with exclusive bounds, then moves the cursor to the next day; a one-second window that still holds more than 250 bills fails the sync. The walk costs about 2.7 times the requests of offset paging (214 against 80 for the 119th Congress). Every sync re-walks a congress's whole `/summaries` list, newest first, requested from January 1 of the congress's first year with no end date: without `fromDateTime` the endpoint returns only the last day's summaries, and summaries are rewritten long after their congress ends. A bill a refresh re-emits therefore keeps its summary.
 
-**Lifecycle:** the mirror is never built or refreshed during server startup. `mirror:init` runs a full out-of-band build; `mirror:refresh` incrementally re-walks from the checkpoint, `YYYY-MM-DD|congresses` (the congresses descending, zero-padded): every bill of those congresses updated before that day is stored. The checkpoint is persisted only when a run finishes, so a refresh that fails partway, and an init that fails, restart from the same point (an init from scratch). A refresh walks each covered congress from the checkpoint day and each configured congress the checkpoint does not cover from its start; `mirror:verify` reports readiness and runs a SQLite integrity check. The three scripts log JSON lines to stderr at the `MCP_LOG_LEVEL` floor and leave stdout empty. Under HTTP transport, an in-process refresh can run on a cron via `CONGRESS_MIRROR_REFRESH_CRON`. Store schema version 3 clears the checkpoint (as version 2 did for stores built before the summaries window existed), so the next refresh re-walks every configured congress's bill list from the start, as `mirror:init` does, recovering bills the earlier offset-paged walk skipped and writing summaries onto the bills it re-emits while search keeps serving.
+**Lifecycle:** the mirror is never built or refreshed during server startup. `mirror:init` runs a full out-of-band build; `mirror:refresh` incrementally re-walks from the checkpoint, `YYYY-MM-DD|congresses` (the congresses descending, zero-padded): every bill of those congresses updated before that day is stored. The checkpoint is persisted only when a run finishes, so a refresh that fails partway leaves it unchanged. Every committed page also stores a cursor: the congresses walked to the end of their list, the congress in progress and the UTC day its walk resumes from, the highest list date seen, and the UTC date the run began. The next run of the same mode resumes from it — `mirror:init` after a failed or stopped init, a refresh after a failed or stopped refresh — skipping the congresses already walked, rebuilding the summary map of the one in progress, and continuing it with the request that follows the last committed page. The one exception is a resume inside a day walked in halved windows, which reads that whole day again rather than trust a window position inside it. A cursor this version cannot read is dropped with a warning, and the run starts as a fresh run of its mode. The checkpoint date never passes the UTC date the run began, or the interrupted run it resumes: a resume skips the congresses walked before the interruption, so their bills updated since must stay ahead of the next refresh, which re-walks them from that day. A refresh walks each covered congress from the checkpoint day and each configured congress the checkpoint does not cover from its start; `mirror:verify` reports readiness and runs a SQLite integrity check. The three scripts log JSON lines to stderr at the `MCP_LOG_LEVEL` floor and leave stdout empty. Under HTTP transport, an in-process refresh can run on a cron via `CONGRESS_MIRROR_REFRESH_CRON`. Store schema version 3 clears the checkpoint (as version 2 did for stores built before the summaries window existed), so the next refresh re-walks every configured congress's bill list from the start, as `mirror:init` does, recovering bills the earlier offset-paged walk skipped and writing summaries onto the bills it re-emits while search keeps serving.
 
-**`congressgov_search_bills`:** keyword-searches `title` + `summary` (BM25-ranked), optionally narrowed by `congress`, `billType`, and `originChamber`. Returns each match's derived bill id for a follow-up `congressgov_bill_lookup` call plus a truncated summary preview. No live-API fallback — a mirror that hasn't completed its initial build returns an empty result with a notice, not an error. Every response names the congresses the store holds in `mirroredCongresses` (empty until the initial build finishes); a `congress` outside them returns an empty result with a notice pointing at `congressgov_bill_lookup` `list`, so an empty result for an unmirrored congress is not a negative finding.
+**`congressgov_search_bills`:** keyword-searches `title` + `summary` (BM25-ranked), optionally narrowed by `congress`, `billType`, and `originChamber` (`House` or `Senate`), the last two in any letter case. Returns each match's derived bill id for a follow-up `congressgov_bill_lookup` call plus a truncated summary preview. No live-API fallback — a mirror that hasn't completed its initial build returns an empty result with a notice, not an error. Every response names the congresses the store holds in `mirroredCongresses` (empty until the initial build finishes); a `congress` outside them returns an empty result with a notice pointing at `congressgov_bill_lookup` `list`, so an empty result for an unmirrored congress is not a negative finding.
+
+**Query grammar:** `toFtsMatch` (`normalize.ts`) translates `query` to the FTS5 `MATCH`. Words AND together, `"two words"` is a phrase, `word*` a prefix, `-word` or `NOT word` excludes from its group, `A OR B` takes either, and `( )` groups. Only uppercase `AND`/`OR`/`NOT` are operators, as in FTS5 itself: lowercase `or`, `NEAR`, `title:x`, and a quoted `"OR"` are searched as words, and a token with no letter or digit is dropped. A `(` opens a group only at the start of a word and a `)` closes one only at its end, so `501(c)(3)` stays one word. Every term reaches FTS5 quoted, and operators, parentheses, and the prefix `*` come only from the translation, so caller text never reaches FTS5 as query syntax and FTS5's column filters and `NEAR` stay out of reach.
+
+- *Decision: reject what can't be translated, ignore only unmatched marks.* A query with no term to search for (`-smoke`), an operator missing a term (`wildfire OR`), or groups that change the result nested past 10 levels fails `invalid_query` naming the token, before MATCH runs: FTS5 has no unary NOT, and an empty result would read as "no bill lacks smoke". An unmatched `(`, `)`, or `"` is ignored with a notice instead, because the keyword-only translation answered those queries and rejecting them would refuse searches that worked.
+- *Decision: name every exclusion the search applied.* The keyword-only translation searched `NOT` and a leading `-` as words, so a query written as plain words can now leave out the bill it names: `DO NOT CALL` reads as do and call but not not, and `covid -19` drops every bill that mentions 19. Either still returns rows, so the notice rides every response whose query used `NOT` or a `-` at the start of a word, phrase, or group, whatever it found, and says how to search for the word instead (`"NOT"`, `covid-19`). `toFtsMatch` reports the forms it applied beside `match`, so the tool never parses the query a second time. `OR` draws no notice: quoting `"OR"` or `"AND"` only narrows a result, so the advice could never recover a missed bill.
+- *Decision: one NOT per group.* A group's exclusions follow its included terms as `(included) NOT (a OR b …)`, so an exclusion applies to its whole group and the expression's depth never grows with the number of exclusions (FTS5 caps expression depth). Every AND is written out, since FTS5 rejects an implicit AND before a parenthesis.
+- *Decision: count only groups that change the result.* The keyword-only translation ignored parentheses, so it answered nested plain words (`((wildfire))`, `wildfire (smoke (crop …))`) at any depth. A group of one item, and an AND group that is not excluded, prints no parentheses of its own and adds no level; the 10-level bound counts groups that hold `OR` or an exclusion, or are excluded, which are what deepen the FTS5 expression, and keeps every translation inside FTS5's parser stack on both SQLite drivers. A query still past the bound uses an operator the keyword-only translation searched as a word.
+- *Decision: control characters separate terms.* A NUL ends FTS5's query string mid-term, so whitespace, every control character, and unpaired surrogates act as separators before anything is quoted.
 
 **Opt-in, off by default:** gated behind `CONGRESS_MIRROR_ENABLED` (`false` by default) so the standard deploy stays config-free. When disabled, the tool registers via the framework's `disabledTool()` — visible on the landing page as present-but-uncallable, with a hint pointing at the env var, and skipped from MCP registration entirely.
 
@@ -895,6 +909,16 @@ The `/summaries` endpoint is the closest thing to an activity feed. By defaultin
 
 The Congress.gov API exposes House votes but no Senate vote namespace. `congressgov_roll_votes` selects the Congress.gov API or the Senate LIS feed by chamber (Voteview's vote files answer for the feed when it can't be read; see "Senate votes fall back to Voteview"), preserving the same list/detail/member-position workflow.
 
+- **Both chambers list votes in roll call order.** Roll numbers follow vote time within a session; update date does not, since Congress.gov re-touches old votes in batches. `/house-vote/{congress}/{session}` ignores `sort` and serves rows in neither roll, date, nor update order, so House `list` reads the whole session (one request per 250 votes) and sorts it by `rollCallNumber` before paging, as the Senate branch sorts by vote number.
+- *Decision: a failed page fails the call.* The pages after the first are read in parallel, and one that still fails after its retries (a 5xx) or at once (a 429) fails the whole `list`, though its siblings answered. Sorting only the pages that arrived would page a session with votes missing as though it were whole.
+
+### The committee roster is read chamber by chamber
+
+Name resolution, codes outside the letters-plus-two-digits shape, and `list` with `filter` on `congressgov_committee_lookup`, and `congress://committee/{committeeCode}`, read the whole roster. Every committee list orders rows by update date, 250 a request, and Congress.gov orders the rows that share an update instant afresh on each request, so a page boundary inside such a group can return one row on both pages and another on neither. Every read of the cross-chamber `/committee` list repeats `n79043123` and loses `no94026591` (Senate Printing).
+
+- **Three chamber lists, read together.** With no `chamber` and no `congress`, the roster is `/committee/house`, `/committee/senate`, and `/committee/joint`, read concurrently (five requests, two deep, where `/committee` took four in sequence) and merged newest-updated first, the cross-chamber order. A congress-scoped read without `chamber` stays on `/committee/{congress}`, one request for any recent congress.
+- **A repeated row re-reads the boundaries.** The House and Senate lists also split a tied group at their 250-row boundary and come back complete only because Congress.gov orders it the same way on both pages. Full pages return as many rows as they skip, so a lost row always leaves a repeated one: a scope whose pages repeat a row reads each boundary again with one page centred on it, which holds the whole group, and keeps the rows it adds. A clean read costs nothing extra. `pagination.count` can't serve as the check, since a congress-scoped list overstates it (`/committee/119` counts 238 and returns 236 rows on one page).
+
 ### Amendments are their own tool
 
 `congressgov_amendment_lookup` is a separate tool rather than new operations on `congressgov_bill_lookup`. Folding amendments in would add a second identity triple (`amendmentType` + `amendmentNumber` beside `billType` + `billNumber`) and six more operations to a tool that already has twelve, and an amendment is not a bill sub-resource: it has its own sponsor, actions, cosponsors, and text, and it can amend another amendment (`amendedAmendment`). The bill, vote, and member tools name the new tool where their rows carry an amendment ID, so the chain from a row to the record is one call.
@@ -929,6 +953,8 @@ The caller names how a body becomes text (`reading`); the body never decides. `g
 
 The HTML reading is explicit, hand-written, single-pass, and stack-free rather than the framework's HTML extractor: that extractor is heuristic and works on the whole string, with no streaming twin, so it cannot hold the byte-for-byte equality with a windowed read that exact offsets require.
 
+A table that opens in a cell before any of the cell's text (whitespace, U+00A0 included, doesn't count) is read as that cell's content: its rows and nested tables separate like any block inside a cell, with a space, and its cells add nothing. CRS wraps figures that way, in a one-row table that right-aligns a value (`750`) or splits it at the decimal point (`$838` | `.2`), and the rule keeps such a figure in its column. A table that opens after text in its cell is a real table, such as a data table in a footnote or a figure frame under a heading, and keeps its own lines. The test takes one flag (the open cell holds text) and one counter (tables open as a cell's content), so the reading stays stack-free; keying on the nested table's row count instead would hold its first row back until a second `<tr>` or the `</table>` arrived.
+
 ### `content` bounds the fetch and the response separately
 
 A full enrolled bill's Formatted Text runs past a megabyte and its USLM XML past 2.6 MB, and the omnibus appropriations acts run far past that — 116th Congress H.R. 133 enrolled is 6,790,482 bytes as Formatted Text and 9,812,888 as XML. Bounding only the response would still pull the whole document into memory on every call, so the body is extracted as it streams and only the requested character window is extracted into memory. Transient allocation is not flat — peak RSS on a single large read runs above a buffered read of the same document — but the decoded text is garbage rather than live. The fetch still carries a declared ceiling (25 MB, refused on `Content-Length` when one is advertised and mid-stream when it is not), a per-attempt timeout covering headers and body, one time budget for the whole call, and a content-type allowlist — an upstream whose response size is not known in advance needs a limit of its own. Raising the ceiling alone would not have been enough: both published formats of an oversized document are oversized, so the `document_too_large` recovery hint points at the source URL rather than at the other format.
@@ -937,13 +963,13 @@ The streaming extractor is a second implementation of an existing contract, sinc
 
 ### Every call runs on one time budget, counted from its start
 
-MCP SDK clients give up on a request after 60 seconds by default. Each upstream request runs its own retry ladder — three attempts of 10 seconds each against api.congress.gov, 12 against the Senate LIS feed, and 30 against a www.congress.gov document, two of 20 seconds each against a Voteview file — and many calls chain requests: `content` looks up the document's format URL before fetching it, `congressgov_committee_lookup` pages the 818-row all-chamber committee roster four times before filtering it or resolving a committee name (a House or Senate roster alone takes two requests and the joint committees one, so setting `chamber` shortens the chain) and then makes one or two more requests, and `congressgov_roll_votes` House `list` in recent order fetches its first page and then the rest in parallel. Per-attempt timeouts bound none of that. One api.congress.gov request could take about 34 seconds, or about 90 when a 5xx carried a `Retry-After` the ladder honored, and a committee name resolved across every chamber for `bills` in recent order chained six such requests. A client that had already given up never saw the server's classified error.
+MCP SDK clients give up on a request after 60 seconds by default. Each upstream request runs its own retry ladder — three attempts of 10 seconds each against api.congress.gov, 12 against the Senate LIS feed, and 30 against a www.congress.gov document, two of 20 seconds each against a Voteview file — and many calls chain requests: `content` looks up the document's format URL before fetching it, `congressgov_committee_lookup` reads the committee roster — the three chamber lists, two requests deep — before filtering it or resolving a committee name (one chamber's list when `chamber` is set: two requests for the House or Senate, one for the joint committees) and then makes one or two more requests, and `congressgov_roll_votes` House `list` fetches a session's first page and then the rest in parallel. Per-attempt timeouts bound none of that. One api.congress.gov request could take about 34 seconds, or about 90 when a 5xx carried a `Retry-After` the ladder honored, and a committee name resolved across every chamber for `bills` in recent order chained six such requests. A client that had already given up never saw the server's classified error.
 
 Every upstream request a tool call or resource read makes through `CongressApiService`, `SenateVoteService`, or `CongressDocumentsService` therefore spends one 50-second budget (`src/services/call-budget.ts`) counted from the call's start, `ctx.timestamp`, which the framework stamps as the tool call or resource read begins. Each request's ladder gets what is left as `withRetry`'s `deadlineMs`, and each attempt's timeout is clamped to the remainder while its I/O carries the budget's signal. A backoff the remainder cannot hold fails at once as the expiry. A `Retry-After` wait it cannot hold fails at once with the upstream's own error, `retryAfter` intact, since waiting out that window is still the caller's move. A request the budget no longer covers is never sent, and requests issued in parallel share the same end instant. Running out is a `Timeout` with reason `upstream_timeout`, the reason a slow api.congress.gov attempt already carried, and its message names the budget and the attempts made. A caller abort keeps precedence and stays `RequestCancelled`.
 
 - **One module for three services.** Where the budget starts, how attempts are clamped, and how expiry reads cannot drift between the services, and a `content` call's format lookup spends from the same total as its document fetch, where a budget kept inside one service would leave the other outside it.
 - **Read from the context, not passed in.** The budget comes from the handler's own `ctx`, so no tool path can start it in the wrong place. A context derived from `ctx` carries a later timestamp and is never the one read, and tools pass `ctx` to every service call.
-- **No call, no budget.** The mirror ingester and the `mirror:*` scripts call `CongressApiService` without a context and keep the plain per-request ladder: a sync runs for minutes and has no client waiting on a 60-second clock.
+- **No call, no budget.** The mirror ingester and the `mirror:*` scripts call `CongressApiService` without a context and keep the plain per-request ladder, three attempts of 30 seconds each, the attempt a document fetch gets: a sync runs for minutes and has no client waiting on a 60-second clock, and an uncached 250-row page of the bill or summaries list can outlast a tool call's 10-second attempt.
 - **A clamped last attempt can end on its own timer.** The attempt's timer and the budget's clock are armed for the same instant, and the timer can fire first. That timeout is reported as the budget's expiry too, never as an exhausted ladder naming a per-attempt deadline the attempt never had.
 
 ### A multi-window document is fetched once per TTL
