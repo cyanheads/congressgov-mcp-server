@@ -6,7 +6,8 @@
  * `fromDateTime` and `toDateTime` are exclusive whole-second bounds, and a
  * fractional or malformed bound is rejected. The order inside a tie (bills sharing
  * one second) changes with the request's offset, limit, and bounds, so a page
- * boundary that splits a tie repeats some of its bills and drops others.
+ * boundary that splits a tie repeats some of its bills and drops others. Also a
+ * 200 whose JSON body pauses or stalls halfway, as a slow upstream page does.
  * @module tests/services/congress-mirror/fake-bill-list
  */
 
@@ -107,4 +108,56 @@ export function fakeBills(
 /** `base` (`YYYY-MM-DDTHH:MM:SSZ`) moved forward by `seconds`. */
 export function plusSeconds(base: string, seconds: number): string {
   return new Date(Date.parse(base) + seconds * 1000).toISOString().replace('.000Z', 'Z');
+}
+
+/**
+ * A 200 carrying `body` (JSON text) in two halves: the first at once, the second
+ * `pauseMs` later. Without `pauseMs` the second half never comes. Until it does,
+ * `signal` aborting — the request's own, which `fetchWithTimeout` aborts at its
+ * deadline — errors the read with the abort reason, as an interrupted `fetch`
+ * body does.
+ */
+export function halvedBodyResponse(
+  body: string,
+  signal: AbortSignal | null | undefined,
+  pauseMs?: number,
+): Response {
+  const bytes = new TextEncoder().encode(body);
+  const half = bytes.length >> 1;
+  let sent = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return new Response(
+    new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (!sent) {
+          sent = true;
+          controller.enqueue(bytes.subarray(0, half));
+          return;
+        }
+        if (signal?.aborted) {
+          controller.error(signal.reason);
+          return;
+        }
+        return new Promise<void>((resolve) => {
+          const abort = () => {
+            clearTimeout(timer);
+            controller.error(signal?.reason);
+            resolve();
+          };
+          signal?.addEventListener('abort', abort, { once: true });
+          if (pauseMs === undefined) return;
+          timer = setTimeout(() => {
+            signal?.removeEventListener('abort', abort);
+            controller.enqueue(bytes.subarray(half));
+            controller.close();
+            resolve();
+          }, pauseMs);
+        });
+      },
+      cancel() {
+        clearTimeout(timer);
+      },
+    }),
+    { status: 200, headers: { 'content-type': 'application/json' } },
+  );
 }

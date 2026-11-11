@@ -1,25 +1,99 @@
 /**
- * @fileoverview Integration tests for the mirror lifecycle CLI scripts
- * (`scripts/congress-mirror-{init,refresh,verify}.ts`). Each script runs as a Bun
- * subprocess, the way an operator runs it, so the shared bootstrap's logger
- * initialization is exercised end to end: records on stderr as JSON lines, stdout
- * empty, the level following `MCP_LOG_LEVEL`. Init and refresh page a loopback
- * stand-in for the Congress.gov API.
+ * @fileoverview Integration tests for the mirror lifecycle CLI
+ * (`src/cli/mirror-{init,refresh,verify}.ts`). The server is compiled the way
+ * `bun run build` compiles it, into a package laid out as an npm install leaves it
+ * and kept outside the checkout. Each compiled entry (`dist/cli/*.js`) runs as a
+ * Bun or Node subprocess from an unrelated working directory with no
+ * `tsconfig.json`, as an operator runs it from a checkout, the Docker image, or an
+ * npm install. That exercises import resolution of the shipped files and the
+ * shared bootstrap's logger initialization end to end: records on stderr as JSON
+ * lines, stdout empty, the level following `MCP_LOG_LEVEL`. Init and refresh page a
+ * loopback stand-in for the Congress.gov API.
  * @module tests/services/congress-mirror/mirror-cli
  */
 
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtempSync, rmSync } from 'node:fs';
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  unlinkSync,
+} from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { promisify } from 'node:util';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { CongressMirrorService } from '@/services/congress-mirror/congress-mirror-service.js';
 import { type FakeBill, listBillsPage } from './fake-bill-list.js';
 
+const execFileAsync = promisify(execFile);
+
+/** The checkout the test runner starts in. */
+const ROOT = process.cwd();
 const SCRIPT_TIMEOUT_MS = 30_000;
+const BUILD_TIMEOUT_MS = 60_000;
+
+/** tsc's exit status when it reports type errors and still emits (`DiagnosticsPresent_OutputsGenerated`). */
+const TSC_EMITTED_WITH_DIAGNOSTICS = 2;
+
+/** The runtimes the compiled CLI runs under. */
+const RUNTIMES = ['bun', 'node'] as const;
+type Runtime = (typeof RUNTIMES)[number];
+
+/** A compiled build of the server, laid out as an installed npm package. */
+interface InstalledPackage {
+  /** Working directory for each run: empty, outside the package, no `tsconfig.json`. */
+  cwd: string;
+  /** Package root: `package.json`, the build in `dist/`, and a `node_modules` link. */
+  dir: string;
+}
+
+/**
+ * Compile `src/` as `bun run build` does — `tsc`, then `tsc-alias` rewriting the
+ * `@/` alias to relative imports, over `tsconfig.build.json` — into
+ * `<root>/package/dist`, beside a copy of `package.json` and a link to the
+ * checkout's `node_modules`. No `tsconfig.json` sits in the package or above it, so
+ * the build resolves only through its own relative imports and installed packages,
+ * as it does from an npm install. The emit flags keep `.tsbuildinfo`, declarations,
+ * and source maps out. Type errors are the typecheck gate's to report: a build that
+ * reports them and still emits is used. The `node_modules` link is made last, so a
+ * failed build leaves nothing that reaches into the checkout.
+ */
+async function installBuild(root: string): Promise<InstalledPackage> {
+  const dir = join(root, 'package');
+  const dist = join(dir, 'dist');
+  const bin = (name: string) => join(ROOT, 'node_modules', '.bin', name);
+  const emitFlags = [
+    '--incremental',
+    'false',
+    '--sourceMap',
+    'false',
+    '--declaration',
+    'false',
+    '--declarationMap',
+    'false',
+  ];
+  await execFileAsync(bin('tsc'), ['-p', 'tsconfig.build.json', '--outDir', dist, ...emitFlags], {
+    cwd: ROOT,
+  }).catch((error: { code?: unknown }) => {
+    if (error.code !== TSC_EMITTED_WITH_DIAGNOSTICS) throw error;
+  });
+  await execFileAsync(bin('tsc-alias'), ['-p', 'tsconfig.build.json', '--outDir', dist], {
+    cwd: ROOT,
+  });
+  copyFileSync(join(ROOT, 'package.json'), join(dir, 'package.json'));
+  const cwd = join(root, 'elsewhere');
+  mkdirSync(cwd);
+  symlinkSync(join(ROOT, 'node_modules'), join(dir, 'node_modules'), 'dir');
+  return { cwd, dir };
+}
 
 interface ScriptRun {
   code: number | null;
@@ -28,17 +102,33 @@ interface ScriptRun {
   /** Parsed stderr records. */
   records: Record<string, unknown>[];
   stdout: string;
+  /** Stderr lines that are not JSON records — where a module-resolution error lands. */
+  unparsed: string[];
+}
+
+function parseRecord(line: string): Record<string, unknown> | undefined {
+  try {
+    return JSON.parse(line) as Record<string, unknown>;
+  } catch {
+    return;
+  }
 }
 
 /**
- * Run one mirror script under Bun from the checkout root. `NODE_ENV` is pinned
+ * Run one compiled entry, `dist/cli/<entry>.js`, of the installed package under
+ * `runtime`, from the package's outside working directory. `NODE_ENV` is pinned
  * because the framework logger writes nothing to stderr under `testing`, which
  * the test runner would otherwise hand down; `CONGRESS_API_KEY` is pinned so no
  * real key from a local `.env` reaches the loopback upstream.
  */
-async function runScript(script: string, env: Record<string, string>): Promise<ScriptRun> {
-  const child = spawn('bun', [`scripts/${script}`], {
-    cwd: process.cwd(),
+async function runCli(
+  pkg: InstalledPackage,
+  entry: string,
+  env: Record<string, string>,
+  runtime: Runtime = 'bun',
+): Promise<ScriptRun> {
+  const child = spawn(runtime, [join(pkg.dir, 'dist', 'cli', `${entry}.js`)], {
+    cwd: pkg.cwd,
     env: { ...process.env, NODE_ENV: 'production', CONGRESS_API_KEY: 'test-key', ...env },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -51,15 +141,20 @@ async function runScript(script: string, env: Record<string, string>): Promise<S
     stderr += chunk;
   });
   const [code] = (await once(child, 'close')) as [number | null];
-  const records = stderr
-    .split('\n')
-    .filter((line) => line.trim() !== '')
-    .map((line) => JSON.parse(line) as Record<string, unknown>);
-  return { code, stdout, records, messages: records.map((r) => String(r.msg)) };
+  const records: Record<string, unknown>[] = [];
+  const unparsed: string[] = [];
+  for (const line of stderr.split('\n').filter((l) => l.trim() !== '')) {
+    const record = parseRecord(line);
+    if (record) records.push(record);
+    else unparsed.push(line);
+  }
+  return { code, stdout, records, unparsed, messages: records.map((r) => String(r.msg)) };
 }
 
 interface Upstream {
   baseUrl: string;
+  /** Settles when the first bill-list request arrives. */
+  billListRequested: Promise<void>;
   /** Every request the scripts made, in order. */
   requests: URL[];
   server: Server;
@@ -99,11 +194,16 @@ const UPSTREAM_SUMMARIES = [
  * list honors `fromDateTime` the way Congress.gov does: without one it holds only
  * the last day's updates (none here), with one every summary updated since. The
  * bill list is the live-shaped fake (`listBillsPage`): exclusive whole-second
- * bounds on a hidden update time, date-only rows.
+ * bounds on a hidden update time, date-only rows. A bill-list request waits for
+ * `billListGate` before it is answered.
  */
-async function startUpstream(): Promise<Upstream> {
+async function startUpstream(billListGate?: Promise<void>): Promise<Upstream> {
   const requests: URL[] = [];
-  const server = createServer((req, res) => {
+  let billListArrived!: () => void;
+  const billListRequested = new Promise<void>((resolve) => {
+    billListArrived = resolve;
+  });
+  const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', 'http://127.0.0.1');
     requests.push(url);
     const param = (name: string) => url.searchParams.get(name) ?? undefined;
@@ -113,6 +213,8 @@ async function startUpstream(): Promise<Upstream> {
       const rows = from ? UPSTREAM_SUMMARIES.filter((s) => s.updateDate >= from) : [];
       body = { summaries: rows, pagination: { count: rows.length } };
     } else if (url.pathname === '/v3/bill/119') {
+      billListArrived();
+      await billListGate;
       const page = listBillsPage(UPSTREAM_BILLS, {
         congress: 119,
         sort: param('sort'),
@@ -133,12 +235,29 @@ async function startUpstream(): Promise<Upstream> {
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
   const { port } = server.address() as AddressInfo;
-  return { server, requests, baseUrl: `http://127.0.0.1:${port}/v3` };
+  return { server, requests, billListRequested, baseUrl: `http://127.0.0.1:${port}/v3` };
 }
 
-describe('mirror lifecycle scripts', () => {
+describe('mirror lifecycle CLI', () => {
+  let buildRoot: string;
+  let pkg: InstalledPackage;
   let dir: string;
   let env: Record<string, string>;
+
+  beforeAll(async () => {
+    buildRoot = mkdtempSync(join(tmpdir(), 'congress-mirror-cli-build-'));
+    pkg = await installBuild(buildRoot);
+  }, BUILD_TIMEOUT_MS);
+
+  afterAll(() => {
+    /**
+     * `pkg` is unset only when the build failed, which leaves no link (installBuild
+     * links last). The link goes first, so the recursive removal never reaches the
+     * checkout's node_modules.
+     */
+    if (pkg) unlinkSync(join(pkg.dir, 'node_modules'));
+    rmSync(buildRoot, { recursive: true, force: true });
+  });
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'congress-mirror-cli-'));
@@ -156,11 +275,12 @@ describe('mirror lifecycle scripts', () => {
   });
 
   describe('mirror:verify', () => {
-    it(
-      'reports a never-built store on stderr and exits 1',
-      async () => {
-        const run = await runScript('congress-mirror-verify.ts', env);
+    it.each(RUNTIMES)(
+      'under %s, resolves its imports from the installed build, reports a never-built store on stderr, and exits 1',
+      async (runtime) => {
+        const run = await runCli(pkg, 'mirror-verify', env, runtime);
 
+        expect(run.unparsed).toEqual([]);
         expect(run.code).toBe(1);
         expect(run.stdout).toBe('');
         expect(run.messages).toContain(
@@ -175,9 +295,9 @@ describe('mirror lifecycle scripts', () => {
       SCRIPT_TIMEOUT_MS,
     );
 
-    it(
-      'reports a built store and its integrity check, exiting 0',
-      async () => {
+    it.each(RUNTIMES)(
+      'under %s, reports a built store and its integrity check, exiting 0',
+      async (runtime) => {
         const service = new CongressMirrorService({
           mirrorPath: env.CONGRESS_MIRROR_PATH as string,
           congresses: [119],
@@ -189,8 +309,9 @@ describe('mirror lifecycle scripts', () => {
         await service.mirrorInstance.runSync({ mode: 'init', signal: AbortSignal.timeout(10_000) });
         await service.mirrorInstance.close();
 
-        const run = await runScript('congress-mirror-verify.ts', env);
+        const run = await runCli(pkg, 'mirror-verify', env, runtime);
 
+        expect(run.unparsed).toEqual([]);
         expect(run.code).toBe(0);
         expect(run.stdout).toBe('');
         expect(
@@ -206,11 +327,9 @@ describe('mirror lifecycle scripts', () => {
     it(
       'follows MCP_LOG_LEVEL — an error floor drops the info status line, keeps the error',
       async () => {
-        const run = await runScript('congress-mirror-verify.ts', {
-          ...env,
-          MCP_LOG_LEVEL: 'error',
-        });
+        const run = await runCli(pkg, 'mirror-verify', { ...env, MCP_LOG_LEVEL: 'error' });
 
+        expect(run.unparsed).toEqual([]);
         expect(run.code).toBe(1);
         expect(run.stdout).toBe('');
         expect(run.messages).toEqual(['Mirror is NOT ready — run mirror:init to build the index.']);
@@ -232,11 +351,12 @@ describe('mirror lifecycle scripts', () => {
       await once(upstream.server, 'close');
     });
 
-    it(
-      'logs the start, per-congress, and completion lines on stderr at the MCP_LOG_LEVEL floor; stdout stays empty',
-      async () => {
-        const init = await runScript('congress-mirror-init.ts', env);
+    it.each(RUNTIMES)(
+      'under %s, logs the start, per-congress, and completion lines on stderr at the MCP_LOG_LEVEL floor; stdout stays empty',
+      async (runtime) => {
+        const init = await runCli(pkg, 'mirror-init', env, runtime);
 
+        expect(init.unparsed).toEqual([]);
         expect(init.code).toBe(0);
         expect(init.stdout).toBe('');
         // Pino's numeric level for `debug` — the per-request fetch records.
@@ -253,11 +373,14 @@ describe('mirror lifecycle scripts', () => {
           'Congress bill mirror init complete: 2 records applied across 1 pages (total 2).',
         );
 
-        const refresh = await runScript('congress-mirror-refresh.ts', {
-          ...env,
-          MCP_LOG_LEVEL: 'info',
-        });
+        const refresh = await runCli(
+          pkg,
+          'mirror-refresh',
+          { ...env, MCP_LOG_LEVEL: 'info' },
+          runtime,
+        );
 
+        expect(refresh.unparsed).toEqual([]);
         expect(refresh.code).toBe(0);
         expect(refresh.stdout).toBe('');
         expect(refresh.records.every((r) => typeof r.level === 'number' && r.level >= 30)).toBe(
@@ -292,6 +415,124 @@ describe('mirror lifecycle scripts', () => {
           ['2024-12-31T23:59:59Z', null],
           ['2026-01-31T23:59:59Z', null],
         ]);
+      },
+      SCRIPT_TIMEOUT_MS,
+    );
+
+    it.each(RUNTIMES)(
+      'under %s, a SIGTERM mid-walk stops the run and releases its lease, so an immediate re-run completes',
+      async (runtime) => {
+        let openGate!: () => void;
+        const gated = await startUpstream(
+          new Promise<void>((resolve) => {
+            openGate = resolve;
+          }),
+        );
+        const gatedEnv = { ...env, CONGRESS_API_BASE_URL: gated.baseUrl };
+        const child = spawn(runtime, [join(pkg.dir, 'dist', 'cli', 'mirror-init.js')], {
+          cwd: pkg.cwd,
+          env: {
+            ...process.env,
+            NODE_ENV: 'production',
+            CONGRESS_API_KEY: 'test-key',
+            ...gatedEnv,
+          },
+          stdio: ['ignore', 'ignore', 'pipe'],
+        });
+        let stderr = '';
+        const acknowledged = new Promise<void>((resolve) => {
+          child.stderr.setEncoding('utf8').on('data', (chunk: string) => {
+            stderr += chunk;
+            if (stderr.includes('SIGTERM received')) resolve();
+          });
+        });
+        const closed = once(child, 'close') as Promise<[number | null]>;
+
+        await gated.billListRequested;
+        child.kill('SIGTERM');
+        // A run that ignores the signal's settle step dies here; one that honors it waits for the request in flight.
+        await Promise.race([acknowledged, closed]);
+        openGate();
+        const [code] = await closed;
+        const messages = stderr
+          .split('\n')
+          .map(parseRecord)
+          .map((record) => record?.msg);
+
+        expect(code).toBe(1);
+        expect(messages).toContain('Mirror sync stopped');
+
+        const rerun = await runCli(pkg, 'mirror-init', gatedEnv, runtime);
+
+        expect(rerun.code).toBe(0);
+        expect(rerun.messages.at(-1)).toBe(
+          'Congress bill mirror init complete: 2 records applied across 1 pages (total 2).',
+        );
+        gated.server.close();
+        await once(gated.server, 'close');
+      },
+      SCRIPT_TIMEOUT_MS,
+    );
+  });
+
+  describe('packaging', () => {
+    it('points each mirror:* package script at a compiled entry the build emits', () => {
+      const { scripts } = JSON.parse(readFileSync(join(pkg.dir, 'package.json'), 'utf8')) as {
+        scripts: Record<string, string>;
+      };
+      const mirrorScripts = Object.fromEntries(
+        Object.entries(scripts).filter(([name]) => name.startsWith('mirror:')),
+      );
+
+      expect(mirrorScripts).toEqual({
+        'mirror:init': 'bun dist/cli/mirror-init.js',
+        'mirror:refresh': 'bun dist/cli/mirror-refresh.js',
+        'mirror:verify': 'bun dist/cli/mirror-verify.js',
+      });
+      for (const command of Object.values(mirrorScripts)) {
+        const entry = command.split(' ')[1] as string;
+        expect(existsSync(join(pkg.dir, entry)), entry).toBe(true);
+      }
+    });
+
+    it(
+      "ships the compiled entry each mirror:* script names, and the bootstrap they share, in the build's npm tarball",
+      async () => {
+        const { scripts } = JSON.parse(readFileSync(join(pkg.dir, 'package.json'), 'utf8')) as {
+          scripts: Record<string, string>;
+        };
+        const entries = Object.entries(scripts)
+          .filter(([name]) => name.startsWith('mirror:'))
+          .map(([, command]) => command.split(' ')[1] as string);
+        const { stdout } = await execFileAsync(
+          'npm',
+          ['pack', '--dry-run', '--json', '--ignore-scripts'],
+          { cwd: pkg.dir },
+        );
+        const [tarball] = JSON.parse(stdout) as { files: { path: string }[] }[];
+        const paths = tarball?.files.map((file) => file.path) ?? [];
+
+        expect(entries).toHaveLength(3);
+        for (const entry of [...entries, 'dist/cli/mirror-context.js']) {
+          expect(paths, entry).toContain(entry);
+        }
+      },
+      SCRIPT_TIMEOUT_MS,
+    );
+
+    it(
+      'leaves scripts/ out of the npm tarball',
+      async () => {
+        const { stdout } = await execFileAsync(
+          'npm',
+          ['pack', '--dry-run', '--json', '--ignore-scripts'],
+          { cwd: ROOT },
+        );
+        const [tarball] = JSON.parse(stdout) as { files: { path: string }[] }[];
+        const paths = tarball?.files.map((file) => file.path) ?? [];
+
+        expect(paths).toContain('package.json');
+        expect(paths.filter((path) => path.startsWith('scripts/'))).toEqual([]);
       },
       SCRIPT_TIMEOUT_MS,
     );

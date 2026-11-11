@@ -1,14 +1,13 @@
-#!/usr/bin/env bun
 /**
  * @fileoverview mirror:verify — report the Congress bill mirror health: readiness,
  * sync status, last completion, record count, and a SQLite integrity check. Exits
  * non-zero when the mirror is not ready or integrity fails, so it can gate a
  * deployment or a post-build smoke check.
- * @module scripts/congress-mirror-verify
+ * @module cli/mirror-verify
  */
 
 import { logger, requestContextService } from '@cyanheads/mcp-ts-core/utils';
-import { getMirror } from './_mirror-context.js';
+import { getMirror } from './mirror-context.js';
 
 const mirror = await getMirror();
 const context = requestContextService.createRequestContext({ operation: 'mirror:verify' });

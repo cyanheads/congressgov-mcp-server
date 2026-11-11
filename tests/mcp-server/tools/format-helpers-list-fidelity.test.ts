@@ -572,7 +572,11 @@ const listRenderers: Array<{
   {
     name: 'bill text version',
     render: formatBills,
-    row: { type: 'Enrolled Bill', formats: [{ type: 'PDF', url: 'https://example.gov/b.pdf' }] },
+    row: {
+      type: 'Enrolled Bill',
+      formats: [{ type: 'PDF', url: 'https://example.gov/b.pdf' }],
+      textVersionIndex: 0,
+    },
   },
   {
     name: 'bill sub-resource summary',
@@ -659,7 +663,11 @@ const listRenderers: Array<{
   {
     name: 'amendment text version',
     render: formatAmendments,
-    row: { type: 'Submitted', formats: [{ type: 'HTML', url: 'https://example.gov/a.htm' }] },
+    row: {
+      type: 'Submitted',
+      formats: [{ type: 'HTML', url: 'https://example.gov/a.htm' }],
+      textVersionIndex: 0,
+    },
   },
 ];
 

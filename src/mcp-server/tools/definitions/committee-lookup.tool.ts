@@ -5,11 +5,12 @@
 
 import type { Context } from '@cyanheads/mcp-ts-core';
 import { tool, z } from '@cyanheads/mcp-ts-core';
-import { JsonRpcErrorCode, McpError, validationError } from '@cyanheads/mcp-ts-core/errors';
+import { validationError } from '@cyanheads/mcp-ts-core/errors';
 
 import { formatCommittees } from '@/mcp-server/tools/format-helpers.js';
 import {
   addNotice,
+  anyLetterCase,
   buildEffectiveQuery,
   congressErrorContracts,
   identityErrorContracts,
@@ -18,7 +19,17 @@ import {
   normalizeOptionalString,
   noticeIgnoredInputs,
   notifyIfNoMatches,
+  validateDateTimeRange,
+  validateIsoDateTime,
 } from '@/mcp-server/tools/tool-helpers.js';
+import {
+  fetchAllCommittees,
+  findRosterRow,
+  inferChamberFromCode,
+  listedChamber,
+  readCommittee,
+  rosterChamber,
+} from '@/services/congress-api/committee-roster.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 import type { Chamber } from '@/services/congress-api/types.js';
 
@@ -100,11 +111,13 @@ function filterCommittees(items: ApiRecord[], filter: string): ApiRecord[] {
 }
 
 /**
- * Shape of a committee system code: chamber-prefixed letters + a 2-digit suffix
- * (`hsju00`, `ssbk13`). Anything else in `committeeCode` is treated as a committee
- * name and routed to the resolver — testing for the code shape rather than for
- * whitespace is what lets single-token names ('Judiciary') resolve.
- * Resolves cyanheads/congressgov-mcp-server#46.
+ * The shape most committee system codes take: chamber-prefixed letters + a
+ * 2-digit suffix (`hsju00`, `ssbk13`). A value of this shape is read as a code
+ * in its prefix's chamber with no roster read. Any other value goes to the
+ * roster: it is a code when a row's `systemCode` equals it (`n79043125`,
+ * `sp2k00`), and otherwise a committee name for the resolver — testing for the
+ * code shape rather than for whitespace is what lets single-token names
+ * ('Judiciary') resolve. Resolves cyanheads/congressgov-mcp-server#46 and #114.
  *
  * Matched case-insensitively: upstream `systemCode` values are lowercase, so an
  * uppercased code is normalized rather than mistaken for a name.
@@ -112,42 +125,11 @@ function filterCommittees(items: ApiRecord[], filter: string): ApiRecord[] {
 const COMMITTEE_CODE_SHAPE = /^[a-z]{2,6}\d{2}$/i;
 
 /** `chamber` in any letter case: committee rows carry 'House', 'Senate', 'Joint', and the advertised enum stays lowercase. */
-const ChamberEnum = z.preprocess(
-  (value) => (typeof value === 'string' ? value.toLowerCase() : value),
-  z.enum(['house', 'senate', 'joint']),
-);
-
-/** Committee codes carry chamber in the first letter (h=House, s=Senate, j=Joint). */
-function inferChamberFromCode(code: string): Chamber | undefined {
-  const first = code[0]?.toLowerCase();
-  if (first === 's') return 'senate';
-  if (first === 'j') return 'joint';
-  if (first === 'h') return 'house';
-  return;
-}
-
-/**
- * A roster row's own chamber ('House', 'Senate', 'Joint'). A few historical
- * codes disagree with their prefix — `jsat00`, `jtdr00`, and `jsec03` are Senate
- * committees, `no2010049600` a House one — so a resolved name is read in the
- * chamber its row names, and so is a code its prefix's chamber does not hold.
- */
-function rosterChamber(record: ApiRecord): Chamber | undefined {
-  switch (typeof record.chamber === 'string' ? record.chamber.toLowerCase() : undefined) {
-    case 'house':
-      return 'house';
-    case 'senate':
-      return 'senate';
-    case 'joint':
-      return 'joint';
-    default:
-      return;
-  }
-}
+const ChamberEnum = anyLetterCase(z.enum(['house', 'senate', 'joint']));
 
 export const committeeLookupTool = tool('congressgov_committee_lookup', {
   title: 'Congress.gov Committee Lookup',
-  description: `Browse congressional committees and their legislation, reports, and nominations. Committee codes follow the pattern chamber-prefix (h/s/j) + abbreviation + 2-digit number — use 'list' (with optional 'filter' for name→code resolution) to discover codes, then 'get' or drill into 'bills', 'reports', or 'nominations' ('nominations' is Senate-only). 'get' and sub-resources only need committeeCode (chamber is inferred from the prefix, or read from the committee roster when the prefix's chamber does not hold the code); pass chamber explicitly to override. The 'bills' sub-resource defaults to 'recent' order (newest update-date first); pass order='oldest' for ascending update-date order. Upstream omits bill titles from the 'bills' sub-resource — rows carry only {congress, billType, billNumber, actionDate, relationshipType, url}; chain 'congressgov_bill_lookup get' per row to retrieve titles and policy area.`,
+  description: `Browse congressional committees and their legislation, reports, and nominations. Use 'list' (with optional 'filter' for name→code resolution) to discover committee codes — the systemCode on each row, such as 'hsju00' or the historical 'n79043125' — then 'get' or drill into 'bills', 'reports', or 'nominations' ('nominations' is Senate-only). 'get' and sub-resources only need committeeCode: the chamber is read from the code's prefix, or from the committee roster when the prefix names no chamber or one that does not hold the code; pass chamber explicitly to override. 'bills' and 'reports' take fromDateTime/toDateTime, a window on the dates Congress.gov updated each row: a row with any update inside the window matches, so a window returns rows added in it plus older rows touched in it. Congress.gov lists a committee's bills roughly from least to most recently updated; 'bills' defaults to order='recent', which reverses that list, and order='oldest' keeps it. Upstream omits bill titles from the 'bills' sub-resource — rows carry only {congress, type, number, actionDate, relationshipType, updateDate, url}; chain 'congressgov_bill_lookup get' per row to retrieve titles and policy area.`,
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
   errors: [...congressErrorContracts, ...identityErrorContracts],
   input: z.object({
@@ -173,7 +155,7 @@ export const committeeLookupTool = tool('congressgov_committee_lookup', {
       )
       .optional()
       .describe(
-        "Committee system code, e.g. 'hsju00'. Required for 'get' and sub-resources; 'list' refuses it. Codes are letters + a 2-digit suffix and are matched case-insensitively. Any other value with a letter or digit is treated as a committee name and resolved automatically — single-word names ('Judiciary') included — or use operation:'list' with filter to browse.",
+        "Committee system code: the systemCode of a 'list' row, e.g. 'hsju00' or 'n79043125', matched case-insensitively. Required for 'get' and sub-resources; 'list' refuses it. Any other value with a letter or digit is treated as a committee name and resolved automatically — single-word names ('Judiciary') included — or use operation:'list' with filter to browse.",
       ),
     // Provisional param name — tracking fleet-wide convention in cyanheads/mcp-ts-core#186.
     filter: z
@@ -182,13 +164,25 @@ export const committeeLookupTool = tool('congressgov_committee_lookup', {
       .describe(
         "Filter committee-list results by name (e.g., 'transportation', 'armed services'), for 'list' only; fuzzy-matched rows are labeled approximate.",
       ),
+    fromDateTime: z
+      .string()
+      .optional()
+      .describe(
+        "Start of the update-date window for 'bills' and 'reports' (ISO 8601, e.g. 2025-03-01T00:00:00Z): a row matches when Congress.gov updated it at any time inside the window, so older rows touched in the window match too, and each matched row carries an updateDate from inside the window rather than its latest. Ignored by 'list', 'get', and 'nominations'.",
+      ),
+    toDateTime: z
+      .string()
+      .optional()
+      .describe(
+        "End of the update-date window for 'bills' and 'reports' (ISO 8601). Same semantics as fromDateTime. Ignored by 'list', 'get', and 'nominations'.",
+      ),
     limit: z.number().int().min(1).max(250).default(20).describe('Results per page (1-250).'),
     offset: z.number().int().min(0).default(0).describe('Pagination offset.'),
     order: z
       .enum(['recent', 'oldest'])
       .default('recent')
       .describe(
-        "Sort order for the 'bills' sub-resource. 'recent' (default) returns newest update-date first; 'oldest' returns ascending update-date order. Ignored by other operations.",
+        "Row order for the 'bills' sub-resource. Congress.gov lists a committee's bills roughly from least to most recently updated: 'recent' (default) reverses that list, so the rows it lists last come first, and 'oldest' keeps it. Ignored by other operations.",
       ),
   }),
   output: listOrDetail(
@@ -200,6 +194,12 @@ export const committeeLookupTool = tool('congressgov_committee_lookup', {
 
   async handler(input, ctx) {
     const api = getCongressApi();
+    const fromDateTime = validateIsoDateTime(
+      normalizeOptionalString(input.fromDateTime),
+      'fromDateTime',
+    );
+    const toDateTime = validateIsoDateTime(normalizeOptionalString(input.toDateTime), 'toDateTime');
+    validateDateTimeRange(fromDateTime, toDateTime);
 
     if (input.operation === 'list') {
       if (input.committeeCode !== undefined) {
@@ -212,6 +212,7 @@ export const committeeLookupTool = tool('congressgov_committee_lookup', {
           { field: 'committeeCode', operation: input.operation },
         );
       }
+      noticeIgnoredInputs(ctx, input.operation, { fromDateTime, toDateTime });
       const filter = normalizeOptionalString(input.filter);
       // When filtering, page through the complete scoped committee set before
       // matching client-side — the roster (455 House, 818 all chambers) exceeds
@@ -274,18 +275,22 @@ export const committeeLookupTool = tool('congressgov_committee_lookup', {
       );
     }
 
+    /** The update-date window reaches only 'bills' and 'reports'; Congress.gov ignores it on 'nominations' (#119). */
+    const windowApplies = input.operation === 'bills' || input.operation === 'reports';
+    const window = windowApplies ? { fromDateTime, toDateTime } : {};
     noticeIgnoredInputs(
       ctx,
       input.operation,
-      { congress: input.congress, filter: normalizeOptionalString(input.filter) },
+      {
+        congress: input.congress,
+        filter: normalizeOptionalString(input.filter),
+        ...(windowApplies ? {} : { fromDateTime, toDateTime }),
+      },
       input.operation !== 'get' && input.congress !== undefined
         ? 'Results span every congress.'
         : undefined,
     );
 
-    // Anything that isn't a committee-code shape is treated as a committee name and
-    // auto-resolved via the same primary (all-token) match the 'list' + filter path
-    // uses, restricted to parent committees (systemCode ending '00').
     let committeeCode = input.committeeCode.trim();
     let resolvedChamber: Chamber | undefined;
     const direct = COMMITTEE_CODE_SHAPE.test(committeeCode);
@@ -293,73 +298,53 @@ export const committeeLookupTool = tool('congressgov_committee_lookup', {
       committeeCode = committeeCode.toLowerCase();
     } else {
       // Page the complete committee set — the chamber's when one is set, as 'list'
-      // with filter does, else every chamber's — so name resolution matches rows
-      // past the 250-row request cap. Resolves cyanheads/congressgov-mcp-server#108.
+      // with filter does, else every chamber's — so a roster code or a name matches
+      // rows past the 250-row request cap. Resolves cyanheads/congressgov-mcp-server#108.
       const all = await fetchAllCommittees({ chamber: input.chamber }, ctx);
-      const parents = (all.data as ApiRecord[]).filter(
-        (c) => typeof c.systemCode === 'string' && c.systemCode.endsWith('00'),
-      );
-      const matches = filterCommittees(parents, committeeCode);
-      const lone = matches.length === 1 ? matches[0] : undefined;
-
-      /**
-       * Zero or several matches, or a lone approximate one within `chamber`, come
-       * back as candidates so the caller can choose. Zero covers both a name nothing
-       * answers to and a malformed code-like token ('ssbk'); one message names the
-       * code shape and the name→code route so neither dead-ends, and a chamber-scoped
-       * miss points at dropping chamber. A lone approximate match within `chamber` is
-       * offered rather than read: a name no committee there carries ('forestry' in
-       * the House) can still clear the fuzzy floor against an unrelated one
-       * (Oversight, via 'reform') while the committee meant sits in another chamber.
-       */
-      if (!lone || (input.chamber && lone.approximate === true)) {
-        const scope = input.chamber ? ` in the ${input.chamber} chamber` : '';
-        const notice =
-          matches.length === 0
-            ? `No committee code or name matched '${committeeCode}'${scope}.${input.chamber ? ' Remove chamber to search every chamber.' : ''} Committee codes are letters + a 2-digit suffix (e.g. 'hsju00'); to find one by name use operation:'list' with filter.`
-            : lone
-              ? `No committee name matched '${committeeCode}'${scope}; the committee listed is an approximate match. Use its systemCode if it is the one you meant, or remove chamber to search every chamber.`
-              : `'${committeeCode}' matched ${matches.length} committees${scope}. Use the systemCode from one of these results, or narrow your name.`;
+      const resolution = resolveCommittee(all.data, committeeCode, input.chamber);
+      if (resolution.kind === 'candidates') {
         ctx.enrich.echo(
           buildEffectiveQuery('committee name resolution', {
             name: committeeCode,
             chamber: input.chamber,
           }),
         );
-        addNotice(ctx, notice);
-        ctx.enrich.total(matches.length);
+        addNotice(ctx, resolution.notice);
+        ctx.enrich.total(resolution.matches.length);
         ctx.log.info('Committee name resolution — candidates returned', {
           name: committeeCode,
           chamber: input.chamber,
-          count: matches.length,
+          count: resolution.matches.length,
         });
-        return { data: matches, pagination: { count: matches.length, nextOffset: null } };
+        return {
+          data: resolution.matches,
+          pagination: { count: resolution.matches.length, nextOffset: null },
+        };
       }
-
-      // Exactly one match — proceed with the resolved code.
-      const resolvedCode = lone.systemCode as string;
-      const approximate = lone.approximate === true;
-      resolvedChamber = rosterChamber(lone);
-      ctx.log.info('Committee name resolved', {
-        name: committeeCode,
-        chamber: input.chamber,
-        resolvedCode,
-        approximate,
-      });
-      addNotice(
-        ctx,
-        `Resolved '${committeeCode}' → ${resolvedCode} (${lone.name as string})${approximate ? ' (approximate match)' : ''}.`,
-      );
-      committeeCode = resolvedCode;
+      if (resolution.kind === 'name') {
+        ctx.log.info('Committee name resolved', {
+          name: committeeCode,
+          chamber: input.chamber,
+          resolvedCode: resolution.code,
+          approximate: resolution.approximate,
+        });
+        addNotice(
+          ctx,
+          `Resolved '${committeeCode}' → ${resolution.code} (${resolution.name})${resolution.approximate ? ' (approximate match)' : ''}.`,
+        );
+      }
+      committeeCode = resolution.code;
+      resolvedChamber = resolution.chamber;
     }
 
-    let chamber = input.chamber ?? resolvedChamber ?? inferChamberFromCode(committeeCode);
-    if (!chamber) {
+    const inferred = input.chamber ?? resolvedChamber ?? inferChamberFromCode(committeeCode);
+    if (!inferred) {
       throw validationError(
         `Could not infer chamber from committeeCode '${committeeCode}'. Pass chamber explicitly ('house', 'senate', or 'joint').`,
         { field: 'committeeCode', committeeCode },
       );
     }
+    let chamber: Chamber = inferred;
     /** A code given directly with no `chamber` is read in its prefix's chamber until that chamber proves not to hold it (#111). */
     let fromPrefix = direct && input.chamber === undefined;
 
@@ -367,7 +352,7 @@ export const committeeLookupTool = tool('congressgov_committee_lookup', {
       const listed = fromPrefix ? await listedChamber(committeeCode, ctx) : undefined;
       if (listed !== 'senate') {
         throw validationError(
-          "Nominations are only referred to Senate committees. Use chamber='senate' or a Senate committee code (s-prefix).",
+          "Nominations are only referred to Senate committees. Use chamber='senate' or a Senate committee code.",
           { field: 'chamber', chamber },
         );
       }
@@ -375,14 +360,24 @@ export const committeeLookupTool = tool('congressgov_committee_lookup', {
       chamber = listed;
       fromPrefix = false;
     }
-    const target = { committeeCode, chamber, fromPrefix };
+
+    /** Run `read` in `chamber`, or, for a direct code with no `chamber`, in whichever chamber holds it. */
+    const readIn = async <T>(read: (inChamber: Chamber) => Promise<T>): Promise<T> => {
+      if (!fromPrefix) return read(chamber);
+      const committee = await readCommittee(committeeCode, read, ctx);
+      if (committee.chamber !== chamber) {
+        noticeListedChamber(ctx, committeeCode, committee.chamber, chamber);
+      }
+      return committee.value;
+    };
+    const windowed = windowApplies && (fromDateTime !== undefined || toDateTime !== undefined);
+    const noneFound = (noun: string) =>
+      windowed
+        ? `No ${noun} found for committee ${committeeCode} with an update inside the fromDateTime/toDateTime window. Widen or remove the window.`
+        : `No ${noun} found for committee ${committeeCode}.`;
 
     if (input.operation === 'get') {
-      const result = await readCommittee(
-        target,
-        (inChamber) => api.getCommittee(inChamber, committeeCode, ctx),
-        ctx,
-      );
+      const result = await readIn((inChamber) => api.getCommittee(inChamber, committeeCode, ctx));
       ctx.log.info('Committee retrieved', { committeeCode });
       ctx.enrich.echo(`committee ${committeeCode}`);
       ctx.enrich.total(1);
@@ -390,91 +385,114 @@ export const committeeLookupTool = tool('congressgov_committee_lookup', {
     }
 
     if (input.operation === 'bills' && input.order === 'recent') {
-      const recentResult = await readCommittee(
-        target,
-        (inChamber) =>
-          fetchCommitteeBillsRecent(
-            {
-              chamber: inChamber,
-              committeeCode,
-              limit: input.limit,
-              offset: input.offset,
-            },
-            ctx,
-          ),
-        ctx,
+      const recentResult = await readIn((inChamber) =>
+        fetchCommitteeBillsRecent(
+          {
+            chamber: inChamber,
+            committeeCode,
+            limit: input.limit,
+            offset: input.offset,
+            ...window,
+          },
+          ctx,
+        ),
       );
-      ctx.enrich.echo(`bills for committee ${committeeCode} (recent order)`);
+      ctx.enrich.echo(
+        buildEffectiveQuery(`bills for committee ${committeeCode}`, { order: 'recent', ...window }),
+      );
       ctx.enrich.total(recentResult.pagination.count);
-      notifyIfNoMatches(ctx, recentResult, `No bills found for committee ${committeeCode}.`);
+      notifyIfNoMatches(ctx, recentResult, noneFound('bills'));
       return recentResult;
     }
 
     const subResource = input.operation;
-    const result = await readCommittee(
-      target,
-      (inChamber) =>
-        api.getCommitteeSubResource(
-          {
-            chamber: inChamber,
-            committeeCode,
-            subResource,
-            limit: input.limit,
-            offset: input.offset,
-          },
-          ctx,
-        ),
-      ctx,
+    const result = await readIn((inChamber) =>
+      api.getCommitteeSubResource(
+        {
+          chamber: inChamber,
+          committeeCode,
+          subResource,
+          limit: input.limit,
+          offset: input.offset,
+          ...window,
+        },
+        ctx,
+      ),
     );
     ctx.log.info('Committee sub-resource retrieved', { committeeCode, subResource });
-    ctx.enrich.echo(`${input.operation} for committee ${committeeCode}`);
+    ctx.enrich.echo(buildEffectiveQuery(`${subResource} for committee ${committeeCode}`, window));
     ctx.enrich.total(result.pagination.count);
-    notifyIfNoMatches(ctx, result, `No ${input.operation} found for committee ${committeeCode}.`);
+    notifyIfNoMatches(ctx, result, noneFound(subResource));
     return result;
   },
 });
 
-/**
- * Fetch the COMPLETE committee set for a scope, paging past the 250-row request
- * cap. `/committee/{chamber}` returns the full historical roster — 455 for the
- * House, 818 across all chambers — but one request returns at most 250 rows, so
- * client-side name filtering (`list` + `filter`) and name→code resolution must
- * page until the upstream `pagination.nextOffset` is exhausted and aggregate
- * every row. Mirrors `fetchCommitteeBillsRecent`: multi-request orchestration
- * lives in the tool layer, not the service. Worst case ≈4 requests (818 ÷ 250).
- * Resolves cyanheads/congressgov-mcp-server#41.
- */
-async function fetchAllCommittees(
-  params: { congress?: number | undefined; chamber?: Chamber | undefined },
-  ctx: Context,
-) {
-  const api = getCongressApi();
-  const PAGE_SIZE = 250;
-  const data: ApiRecord[] = [];
-  let offset = 0;
-  let count = 0;
+/** What a `committeeCode` value outside the code shape names among the roster rows in scope. */
+type CommitteeResolution =
+  | { kind: 'code'; code: string; chamber: Chamber | undefined }
+  | {
+      kind: 'name';
+      code: string;
+      chamber: Chamber | undefined;
+      name: string;
+      approximate: boolean;
+    }
+  | { kind: 'candidates'; matches: ApiRecord[]; notice: string };
 
-  for (;;) {
-    const page = await api.listCommittees(
-      { congress: params.congress, chamber: params.chamber, limit: PAGE_SIZE, offset },
-      ctx,
-    );
-    data.push(...(page.data as ApiRecord[]));
-    count = page.pagination.count;
-    if (page.pagination.nextOffset == null) break;
-    offset = page.pagination.nextOffset;
+/**
+ * Resolve a `committeeCode` value outside the code shape against the roster rows
+ * in scope. A row whose systemCode equals it makes it a code (`n79043125`,
+ * `sp2k00`), read in the chamber that row lists (#114). Anything else is a
+ * committee name, matched with the primary (all-token) pass 'list' + filter
+ * uses, restricted to parent committees (systemCode ending '00'), and one match
+ * resolves to its code and its row's chamber.
+ *
+ * Zero or several matches, or a lone approximate one within `chamber`, come back
+ * as candidates so the caller can choose. Zero covers both a name nothing answers
+ * to and a code the roster lacks ('ssbk'); its notice points at a systemCode from
+ * 'list' and the name→code route so neither dead-ends, and a chamber-scoped miss
+ * points at dropping chamber. A lone approximate match within `chamber` is offered
+ * rather than read: a name no committee there carries ('forestry' in the House)
+ * can still clear the fuzzy floor against an unrelated one (Oversight, via
+ * 'reform') while the committee meant sits in another chamber.
+ */
+function resolveCommittee(
+  rows: ApiRecord[],
+  value: string,
+  chamber: Chamber | undefined,
+): CommitteeResolution {
+  const listed = findRosterRow(rows, value);
+  if (listed) {
+    return {
+      kind: 'code',
+      code: (listed.systemCode as string).toLowerCase(),
+      chamber: rosterChamber(listed),
+    };
   }
 
-  return { data, pagination: { count, nextOffset: null } };
-}
-
-/** The chamber the cross-chamber committee roster lists `code` under; undefined when no row carries it. */
-async function listedChamber(code: string, ctx: Context): Promise<Chamber | undefined> {
-  const roster = await fetchAllCommittees({}, ctx);
-  const row = (roster.data as ApiRecord[]).find(
-    (c) => typeof c.systemCode === 'string' && c.systemCode.toLowerCase() === code,
+  const parents = rows.filter(
+    (c) => typeof c.systemCode === 'string' && c.systemCode.endsWith('00'),
   );
-  return row && rosterChamber(row);
+  const matches = filterCommittees(parents, value);
+  const lone = matches.length === 1 ? matches[0] : undefined;
+  if (lone && !(chamber && lone.approximate === true)) {
+    return {
+      kind: 'name',
+      code: lone.systemCode as string,
+      chamber: rosterChamber(lone),
+      name: lone.name as string,
+      approximate: lone.approximate === true,
+    };
+  }
+
+  const scope = chamber ? ` in the ${chamber} chamber` : '';
+  const notice =
+    matches.length === 0
+      ? `No committee code or name matched '${value}'${scope}.${chamber ? ' Remove chamber to search every chamber.' : ''} Pass a systemCode from operation:'list' (e.g. 'hsju00'), or use operation:'list' with filter to find a committee by name.`
+      : lone
+        ? `No committee name matched '${value}'${scope}; the committee listed is an approximate match. Use its systemCode if it is the one you meant, or remove chamber to search every chamber.`
+        : `'${value}' matched ${matches.length} committees${scope}. Use the systemCode from one of these results, or narrow your name.`;
+  return { kind: 'candidates', matches, notice };
 }
 
 function noticeListedChamber(ctx: Context, code: string, listed: Chamber, prefix: Chamber): void {
@@ -490,47 +508,30 @@ function noticeListedChamber(ctx: Context, code: string, listed: Chamber, prefix
 }
 
 /**
- * Run a committee read in `target.chamber`. For a code given directly with no
- * `chamber`, that is its prefix's chamber, and a few codes sit elsewhere —
- * `jsat00`, `jtdr00`, and `jsec03` are Senate committees, and `/committee/joint`
- * answers not_found for them. Only that not_found reads the roster (≈4 requests)
- * and repeats the read in the chamber it lists, so a code its prefix's chamber
- * holds costs nothing extra. A code the roster lacks, or lists under the chamber
- * already tried, keeps the original not_found. The catch is recovery — the
- * not_found picks the next chamber — not error handling, so the handler stays catch-free.
- * Resolves cyanheads/congressgov-mcp-server#111.
- */
-async function readCommittee<T>(
-  target: { committeeCode: string; chamber: Chamber; fromPrefix: boolean },
-  read: (chamber: Chamber) => Promise<T>,
-  ctx: Context,
-): Promise<T> {
-  if (!target.fromPrefix) return read(target.chamber);
-  try {
-    return await read(target.chamber);
-  } catch (error) {
-    if (!(error instanceof McpError && error.code === JsonRpcErrorCode.NotFound)) throw error;
-    const listed = await listedChamber(target.committeeCode, ctx);
-    if (listed === undefined || listed === target.chamber) throw error;
-    noticeListedChamber(ctx, target.committeeCode, listed, target.chamber);
-    return read(listed);
-  }
-}
-
-/**
  * Fetch committee bills in newest-first order.
  *
- * The Congress.gov API returns committee bills in ascending update-date order
- * and ignores sort parameters. To surface the most recent activity, we probe
- * the total count (limit=1), then fetch the tail of the list and reverse it
- * client-side. `offset` / `limit` on input refer to the reversed (recent)
- * view — offset=0 always returns the most recent page.
+ * Congress.gov lists a committee's bills roughly from least to most recently
+ * updated and ignores sort parameters. To surface the latest activity, probe the
+ * total count (limit=1), then fetch the tail of the list and reverse it
+ * client-side. `offset` / `limit` on input refer to the reversed (recent) view —
+ * offset=0 always returns the page Congress.gov lists last. The update-date
+ * window, when given, goes on both requests: filtered rows keep the unfiltered
+ * list's order and page stably by offset, so the tail read lands on the
+ * filtered total the probe counted.
  */
 async function fetchCommitteeBillsRecent(
-  params: { chamber: Chamber; committeeCode: string; limit: number; offset: number },
+  params: {
+    chamber: Chamber;
+    committeeCode: string;
+    limit: number;
+    offset: number;
+    fromDateTime?: string | undefined;
+    toDateTime?: string | undefined;
+  },
   ctx: Context,
 ) {
   const api = getCongressApi();
+  const window = { fromDateTime: params.fromDateTime, toDateTime: params.toDateTime };
   const probe = await api.getCommitteeSubResource(
     {
       chamber: params.chamber,
@@ -538,6 +539,7 @@ async function fetchCommitteeBillsRecent(
       subResource: 'bills',
       limit: 1,
       offset: 0,
+      ...window,
     },
     ctx,
   );
@@ -557,11 +559,12 @@ async function fetchCommitteeBillsRecent(
       subResource: 'bills',
       limit: effectiveLimit,
       offset: absOffset,
+      ...window,
     },
     ctx,
   );
 
-  const reversed = [...result.data].reverse();
+  const reversed = result.data.toReversed();
   const nextOffset = params.offset + effectiveLimit < total ? params.offset + effectiveLimit : null;
 
   ctx.log.info('Committee bills retrieved (recent order)', {

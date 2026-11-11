@@ -1,20 +1,20 @@
-#!/usr/bin/env bun
 /**
  * @fileoverview mirror:init — full out-of-band build of the Congress bill FTS
  * mirror. Walks the bill list and CRS summaries for the configured congress
- * window, merges them into one row per bill, and writes the SQLite index.
- * Idempotent (the framework upserts by primary key) — safe to re-run after an
- * interrupt. Run as a one-shot job or at Docker build, never on server startup.
- * @module scripts/congress-mirror-init
+ * window, merges them into one row per bill, and writes the SQLite index. Each
+ * committed page stores a resume cursor, so re-running after an interrupt resumes
+ * from it instead of starting over (the framework upserts by primary key). Run as
+ * a one-shot job or at Docker build, never on server startup.
+ * @module cli/mirror-init
  */
 
 import { logger } from '@cyanheads/mcp-ts-core/utils';
-import { getMirror } from './_mirror-context.js';
+import { getMirror, syncSignal } from './mirror-context.js';
 
 const mirror = await getMirror();
 logger.info('Starting Congress bill mirror init (full build)');
 
-const result = await mirror.runSync({ mode: 'init', signal: AbortSignal.timeout(3_600_000) });
+const result = await mirror.runSync({ mode: 'init', signal: syncSignal() });
 
 logger.info(
   `Congress bill mirror init complete: ${result.recordsApplied} records applied across ${result.pagesFetched} pages (total ${result.total}).`,

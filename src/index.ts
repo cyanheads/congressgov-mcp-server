@@ -12,6 +12,7 @@ import type {
   CacheHints,
 } from '@cyanheads/mcp-ts-core';
 import { createApp } from '@cyanheads/mcp-ts-core';
+import { McpError } from '@cyanheads/mcp-ts-core/errors';
 import { logger, schedulerService } from '@cyanheads/mcp-ts-core/utils';
 import { getServerConfig } from '@/config/server-config.js';
 import { billAnalysisPrompt } from '@/mcp-server/prompts/definitions/bill-analysis.prompt.js';
@@ -113,7 +114,7 @@ await createApp({
     withSource(billAnalysisPrompt, 'prompts', 'bill-analysis.prompt.ts'),
     withSource(legislativeResearchPrompt, 'prompts', 'legislative-research.prompt.ts'),
   ],
-  instructions: `Use the congressgov_* tools to access U.S. legislative data via the Congress.gov API v3: bills, amendments, enacted laws, members, committees, roll call votes, presidential nominations, CRS reports, and the daily Congressional Record. The Congress.gov API itself has no keyword search — browse by congress number, bill/report type, date range, chamber, state, and district. An optional local FTS mirror adds congressgov_search_bills (keyword search over bill titles and summaries) when CONGRESS_MIRROR_ENABLED is set; it is off by default, and the tool is not offered at all unless that flag is set. Bills are addressed by congress + billType + billNumber (e.g. 118/hr/1234), amendments by congress + amendmentType + amendmentNumber (e.g. 118/hamdt/255), members by bioguideId, committees by chamber-prefix codes. congressgov_roll_votes serves both chambers via its 'chamber' parameter — House votes come from the Congress.gov API, Senate votes from the Senate's official LIS feed, or Voteview's published vote files when that feed can't be read.`,
+  instructions: `Use the congressgov_* tools to access U.S. legislative data via the Congress.gov API v3: bills, amendments, enacted laws, members, committees, roll call votes, presidential nominations, CRS reports, and the daily Congressional Record. The Congress.gov API itself has no keyword search — browse by congress number, bill/report type, date range, chamber, state, and district. An optional local FTS mirror adds congressgov_search_bills (keyword search over bill titles and summaries) when CONGRESS_MIRROR_ENABLED is set; it is off by default, and the tool is not offered at all unless that flag is set. Bills are addressed by congress + billType + billNumber (e.g. 118/hr/1234), amendments by congress + amendmentType + amendmentNumber (e.g. 118/hamdt/255), members by bioguideId, committees by the systemCode a congressgov_committee_lookup 'list' row carries (hsju00, or a historical code such as n79043125). congressgov_roll_votes serves both chambers via its 'chamber' parameter — House votes come from the Congress.gov API, Senate votes from the Senate's official LIS feed, or Voteview's published vote files when that feed can't be read.`,
   landing: {
     repoRoot: REPO_ROOT,
     tagline: 'U.S. legislative data (bills, votes, members, committees) via MCP.',
@@ -152,7 +153,13 @@ await createApp({
   },
 });
 
-/** Register and start the in-process incremental mirror refresh job. */
+/**
+ * Register and start the in-process incremental mirror refresh job. The scheduler
+ * logs every rejected run at `error`, so the job returns for the two outcomes that
+ * are not failures: shutdown stopping its run (the runner logs that at `info`), and
+ * the store's sync lease held by another sync — a `mirror:init` or `mirror:refresh`
+ * script, or another server on the same file (`sync_locked`).
+ */
 async function scheduleMirrorRefresh(cron: string): Promise<void> {
   await schedulerService.schedule(
     'congress-bills-refresh',
@@ -164,7 +171,20 @@ async function scheduleMirrorRefresh(cron: string): Promise<void> {
         signal: refreshController.signal,
       });
       activeRefresh = refresh;
-      const result = await refresh;
+      let result: Awaited<typeof refresh>;
+      try {
+        result = await refresh;
+      } catch (error) {
+        if (refreshController.signal.aborted) return;
+        if (error instanceof McpError && error.data?.reason === 'sync_locked') {
+          logger.info(
+            'Scheduled Congress bill mirror refresh skipped: another sync holds the mirror store',
+            jobCtx,
+          );
+          return;
+        }
+        throw error;
+      }
       logger.info(
         `Scheduled Congress bill mirror refresh complete: ${result.recordsApplied} records applied (total ${result.total})`,
         jobCtx,

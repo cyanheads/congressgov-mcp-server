@@ -12,7 +12,7 @@
  * header ends in `renderDetailRest`, a list row ends in `withRowRest`, and a
  * curated single-line row ends in `withUnnamedFields` — so a field none of them
  * names still reaches the reader. A collection a curated line renders lossily
- * (its latest entry only, or only some of each entry's fields) is deliberately
+ * (only some of its entries, or only some of each entry's fields) is deliberately
  * left out of the row's named set, so the fall-through carries it whole. The
  * single deliberate exception is a
  * `{count, url}` sub-resource reference, rendered as "N available": the URL is
@@ -561,26 +561,13 @@ function renderMemberItem(item: Record<string, unknown>, i: number): string {
   ]);
   if (meta) lines.push(meta);
 
-  // terms may be a direct array or nested as { item: [...] }
-  const rawTerms = item.terms;
-  const termsArr: Record<string, unknown>[] | undefined = Array.isArray(rawTerms)
-    ? rawTerms
-    : rawTerms &&
-        typeof rawTerms === 'object' &&
-        Array.isArray((rawTerms as Record<string, unknown>).item)
-      ? ((rawTerms as Record<string, unknown>).item as Record<string, unknown>[])
-      : undefined;
-
-  if (termsArr && termsArr.length > 0) {
-    const latest = termsArr.at(-1);
-    const chamber = s(latest, 'chamber');
-    const start = s(latest, 'startYear');
-    const end = s(latest, 'endYear');
-    const termRange = start && end ? `${start}–${end}` : start;
-    lines.push(
-      `**Latest Term:** ${[chamber, termRange].filter(Boolean).join(', ')}` +
-        (termsArr.length > 1 ? ` (${termsArr.length} total)` : ''),
+  /** A list row's terms are spans of continuous service in one chamber, not single terms. */
+  const spans = memberTerms(item);
+  if (spans && spans.length > 0) {
+    const service = spans.map((span) =>
+      withUnnamedFields(span, join([s(span, 'chamber'), termYears(span)], ', '), SERVICE_SPAN_KEYS),
     );
+    lines.push(`**Service:** ${service.join('; ')}`);
   }
 
   if (url) lines.push(`**URL:** ${url}`);
@@ -588,7 +575,7 @@ function renderMemberItem(item: Record<string, unknown>, i: number): string {
   return withRowRest(item, lines, MEMBER_ROW_KEYS);
 }
 
-/** `terms` is absent: the curated line renders the latest term only. */
+/** `terms` is named: the Service line renders every span, each with its unnamed fields. */
 const MEMBER_ROW_KEYS = new Set([
   'bioguideId',
   'name',
@@ -598,8 +585,31 @@ const MEMBER_ROW_KEYS = new Set([
   'party',
   'state',
   'district',
+  'terms',
   'url',
 ]);
+
+const SERVICE_SPAN_KEYS = new Set(['chamber', 'startYear', 'endYear']);
+
+/** A member's `terms`, which Congress.gov ships as an array or wrapped as `{ item: [...] }`. */
+function memberTerms(member: Record<string, unknown>): Record<string, unknown>[] | undefined {
+  const raw = member.terms;
+  if (Array.isArray(raw)) return raw;
+  if (raw && typeof raw === 'object' && Array.isArray((raw as Record<string, unknown>).item)) {
+    return (raw as Record<string, unknown>).item as Record<string, unknown>[];
+  }
+  return;
+}
+
+/**
+ * A term's or service span's years: `start–end`, or `start–present` when it has
+ * no `endYear` — Congress.gov leaves the end year off the term and the span a
+ * member is still serving.
+ */
+function termYears(term: Record<string, unknown>): string | undefined {
+  const start = s(term, 'startYear');
+  return start ? `${start}–${s(term, 'endYear') ?? 'present'}` : undefined;
+}
 
 /**
  * Window metadata a bounded summary row carries. Both summary renderers show it
@@ -944,11 +954,15 @@ const AMENDMENT_ROW_KEYS = new Set([
   'url',
 ]);
 
-/** Bill text versions — heading from `type` (e.g. "Enrolled Bill"), formats[] as labeled URLs. */
-function renderBillTextItem(item: Record<string, unknown>, i: number): string {
-  const type = s(item, 'type') ?? 'Bill Text';
+/**
+ * One text version of a bill or an amendment, headed by the `textVersionIndex`
+ * the `text` handler stamped on it (`text-version-index.ts`) and its `type`
+ * (e.g. "Enrolled Bill"), then formats[] as labeled URLs.
+ */
+function renderTextVersionItem(item: Record<string, unknown>): string {
+  const type = s(item, 'type') ?? 'Text Version';
   const date = s(item, 'date');
-  const lines = [`### ${i + 1}. ${type}`];
+  const lines = [`### textVersionIndex ${s(item, 'textVersionIndex')}: ${type}`];
   if (date) lines.push(`**Date:** ${date}`);
 
   const formats = item.formats;
@@ -959,10 +973,10 @@ function renderBillTextItem(item: Record<string, unknown>, i: number): string {
       if (fType && fUrl) lines.push(`**${fType}:** ${fUrl}`);
     }
   }
-  return withRowRest(item, lines, BILL_TEXT_ROW_KEYS);
+  return withRowRest(item, lines, TEXT_VERSION_ROW_KEYS);
 }
 
-const BILL_TEXT_ROW_KEYS = new Set(['type', 'date', 'formats']);
+const TEXT_VERSION_ROW_KEYS = new Set(['textVersionIndex', 'type', 'date', 'formats']);
 
 /** Nomination type wrapper: `{isCivilian: true}` / `{isMilitary: true}` → readable label. */
 function nominationTypeLabel(raw: unknown): string | undefined {
@@ -1747,6 +1761,15 @@ function renderCrsReportDetail(item: Record<string, unknown>): string {
     if (names.length) lines.push(`**Authors:** ${names.join(', ')}`);
   }
 
+  /** A paged list: the generic fall-through would skip the null next offset and an empty page. */
+  if (typeof item.relatedMaterialsCount === 'number') {
+    const shown = Array.isArray(item.relatedMaterials) ? item.relatedMaterials.length : 0;
+    const next = s(item, 'relatedMaterialsNextOffset') ?? 'none';
+    lines.push(
+      `**Related materials:** ${shown} of ${item.relatedMaterialsCount} | next offset: ${next}`,
+    );
+  }
+
   const rest = renderDetailRest(item, HEADER_CRS_KEYS);
   if (rest) lines.push('', rest);
   return lines.join('\n');
@@ -1764,6 +1787,8 @@ const HEADER_CRS_KEYS = new Set([
   'publishDate',
   'updateDate',
   'authors',
+  'relatedMaterialsCount',
+  'relatedMaterialsNextOffset',
 ]);
 
 /** Member detail. */
@@ -1792,27 +1817,15 @@ function renderMemberDetail(item: Record<string, unknown>): string {
   const honorific = s(item, 'honorificName');
   if (honorific) lines.push(`**Honorific:** ${honorific}`);
 
-  /** terms may be a direct array or nested as `{item: [...]}`. */
-  const rawTerms = item.terms;
-  const termsArr: Record<string, unknown>[] | undefined = Array.isArray(rawTerms)
-    ? rawTerms
-    : rawTerms &&
-        typeof rawTerms === 'object' &&
-        Array.isArray((rawTerms as Record<string, unknown>).item)
-      ? ((rawTerms as Record<string, unknown>).item as Record<string, unknown>[])
-      : undefined;
-
-  if (termsArr && termsArr.length > 0) {
-    lines.push(`\n**Terms (${termsArr.length}):**`);
-    for (const term of termsArr) {
-      const chamber = s(term, 'chamber');
-      const start = s(term, 'startYear');
-      const end = s(term, 'endYear');
-      const party = s(term, 'partyName');
-      const stateName = s(term, 'stateName');
-      const range = start && end ? `${start}–${end}` : start;
-      const parts = [chamber, range, party, stateName].filter(Boolean);
-      lines.push(`- ${withUnnamedFields(term, parts.join(', '), TERM_ROW_KEYS)}`);
+  const terms = memberTerms(item);
+  if (terms && terms.length > 0) {
+    lines.push(`\n**Terms (${terms.length}):**`);
+    for (const term of terms) {
+      const curated = join(
+        [s(term, 'chamber'), termYears(term), s(term, 'partyName'), s(term, 'stateName')],
+        ', ',
+      );
+      lines.push(`- ${withUnnamedFields(term, curated, TERM_ROW_KEYS)}`);
     }
   }
 
@@ -2101,8 +2114,8 @@ function isActionRow(row: Record<string, unknown>): boolean {
 
 function pickBillListRenderer(first: Record<string, unknown>): ItemRenderer | undefined {
   if ('title' in first && 'number' in first) return renderBillItem;
-  /** Bill text versions: `type` + `formats[]`, no `actionDate`. */
-  if ('type' in first && 'formats' in first) return renderBillTextItem;
+  /** Bill text versions: the `text` handler stamps each with `textVersionIndex`. */
+  if ('textVersionIndex' in first) return renderTextVersionItem;
   /** Bill sub-resource summaries: `actionDesc`/`versionCode` + `text`, no `actionCode`/`sourceSystem`. */
   if ('text' in first && ('actionDesc' in first || 'versionCode' in first)) {
     return renderBillSubresourceSummaryItem;
@@ -2190,12 +2203,12 @@ const HEADER_AMENDMENT_KEYS = new Set([
 ]);
 
 /**
- * Amendment sub-resource rows: text versions (`formats[]`) and actions read the
- * way the bill's do; browse rows and amendments to an amendment carry
- * `type` + `number`. Cosponsors render through the generic row.
+ * Amendment sub-resource rows: text versions (stamped with `textVersionIndex`)
+ * and actions read the way the bill's do; browse rows and amendments to an
+ * amendment carry `type` + `number`. Cosponsors render through the generic row.
  */
 function pickAmendmentListRenderer(first: Record<string, unknown>): ItemRenderer | undefined {
-  if ('formats' in first) return renderBillTextItem;
+  if ('textVersionIndex' in first) return renderTextVersionItem;
   if (isActionRow(first)) return renderBillActionItem;
   if ('type' in first && 'number' in first) return renderAmendmentListItem;
   return;
@@ -2352,14 +2365,20 @@ export function formatCommitteeReports(result: Record<string, unknown>): TextBlo
   return tb(parts.length > 0 ? `${body}\n\n**Parts:** ${parts.join(', ')}` : body);
 }
 
-/** CRS policy analysis reports — list, detail, and content. */
+/**
+ * CRS policy analysis reports — list, detail, and content. Each root renders on
+ * its own presence: a response carries one, and a result carrying several
+ * renders them all rather than dropping one.
+ */
 export function formatCrsReports(result: Record<string, unknown>): TextBlock[] {
-  if (Array.isArray(result.data)) return tb(renderList(result, renderCrsReportItem));
+  const sections: string[] = [];
+  if (Array.isArray(result.data)) sections.push(renderList(result, renderCrsReportItem));
+  if (result.report != null && typeof result.report === 'object') {
+    sections.push(renderCrsReportDetail(result.report as Record<string, unknown>));
+  }
   const content = documentContentOf(result);
-  if (content) return tb(renderDocumentContent(content));
-  if (result.report != null)
-    return tb(renderCrsReportDetail(result.report as Record<string, unknown>));
-  return tb(renderDetail(result));
+  if (content) sections.push(renderDocumentContent(content));
+  return tb(sections.length > 0 ? sections.join('\n\n') : renderDetail(result));
 }
 
 /** Daily Congressional Record. Dispatches between volumes/issues and flattened articles. */

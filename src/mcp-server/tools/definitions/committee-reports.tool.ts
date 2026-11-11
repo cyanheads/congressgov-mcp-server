@@ -8,6 +8,7 @@ import { validationError } from '@cyanheads/mcp-ts-core/errors';
 
 import { formatCommitteeReports } from '@/mcp-server/tools/format-helpers.js';
 import {
+  anyLetterCase,
   buildEffectiveQuery,
   congressErrorContracts,
   documentErrorContracts,
@@ -101,8 +102,7 @@ export const committeeReportsTool = tool('congressgov_committee_reports', {
   input: z.object({
     operation: z.enum(['list', 'get', 'text', 'content']).describe('Which data to retrieve.'),
     congress: z.number().int().positive().describe('Congress number.'),
-    reportType: z
-      .enum(['hrpt', 'srpt', 'erpt'])
+    reportType: anyLetterCase(z.enum(['hrpt', 'srpt', 'erpt']))
       .optional()
       .describe('Report type. Required for get, text, and content operations.'),
     reportNumber: z

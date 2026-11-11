@@ -132,7 +132,8 @@ export interface ListCommitteesParams extends PaginationParams {
   filter?: string | undefined;
 }
 
-export interface CommitteeSubResourceParams extends PaginationParams {
+/** `fromDateTime`/`toDateTime` filter 'bills' and 'reports' by update date; Congress.gov ignores them on 'nominations'. */
+export interface CommitteeSubResourceParams extends PaginationParams, DateRangeParams {
   chamber: Chamber;
   committeeCode: string;
   subResource: CommitteeSubResource;

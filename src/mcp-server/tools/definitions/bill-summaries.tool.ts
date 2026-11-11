@@ -14,6 +14,7 @@ import {
 } from '@/mcp-server/tools/summary-window.js';
 import {
   addNotice,
+  anyLetterCase,
   buildEffectiveQuery,
   congressErrorContracts,
   listEnrichment,
@@ -40,7 +41,9 @@ export const billSummariesTool = tool('congressgov_bill_summaries', {
       .positive()
       .optional()
       .describe('Congress number. Optional — omit for summaries across all congresses.'),
-    billType: z.enum(BILL_TYPE_CODES).optional().describe("Bill type filter. Requires 'congress'."),
+    billType: anyLetterCase(z.enum(BILL_TYPE_CODES))
+      .optional()
+      .describe("Bill type filter. Requires 'congress'."),
     fromDateTime: z
       .string()
       .optional()

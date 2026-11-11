@@ -16,6 +16,7 @@ import {
   track,
   useFakeClock,
 } from '../../../helpers/budget-fixtures.js';
+import { committeeListRoutes, losingRow } from '../../../helpers/committee-lists.js';
 
 vi.mock('@/services/congress-api/congress-api-service.js', () => ({
   getCongressApi: vi.fn(),
@@ -53,6 +54,16 @@ const HOUSE_COMMITTEES = [
   // must NOT appear as an approximate match.
   { name: 'Population Committee', systemCode: 'hlze00', chamber: 'house' },
 ];
+
+/** A `listCommittees` that serves a House list of 251 rows across two pages, `first` then `second`, and empty Senate and Joint lists. */
+function houseListInTwoPages(first: unknown[], second: unknown[]) {
+  return async (params: Record<string, unknown>) =>
+    params.chamber !== 'house'
+      ? { data: [], pagination: { count: 0, nextOffset: null } }
+      : params.offset === 0
+        ? { data: first, pagination: { count: 251, nextOffset: 250 } }
+        : { data: second, pagination: { count: 251, nextOffset: null } };
+}
 
 describe('committeeLookupTool', () => {
   const mockApi = {
@@ -212,12 +223,13 @@ describe('committeeLookupTool', () => {
       const result = await committeeLookupTool.handler(input, ctx);
       expect(result.data).toHaveLength(0);
       expect(mockApi.getCommittee).not.toHaveBeenCalled();
-      // #39's guidance survives the move from schema to handler: the notice names
-      // the code shape and routes the caller to list+filter.
+      // #39's guidance survives the move from schema to handler: the notice routes
+      // the caller to a systemCode from 'list' and to list+filter for a name (#114
+      // dropped the claim that every code is letters + a 2-digit suffix).
       const notice = getEnrichment(ctx).notice as string;
-      expect(notice).toContain('ssbk');
-      expect(notice).toMatch(/2-digit suffix/);
-      expect(notice).toMatch(/list/);
+      expect(notice).toBe(
+        "No committee code or name matched 'ssbk'. Pass a systemCode from operation:'list' (e.g. 'hsju00'), or use operation:'list' with filter to find a committee by name.",
+      );
     });
 
     it('accepts an uppercase code shape and normalizes it to lowercase', async () => {
@@ -309,10 +321,10 @@ describe('committeeLookupTool', () => {
       expect(result.committee).toEqual({ name: 'Transportation and Infrastructure Committee' });
     });
 
-    it('pages the full multi-chamber set to resolve a name past the first 250', async () => {
+    it('pages every chamber list to resolve a name past the first 250', async () => {
       const ctx = createMockContext({ errors: committeeLookupTool.errors });
-      // Resolution fetches across all chambers (818 total). The match sits on the
-      // second page — the single-fetch bug would never have seen it.
+      // Resolution reads all three chamber lists. The match sits on the House
+      // list's second page — the single-fetch bug would never have seen it.
       const page1 = Array.from({ length: 250 }, (_, i) => ({
         name: `Placeholder Committee ${i}`,
         systemCode: `xxpl${String(i).padStart(3, '0')}`,
@@ -321,9 +333,7 @@ describe('committeeLookupTool', () => {
       const page2 = [
         { name: 'Veterans Affairs Committee', systemCode: 'hsvr00', chamber: 'house' },
       ];
-      mockApi.listCommittees
-        .mockResolvedValueOnce({ data: page1, pagination: { count: 251, nextOffset: 250 } })
-        .mockResolvedValueOnce({ data: page2, pagination: { count: 251, nextOffset: null } });
+      mockApi.listCommittees.mockImplementation(houseListInTwoPages(page1, page2));
       mockApi.getCommittee.mockResolvedValue({
         committee: { name: 'Veterans Affairs Committee' },
       });
@@ -332,12 +342,14 @@ describe('committeeLookupTool', () => {
         committeeCode: 'veterans affairs',
       });
       const result = await committeeLookupTool.handler(input, ctx);
-      expect(mockApi.listCommittees).toHaveBeenCalledTimes(2);
-      expect(mockApi.listCommittees).toHaveBeenNthCalledWith(
-        2,
-        expect.objectContaining({ limit: 250, offset: 250 }),
-        ctx,
-      );
+      expect(
+        mockApi.listCommittees.mock.calls.map(([params]) => [params.chamber, params.offset]),
+      ).toEqual([
+        ['house', 0],
+        ['senate', 0],
+        ['joint', 0],
+        ['house', 250],
+      ]);
       expect(mockApi.getCommittee).toHaveBeenCalledWith('house', 'hsvr00', ctx);
       expect(result.committee).toEqual({ name: 'Veterans Affairs Committee' });
     });
@@ -846,23 +858,16 @@ describe('committeeLookupTool', () => {
     });
 
     it('matches multi-token typos after the first roster page', async () => {
-      mockApi.listCommittees
-        .mockResolvedValueOnce({
-          data: [{ name: 'Public Lands Committee' }],
-          pagination: { count: 251, nextOffset: 250 },
-        })
-        .mockResolvedValueOnce({
-          data: [HOUSE_COMMITTEES[2]],
-          pagination: { count: 251, nextOffset: null },
-        });
+      mockApi.listCommittees.mockImplementation(
+        houseListInTwoPages([{ name: 'Public Lands Committee' }], [HOUSE_COMMITTEES[2]]),
+      );
       const result = await committeeLookupTool.handler(
         committeeLookupTool.input.parse({ operation: 'list', filter: 'armed servcies' }),
         createMockContext({ errors: committeeLookupTool.errors }),
       );
       expect(result.data).toEqual([{ ...HOUSE_COMMITTEES[2], approximate: true }]);
-      expect(mockApi.listCommittees).toHaveBeenNthCalledWith(
-        2,
-        expect.objectContaining({ offset: 250 }),
+      expect(mockApi.listCommittees).toHaveBeenCalledWith(
+        expect.objectContaining({ chamber: 'house', offset: 250 }),
         expect.anything(),
       );
     });
@@ -1202,30 +1207,40 @@ describe('committeeLookupTool', () => {
   });
 
   /**
-   * Filtering and name resolution page the whole 818-row roster (four requests)
-   * before matching, and a resolved name then makes one or two more. Every one
-   * of them spends the call's one budget.
+   * Filtering and name resolution page the whole roster before matching — the
+   * three chamber lists, read together, two pages deep (455 House, 327 Senate,
+   * 36 Joint rows) — and a resolved name then makes one or two more requests.
+   * Every one of them spends the call's one budget.
    */
   describe('call budget across the chained committee requests', () => {
-    const ROSTER = '/v3/committee';
-    const ROSTER_NEXT = 'https://api.congress.gov/v3/committee';
+    const LISTS = { house: 455, senate: 327, joint: 36 };
 
-    /** The four roster pages, each answering after `stalls` full 10 s attempts. */
-    function rosterPages(stalls: number) {
+    /**
+     * Every chamber list's pages, each answering after `stalls` full 10 s
+     * attempts, or never when `stalls` is null. Judiciary sits on the House
+     * list's first page.
+     */
+    function rosterPages(stalls: (key: string) => number | null) {
       return Object.fromEntries(
-        [0, 250, 500, 750].map((offset) => [
-          `${ROSTER}?offset=${offset}`,
-          {
-            stalls,
-            body: {
+        Object.entries(LISTS).flatMap(([chamber, count]) =>
+          Array.from({ length: Math.ceil(count / 250) }, (_, page) => {
+            const key = `/v3/committee/${chamber}?offset=${page * 250}`;
+            const stall = stalls(key);
+            const body = {
               committees:
-                offset === 0
+                key === '/v3/committee/house?offset=0'
                   ? [{ name: 'Judiciary Committee', systemCode: 'hsju00', chamber: 'House' }]
                   : [],
-              pagination: { count: 818, ...(offset < 750 ? { next: ROSTER_NEXT } : {}) },
-            },
-          },
-        ]),
+              pagination: {
+                count,
+                ...((page + 1) * 250 < count
+                  ? { next: `https://api.congress.gov/v3/committee/${chamber}` }
+                  : {}),
+              },
+            };
+            return [key, stall === null ? { stalls: 0 } : { stalls: stall, body }];
+          }),
+        ),
       );
     }
 
@@ -1250,44 +1265,63 @@ describe('committeeLookupTool', () => {
     });
 
     it("'list' with a filter ends at the budget while the roster is still paging", async () => {
-      const upstream = scriptedCongressApi(rosterPages(2));
+      /** The House list's first page answers on its third attempt; its second never answers. */
+      const upstream = scriptedCongressApi(
+        rosterPages((key) =>
+          key === '/v3/committee/house?offset=0'
+            ? 2
+            : key === '/v3/committee/house?offset=250'
+              ? null
+              : 0,
+        ),
+      );
       await settleInsideBudget(upstream, { operation: 'list', filter: 'judiciary' });
-      /** Two ~22 s pages, then the third page's first attempt clamped to what was left. */
+      /**
+       * The other lists answer at once. House page two starts after ~22 s and gets
+       * two full attempts and a third clamped to what was left.
+       */
       expect(upstream.hits).toEqual({
-        [`${ROSTER}?offset=0`]: 3,
-        [`${ROSTER}?offset=250`]: 3,
-        [`${ROSTER}?offset=500`]: 1,
+        '/v3/committee/house?offset=0': 3,
+        '/v3/committee/house?offset=250': 3,
+        '/v3/committee/senate?offset=0': 1,
+        '/v3/committee/senate?offset=250': 1,
+        '/v3/committee/joint?offset=0': 1,
       });
     });
 
     it("'get' by committee name ends at the budget in the request after the roster", async () => {
       const upstream = scriptedCongressApi({
-        ...rosterPages(1),
+        ...rosterPages(() => 1),
         '/v3/committee/house/hsju00': { stalls: 0 },
       });
       await settleInsideBudget(upstream, { operation: 'get', committeeCode: 'Judiciary' });
-      /** Four ~11 s pages resolve the name; the detail request gets the remaining few seconds. */
+      /**
+       * The lists page side by side, two ~11 s pages deep, so the name resolves at
+       * ~22 s; the detail request gets two full attempts and a clamped third.
+       */
       expect(upstream.hits).toEqual({
-        [`${ROSTER}?offset=0`]: 2,
-        [`${ROSTER}?offset=250`]: 2,
-        [`${ROSTER}?offset=500`]: 2,
-        [`${ROSTER}?offset=750`]: 2,
-        '/v3/committee/house/hsju00': 1,
+        '/v3/committee/house?offset=0': 2,
+        '/v3/committee/house?offset=250': 2,
+        '/v3/committee/senate?offset=0': 2,
+        '/v3/committee/senate?offset=250': 2,
+        '/v3/committee/joint?offset=0': 2,
+        '/v3/committee/house/hsju00': 3,
       });
     });
 
     it("'bills' in recent order by committee name ends at the budget in the count probe", async () => {
       const upstream = scriptedCongressApi({
-        ...rosterPages(1),
+        ...rosterPages(() => 1),
         '/v3/committee/house/hsju00/bills?offset=0': { stalls: 0 },
       });
       await settleInsideBudget(upstream, { operation: 'bills', committeeCode: 'Judiciary' });
       expect(upstream.hits).toEqual({
-        [`${ROSTER}?offset=0`]: 2,
-        [`${ROSTER}?offset=250`]: 2,
-        [`${ROSTER}?offset=500`]: 2,
-        [`${ROSTER}?offset=750`]: 2,
-        '/v3/committee/house/hsju00/bills?offset=0': 1,
+        '/v3/committee/house?offset=0': 2,
+        '/v3/committee/house?offset=250': 2,
+        '/v3/committee/senate?offset=0': 2,
+        '/v3/committee/senate?offset=250': 2,
+        '/v3/committee/joint?offset=0': 2,
+        '/v3/committee/house/hsju00/bills?offset=0': 3,
       });
     });
   });
@@ -1295,10 +1329,11 @@ describe('committeeLookupTool', () => {
   /**
    * #108: a committee name given as committeeCode resolves among the committees
    * of `chamber` when one is set, paging the same `/committee/{chamber}` roster
-   * `list` with `filter` pages, and across every chamber when it is not. The real
-   * API client runs over a routed api.congress.gov, so each case pins the roster
-   * pages a call spends. Roster sizes are the live ones (818 across all chambers,
-   * 455 House, 327 Senate, 36 Joint), each named committee on its roster's last page.
+   * `list` with `filter` pages, and across every chamber — the three chamber
+   * lists, read together — when it is not. The real API client runs over a
+   * routed api.congress.gov, so each case pins the roster pages a call spends.
+   * Roster sizes are the live ones (455 House, 327 Senate, 36 Joint), each named
+   * committee on its roster's last page.
    */
   describe('name resolution scoped by chamber', () => {
     /**
@@ -1334,6 +1369,15 @@ describe('committeeLookupTool', () => {
           chamber: 'Senate',
         },
         { name: 'Foreign Relations Committee', systemCode: 'ssfr00', chamber: 'Senate' },
+        /** Historical Senate committees whose codes are not letters + a 2-digit suffix. */
+        { name: 'Indian Affairs Committee', systemCode: 'n79043125', chamber: 'Senate' },
+        {
+          name: 'Year 2000 Technology Problem (Special) Committee',
+          systemCode: 'sp2k00',
+          chamber: 'Senate',
+        },
+        /** The committee the live cross-chamber list's pages lose. */
+        { name: 'Printing Committee', systemCode: 'no94026591', chamber: 'Senate' },
       ],
       Joint: [
         { name: 'Joint Committee on Taxation', systemCode: 'jstx00', chamber: 'Joint' },
@@ -1363,25 +1407,21 @@ describe('committeeLookupTool', () => {
     }
 
     const ROSTERS = {
-      '/v3/committee': [...roster('House'), ...roster('Senate'), ...roster('Joint')],
       '/v3/committee/house': roster('House'),
       '/v3/committee/senate': roster('Senate'),
       '/v3/committee/joint': roster('Joint'),
     };
 
-    /** Every roster page, 250 rows each, as api.congress.gov pages `/committee[/{chamber}]`. */
-    const ROSTER_ROUTES: Record<string, unknown> = {};
-    for (const [path, rows] of Object.entries(ROSTERS)) {
-      for (let offset = 0; offset < rows.length; offset += 250) {
-        ROSTER_ROUTES[`${path}?offset=${offset}`] = {
-          committees: rows.slice(offset, offset + 250),
-          pagination: {
-            count: rows.length,
-            ...(offset + 250 < rows.length ? { next: `https://api.congress.gov${path}` } : {}),
-          },
-        };
-      }
-    }
+    /**
+     * Every chamber list's pages, 250 rows each, as api.congress.gov pages
+     * `/committee/{chamber}`; and `/committee` as it pages live, losing
+     * `no94026591` — served, though the roster never reads it.
+     */
+    const ROSTER_ROUTES: Record<string, unknown> = Object.assign(
+      {},
+      ...Object.entries(ROSTERS).map(([path, rows]) => committeeListRoutes(path, rows)),
+      committeeListRoutes('/v3/committee', losingRow(Object.values(ROSTERS).flat(), 'no94026591')),
+    );
 
     /** The page keys a scope's whole roster costs: `/v3/committee/senate?offset=0`, `…?offset=250`. */
     function rosterHits(path: keyof typeof ROSTERS) {
@@ -1391,6 +1431,13 @@ describe('committeeLookupTool', () => {
       }
       return hits;
     }
+
+    /** The cross-chamber roster: every page of the three chamber lists. */
+    const CROSS_CHAMBER_HITS = {
+      ...rosterHits('/v3/committee/house'),
+      ...rosterHits('/v3/committee/senate'),
+      ...rosterHits('/v3/committee/joint'),
+    };
 
     const detail = (systemCode: string, name: string) => ({
       committee: { systemCode, name, type: 'Standing' },
@@ -1441,8 +1488,8 @@ describe('committeeLookupTool', () => {
     it('without chamber, a name both chambers use returns both committees from the cross-chamber roster', async () => {
       const { result, hits, text } = await call({ operation: 'get', committeeCode: 'judiciary' });
 
-      expect(hits).toEqual(rosterHits('/v3/committee'));
-      expect(Object.keys(hits)).toHaveLength(4);
+      expect(hits).toEqual(CROSS_CHAMBER_HITS);
+      expect(Object.keys(hits)).toHaveLength(5);
       const notice =
         "'judiciary' matched 2 committees. Use the systemCode from one of these results, or narrow your name.";
       expect(result.structuredContent).toMatchObject({
@@ -1465,7 +1512,7 @@ describe('committeeLookupTool', () => {
         { '/v3/committee/joint/jstx00': detail('jstx00', 'Joint Committee on Taxation') },
       );
 
-      expect(hits).toEqual({ ...rosterHits('/v3/committee'), '/v3/committee/joint/jstx00': 1 });
+      expect(hits).toEqual({ ...CROSS_CHAMBER_HITS, '/v3/committee/joint/jstx00': 1 });
       const notice = "Resolved 'taxation' → jstx00 (Joint Committee on Taxation).";
       expect(result.structuredContent).toMatchObject({
         committee: { systemCode: 'jstx00' },
@@ -1569,7 +1616,7 @@ describe('committeeLookupTool', () => {
 
       expect(hits).toEqual(rosterHits('/v3/committee/senate'));
       const notice =
-        "No committee code or name matched 'ways and means' in the senate chamber. Remove chamber to search every chamber. Committee codes are letters + a 2-digit suffix (e.g. 'hsju00'); to find one by name use operation:'list' with filter.";
+        "No committee code or name matched 'ways and means' in the senate chamber. Remove chamber to search every chamber. Pass a systemCode from operation:'list' (e.g. 'hsju00'), or use operation:'list' with filter to find a committee by name.";
       expect(result.isError).toBeFalsy();
       expect(result.structuredContent).toMatchObject({
         data: [],
@@ -1662,7 +1709,7 @@ describe('committeeLookupTool', () => {
           { [route]: detail(systemCode, committeeName) },
         );
 
-        expect(hits).toEqual({ ...rosterHits('/v3/committee'), [route]: 1 });
+        expect(hits).toEqual({ ...CROSS_CHAMBER_HITS, [route]: 1 });
         const notice = `Resolved '${name}' → ${systemCode} (${committeeName}).`;
         expect(result.isError).toBeFalsy();
         expect(result.structuredContent).toMatchObject({ committee: { systemCode }, notice });
@@ -1677,7 +1724,7 @@ describe('committeeLookupTool', () => {
         { '/v3/committee/joint/jstx00': detail('jstx00', 'Joint Committee on Taxation') },
       );
 
-      expect(hits).toEqual({ ...rosterHits('/v3/committee'), '/v3/committee/joint/jstx00': 1 });
+      expect(hits).toEqual({ ...CROSS_CHAMBER_HITS, '/v3/committee/joint/jstx00': 1 });
       const notice =
         "Resolved 'taxaton' → jstx00 (Joint Committee on Taxation) (approximate match).";
       expect(result.isError).toBeFalsy();
@@ -1740,7 +1787,7 @@ describe('committeeLookupTool', () => {
           { [route]: detail(systemCode, committeeName) },
         );
 
-        expect(hits).toEqual({ ...rosterHits('/v3/committee'), [route]: 1 });
+        expect(hits).toEqual({ ...CROSS_CHAMBER_HITS, [route]: 1 });
         expect(result.isError).toBeFalsy();
         expect(result.structuredContent).toMatchObject({ committee: { systemCode } });
         expect(text).toContain(`# ${committeeName}`);
@@ -1765,7 +1812,7 @@ describe('committeeLookupTool', () => {
 
         expect(hits).toEqual({
           '/v3/committee/joint/jsat00': 1,
-          ...rosterHits('/v3/committee'),
+          ...CROSS_CHAMBER_HITS,
           '/v3/committee/senate/jsat00': 1,
         });
         expect(result.isError).toBeFalsy();
@@ -1796,7 +1843,7 @@ describe('committeeLookupTool', () => {
 
           expect(hits).toEqual({
             '/v3/committee/joint/jsat00/bills?offset=0': jointHits,
-            ...rosterHits('/v3/committee'),
+            ...CROSS_CHAMBER_HITS,
             '/v3/committee/senate/jsat00/bills?offset=0': senateHits,
           });
           expect(result.isError).toBeFalsy();
@@ -1817,7 +1864,7 @@ describe('committeeLookupTool', () => {
           { [route]: { nominations: [{ citation: 'PN100-95' }], pagination: { count: 1 } } },
         );
 
-        expect(hits).toEqual({ ...rosterHits('/v3/committee'), [route]: 1 });
+        expect(hits).toEqual({ ...CROSS_CHAMBER_HITS, [route]: 1 });
         expect(result.isError).toBeFalsy();
         expect(result.structuredContent).toMatchObject({
           pagination: { count: 1, nextOffset: null },
@@ -1833,7 +1880,7 @@ describe('committeeLookupTool', () => {
           committeeCode: 'hsju00',
         });
 
-        expect(hits).toEqual(rosterHits('/v3/committee'));
+        expect(hits).toEqual(CROSS_CHAMBER_HITS);
         expect(result.isError).toBe(true);
         expect(result.structuredContent).toMatchObject({
           error: {
@@ -1871,9 +1918,9 @@ describe('committeeLookupTool', () => {
       it('a code the roster lacks keeps the not_found its prefix chamber answered', async () => {
         const { result, hits, text } = await call({ operation: 'get', committeeCode: 'hsxx99' });
 
-        expect(hits).toEqual({ '/v3/committee/house/hsxx99': 1, ...rosterHits('/v3/committee') });
+        expect(hits).toEqual({ '/v3/committee/house/hsxx99': 1, ...CROSS_CHAMBER_HITS });
         const message =
-          "Committee hsxx99 not found in the house chamber. Committee system codes look like `hspw00` (chamber prefix + abbreviation + digits). Call `congressgov_committee_lookup` with `operation: 'list'` and an optional `filter` to discover valid codes.";
+          "Committee hsxx99 not found in the house chamber. Most committee codes are a chamber prefix, letters, and two digits (`hsju00`); some historical ones are not (`n79043125`, `sp2k00`). Call `congressgov_committee_lookup` with `operation: 'list'` and an optional `filter` to discover valid codes.";
         expect(result.isError).toBe(true);
         expect(result.structuredContent).toMatchObject({
           error: {
@@ -1902,6 +1949,471 @@ describe('committeeLookupTool', () => {
           },
         });
       });
+    });
+
+    /**
+     * #114: a roster code outside the letters + 2-digit shape (`n79043125`,
+     * `no2010049600`, `sp2k00`) is matched against the roster the name branch
+     * already pages, before any name, and read in the chamber its row lists. The
+     * match costs no request beyond that roster.
+     */
+    describe('a roster code outside the letters + 2-digit shape', () => {
+      it.each([
+        ['n79043125', 'senate', 'n79043125', 'Indian Affairs Committee'],
+        ['N79043125', 'senate', 'n79043125', 'Indian Affairs Committee'],
+        ['no2010049600', 'house', 'no2010049600', 'Ventilation and Acoustics Committee'],
+        ['sp2k00', 'senate', 'sp2k00', 'Year 2000 Technology Problem (Special) Committee'],
+      ] as const)(
+        "'get' on %j reads it in the %s chamber its roster row lists",
+        async (committeeCode, chamber, systemCode, committeeName) => {
+          const route = `/v3/committee/${chamber}/${systemCode}`;
+          const { result, hits, text } = await call(
+            { operation: 'get', committeeCode },
+            { [route]: detail(systemCode, committeeName) },
+          );
+
+          expect(hits).toEqual({ ...CROSS_CHAMBER_HITS, [route]: 1 });
+          expect(result.isError).toBeFalsy();
+          expect(result.structuredContent).toMatchObject({
+            committee: { systemCode },
+            effectiveQuery: `committee ${systemCode}`,
+          });
+          expect(result.structuredContent).not.toHaveProperty('notice');
+          expect(text).toContain(`# ${committeeName}`);
+        },
+      );
+
+      it("'get' without chamber reads no94026591, which the cross-chamber list pages lose, in the Senate", async () => {
+        const route = '/v3/committee/senate/no94026591';
+        const { result, hits, text } = await call(
+          { operation: 'get', committeeCode: 'no94026591' },
+          { [route]: detail('no94026591', 'Printing Committee') },
+        );
+
+        expect(result.isError).toBeFalsy();
+        expect(result.structuredContent).toMatchObject({
+          committee: { systemCode: 'no94026591' },
+          effectiveQuery: 'committee no94026591',
+        });
+        expect(text).toContain('# Printing Committee');
+        expect(hits).toEqual({ ...CROSS_CHAMBER_HITS, [route]: 1 });
+      });
+
+      it.each([
+        ['bills', 'oldest', 'bills', 1],
+        /** Recent order probes the count, then reads the tail — the same first page here. */
+        ['bills', 'recent', 'bills', 2],
+        ['reports', 'oldest', 'reports', 1],
+      ] as const)(
+        "'%s' (%s order) on n79043125 requests the Senate sub-resource",
+        async (operation, order, subResource, routeHits) => {
+          const route = `/v3/committee/senate/n79043125/${subResource}?offset=0`;
+          const body =
+            subResource === 'bills'
+              ? {
+                  'committee-bills': { bills: [{ congress: 66, type: 'S', number: '17' }] },
+                  pagination: { count: 1 },
+                }
+              : { reports: [{ citation: 'S. Rept. 66-1' }], pagination: { count: 1 } };
+          const { result, hits, text } = await call(
+            { operation, committeeCode: 'n79043125', order },
+            { [route]: body },
+          );
+
+          expect(hits).toEqual({ ...CROSS_CHAMBER_HITS, [route]: routeHits });
+          expect(result.isError).toBeFalsy();
+          expect(result.structuredContent).toMatchObject({
+            pagination: { count: 1, nextOffset: null },
+          });
+          const rendered = subResource === 'bills' ? '17' : 'S. Rept. 66-1';
+          expect(JSON.stringify(result.structuredContent)).toContain(rendered);
+          expect(text).toContain(rendered);
+        },
+      );
+
+      it("'nominations' on a House-listed code is refused as Senate-only, with no request past the roster", async () => {
+        const { result, hits, text } = await call({
+          operation: 'nominations',
+          committeeCode: 'no2010049600',
+        });
+
+        expect(hits).toEqual(CROSS_CHAMBER_HITS);
+        expect(result.isError).toBe(true);
+        expect(result.structuredContent).toMatchObject({
+          error: {
+            code: JsonRpcErrorCode.ValidationError,
+            data: { field: 'chamber', chamber: 'house' },
+          },
+        });
+        expect(text).toContain('Nominations are only referred to Senate committees');
+      });
+
+      it("reads with chamber equal to the row's chamber, from that chamber's roster", async () => {
+        const route = '/v3/committee/senate/n79043125';
+        const { result, hits } = await call(
+          { operation: 'get', committeeCode: 'n79043125', chamber: 'senate' },
+          { [route]: detail('n79043125', 'Indian Affairs Committee') },
+        );
+
+        expect(hits).toEqual({ ...rosterHits('/v3/committee/senate'), [route]: 1 });
+        expect(result.isError).toBeFalsy();
+        expect(result.structuredContent).toMatchObject({ committee: { systemCode: 'n79043125' } });
+      });
+
+      it('with another chamber it gets the zero-candidate reply and the drop-chamber notice', async () => {
+        const { result, hits, text } = await call({
+          operation: 'get',
+          committeeCode: 'n79043125',
+          chamber: 'house',
+        });
+
+        expect(hits).toEqual(rosterHits('/v3/committee/house'));
+        const notice =
+          "No committee code or name matched 'n79043125' in the house chamber. Remove chamber to search every chamber. Pass a systemCode from operation:'list' (e.g. 'hsju00'), or use operation:'list' with filter to find a committee by name.";
+        expect(result.isError).toBeFalsy();
+        expect(result.structuredContent).toMatchObject({
+          data: [],
+          pagination: { count: 0, nextOffset: null },
+          notice,
+          effectiveQuery: 'committee name resolution (name=n79043125, chamber=house)',
+        });
+        expect(text).toContain(notice);
+      });
+
+      it.each(['__proto__', 'constructor'])(
+        '%j matches no roster code and no name, with no request past the roster',
+        async (committeeCode) => {
+          const { result, hits } = await call({ operation: 'get', committeeCode });
+
+          expect(hits).toEqual(CROSS_CHAMBER_HITS);
+          expect(result.isError).toBeFalsy();
+          expect(result.structuredContent).toMatchObject({
+            data: [],
+            pagination: { count: 0, nextOffset: null },
+          });
+        },
+      );
+
+      it('no description or notice says every code is letters + a 2-digit suffix', async () => {
+        const { result } = await call({ operation: 'get', committeeCode: 'ssbk' });
+
+        expect((result.structuredContent as { notice: string }).notice).not.toMatch(/2-digit/);
+        expect(committeeLookupTool.description).not.toMatch(/2-digit/);
+        expect(committeeLookupTool.input.shape.committeeCode.description).not.toMatch(/2-digit/);
+      });
+    });
+  });
+
+  /**
+   * #119: fromDateTime/toDateTime filter a committee's bills and reports by update
+   * date. The real API client runs over a routed api.congress.gov that records
+   * every request URL, so each case pins the query a call sends.
+   */
+  describe('update-date window on bills and reports', () => {
+    const FROM = '2025-03-01T00:00:00Z';
+    const TO = '2025-03-31T23:59:59Z';
+    const BILLS = '/v3/committee/senate/ssju00/bills';
+    const REPORTS = '/v3/committee/house/hsju00/reports';
+
+    /** `total` committee bills, numbered by position, served a page per request. */
+    const billsOf = (total: number) => (url: URL) => {
+      const offset = Number(url.searchParams.get('offset') ?? 0);
+      const limit = Number(url.searchParams.get('limit') ?? 20);
+      const bills = Array.from(
+        { length: Math.max(0, Math.min(limit, total - offset)) },
+        (_, i) => ({
+          congress: 119,
+          type: 'S',
+          number: String(offset + i + 1),
+          updateDate: '2025-03-10T11:56:24Z',
+        }),
+      );
+      const next =
+        offset + limit < total ? { next: `https://api.congress.gov${url.pathname}` } : {};
+      return { 'committee-bills': { bills }, pagination: { count: total, ...next } };
+    };
+
+    /** api.congress.gov over routes keyed by pathname, recording every request URL. */
+    function recordingCongressGov(routes: Record<string, unknown | ((url: URL) => unknown)>) {
+      const urls: URL[] = [];
+      const fetch = (url: string | URL): Promise<Response> => {
+        const parsed = new URL(String(url));
+        urls.push(parsed);
+        const route = routes[parsed.pathname];
+        return Promise.resolve(
+          route === undefined
+            ? new Response(JSON.stringify({ error: { message: 'Not found' } }), {
+                status: 404,
+                headers: { 'content-type': 'application/json' },
+              })
+            : jsonResponse(typeof route === 'function' ? route(parsed) : route),
+        );
+      };
+      return { fetch, urls };
+    }
+
+    async function call(
+      input: Parameters<typeof runToolContract<typeof committeeLookupTool>>[1],
+      routes: Record<string, unknown | ((url: URL) => unknown)> = {},
+    ) {
+      const upstream = recordingCongressGov(routes);
+      vi.stubGlobal('fetch', upstream.fetch);
+      const result = await runToolContract(committeeLookupTool, input);
+      return { result, urls: upstream.urls, text: contentText(result) };
+    }
+
+    /** The paging and window parameters one request sent. */
+    const sent = (url: URL) => ({
+      path: url.pathname,
+      limit: url.searchParams.get('limit'),
+      offset: url.searchParams.get('offset'),
+      fromDateTime: url.searchParams.get('fromDateTime'),
+      toDateTime: url.searchParams.get('toDateTime'),
+    });
+
+    beforeEach(() => {
+      vi.mocked(getCongressApi).mockReturnValue(new CongressApiService());
+    });
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it("'bills' in recent order sends the window on the count probe and the tail read, and reverses the window's last rows", async () => {
+      const { result, urls, text } = await call(
+        {
+          operation: 'bills',
+          committeeCode: 'ssju00',
+          fromDateTime: FROM,
+          toDateTime: TO,
+          limit: 3,
+        },
+        { [BILLS]: billsOf(51) },
+      );
+
+      expect(urls.map(sent)).toEqual([
+        { path: BILLS, limit: '1', offset: '0', fromDateTime: FROM, toDateTime: TO },
+        { path: BILLS, limit: '3', offset: '48', fromDateTime: FROM, toDateTime: TO },
+      ]);
+      expect(result.isError).toBeFalsy();
+      const effectiveQuery = `bills for committee ssju00 (order=recent, fromDateTime=${FROM}, toDateTime=${TO})`;
+      expect(result.structuredContent).toMatchObject({
+        data: [{ number: '51' }, { number: '50' }, { number: '49' }],
+        pagination: { count: 51, nextOffset: 3 },
+        effectiveQuery,
+        totalCount: 51,
+      });
+      expect(result.structuredContent).not.toHaveProperty('notice');
+      expect(text).toContain('51');
+      expect(text).toContain(effectiveQuery);
+    });
+
+    it("'bills' in oldest order sends the window on its one request", async () => {
+      const { result, urls } = await call(
+        {
+          operation: 'bills',
+          committeeCode: 'ssju00',
+          order: 'oldest',
+          fromDateTime: FROM,
+          toDateTime: TO,
+        },
+        { [BILLS]: billsOf(51) },
+      );
+
+      expect(urls.map(sent)).toEqual([
+        { path: BILLS, limit: '20', offset: '0', fromDateTime: FROM, toDateTime: TO },
+      ]);
+      expect(result.structuredContent).toMatchObject({
+        pagination: { count: 51, nextOffset: 20 },
+        effectiveQuery: `bills for committee ssju00 (fromDateTime=${FROM}, toDateTime=${TO})`,
+      });
+      expect((result.structuredContent as { data: unknown[] }).data).toHaveLength(20);
+    });
+
+    it("'reports' sends the window, and the echo names only the bound supplied", async () => {
+      const { result, urls, text } = await call(
+        { operation: 'reports', committeeCode: 'hsju00', fromDateTime: '2025-01-01T00:00:00Z' },
+        {
+          [REPORTS]: {
+            reports: [{ citation: 'H. Rept. 119-200', updateDate: '2025-07-16 15:36:13+00:00' }],
+            pagination: { count: 18 },
+          },
+        },
+      );
+
+      expect(urls.map(sent)).toEqual([
+        {
+          path: REPORTS,
+          limit: '20',
+          offset: '0',
+          fromDateTime: '2025-01-01T00:00:00Z',
+          toDateTime: null,
+        },
+      ]);
+      expect(result.structuredContent).toMatchObject({
+        pagination: { count: 18 },
+        effectiveQuery: 'reports for committee hsju00 (fromDateTime=2025-01-01T00:00:00Z)',
+      });
+      expect(text).toContain('H. Rept. 119-200');
+    });
+
+    it('without a window, bills and reports send no window parameter and echo as before', async () => {
+      const bills = await call(
+        { operation: 'bills', committeeCode: 'ssju00', limit: 3 },
+        { [BILLS]: billsOf(51) },
+      );
+      const reports = await call(
+        { operation: 'reports', committeeCode: 'hsju00' },
+        { [REPORTS]: { reports: [{ citation: 'H. Rept. 113-675' }], pagination: { count: 1 } } },
+      );
+
+      expect(bills.urls.map(sent)).toEqual([
+        { path: BILLS, limit: '1', offset: '0', fromDateTime: null, toDateTime: null },
+        { path: BILLS, limit: '3', offset: '48', fromDateTime: null, toDateTime: null },
+      ]);
+      expect(reports.urls.map(sent)).toEqual([
+        { path: REPORTS, limit: '20', offset: '0', fromDateTime: null, toDateTime: null },
+      ]);
+      expect(bills.result.structuredContent).toMatchObject({
+        effectiveQuery: 'bills for committee ssju00 (order=recent)',
+      });
+      expect(reports.result.structuredContent).toMatchObject({
+        effectiveQuery: 'reports for committee hsju00',
+      });
+    });
+
+    it.each([
+      ['bills', 'recent', BILLS, billsOf(0), 1, 'bills', 'ssju00'],
+      ['bills', 'oldest', BILLS, billsOf(0), 1, 'bills', 'ssju00'],
+      [
+        'reports',
+        'oldest',
+        REPORTS,
+        { reports: [], pagination: { count: 0 } },
+        1,
+        'reports',
+        'hsju00',
+      ],
+    ] as const)(
+      "an empty '%s' window (%s order) says the window matched nothing",
+      async (operation, order, path, body, requests, noun, committeeCode) => {
+        const { result, urls, text } = await call(
+          { operation, committeeCode, order, fromDateTime: '2099-01-01T00:00:00Z' },
+          { [path]: body },
+        );
+
+        expect(urls).toHaveLength(requests);
+        const notice = `No ${noun} found for committee ${committeeCode} with an update inside the fromDateTime/toDateTime window. Widen or remove the window.`;
+        expect(result.structuredContent).toMatchObject({
+          data: [],
+          pagination: { count: 0, nextOffset: null },
+          notice,
+        });
+        expect(text).toContain(notice);
+      },
+    );
+
+    const listRoute = {
+      '/v3/committee': {
+        committees: [{ name: 'Judiciary Committee', systemCode: 'ssju00', chamber: 'Senate' }],
+        pagination: { count: 1 },
+      },
+    };
+
+    it.each([
+      [
+        { operation: 'list', fromDateTime: FROM },
+        listRoute,
+        '/v3/committee',
+        "'list' does not use fromDateTime, so it was ignored.",
+      ],
+      [
+        {
+          operation: 'get',
+          committeeCode: 'ssju00',
+          filter: 'judiciary',
+          fromDateTime: FROM,
+          toDateTime: TO,
+        },
+        {
+          '/v3/committee/senate/ssju00': { committee: { systemCode: 'ssju00', name: 'Judiciary' } },
+        },
+        '/v3/committee/senate/ssju00',
+        "'get' does not use filter, fromDateTime, or toDateTime, so they were ignored.",
+      ],
+      [
+        { operation: 'nominations', committeeCode: 'ssju00', congress: 119, toDateTime: TO },
+        {
+          '/v3/committee/senate/ssju00/nominations': {
+            nominations: [{ citation: 'PN1478' }],
+            pagination: { count: 5591 },
+          },
+        },
+        '/v3/committee/senate/ssju00/nominations',
+        "'nominations' does not use congress or toDateTime, so they were ignored. Results span every congress.",
+      ],
+    ] as const)(
+      '%o is served unfiltered, naming the window as ignored',
+      async (input, routes, path, notice) => {
+        const { result, urls, text } = await call(input, routes);
+
+        expect(urls.map((url) => url.pathname)).toEqual([path]);
+        expect(urls[0]?.searchParams.has('fromDateTime')).toBe(false);
+        expect(urls[0]?.searchParams.has('toDateTime')).toBe(false);
+        expect(result.isError).toBeFalsy();
+        expect(result.structuredContent).toMatchObject({ notice });
+        expect(text).toContain(notice);
+      },
+    );
+
+    it('the ignored-window notice composes with the empty-result notice on list', async () => {
+      const { result } = await call(
+        { operation: 'list', chamber: 'joint', fromDateTime: FROM, toDateTime: TO },
+        { '/v3/committee/joint': { committees: [], pagination: { count: 0 } } },
+      );
+
+      expect(result.structuredContent).toMatchObject({
+        data: [],
+        notice:
+          "'list' does not use fromDateTime or toDateTime, so they were ignored. No committees found. Try removing the chamber filter or check the congress number.",
+      });
+    });
+
+    /** Each refusal comes before name resolution's roster read and every other request. */
+    describe.each([
+      ['list', { operation: 'list', filter: 'judiciary' }],
+      ['get', { operation: 'get', committeeCode: 'judiciary' }],
+      ['bills', { operation: 'bills', committeeCode: 'judiciary' }],
+      ['reports', { operation: 'reports', committeeCode: 'judiciary' }],
+      ['nominations', { operation: 'nominations', committeeCode: 'judiciary' }],
+    ] as const)("'%s' validates the window before any request", (_operation, base) => {
+      it.each([
+        [{ fromDateTime: '2025-03-01' }, /'fromDateTime' must be an ISO 8601 date-time/],
+        [{ toDateTime: '2025-02-30T00:00:00Z' }, /'toDateTime' must be an ISO 8601 date-time/],
+        [{ fromDateTime: TO, toDateTime: FROM }, /must be earlier than or equal to 'toDateTime'/],
+      ] as const)('rejects %o', async (window, message) => {
+        const { result, urls } = await call({ ...base, ...window });
+
+        expect(urls).toEqual([]);
+        expect(result.isError).toBe(true);
+        expect(result.structuredContent).toMatchObject({
+          error: {
+            code: JsonRpcErrorCode.ValidationError,
+            message: expect.stringMatching(message),
+          },
+        });
+      });
+    });
+
+    it('describes the window as an update-date filter and the order without promising update-date order', () => {
+      const shape = committeeLookupTool.input.shape;
+      expect(shape.fromDateTime.description).toContain('update');
+      expect(shape.fromDateTime.description).toContain("'bills' and 'reports'");
+      expect(shape.toDateTime.description).toContain("'bills' and 'reports'");
+      expect(shape.order.description).not.toMatch(/update-date (first|order)/);
+      expect(committeeLookupTool.description).not.toMatch(/update-date (first|order)/);
+      expect(committeeLookupTool.description).toContain(
+        '{congress, type, number, actionDate, relationshipType, updateDate, url}',
+      );
     });
   });
 });

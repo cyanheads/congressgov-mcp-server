@@ -8,6 +8,7 @@ import { validationError } from '@cyanheads/mcp-ts-core/errors';
 
 import { formatLaws } from '@/mcp-server/tools/format-helpers.js';
 import {
+  anyLetterCase,
   buildEffectiveQuery,
   congressErrorContracts,
   identityErrorContracts,
@@ -27,8 +28,7 @@ export const enactedLawsTool = tool('congressgov_enacted_laws', {
   input: z.object({
     operation: z.enum(['list', 'get']).describe('Which data to retrieve.'),
     congress: z.number().int().positive().describe('Congress number.'),
-    lawType: z
-      .enum(['pub', 'priv'])
+    lawType: anyLetterCase(z.enum(['pub', 'priv']))
       .optional()
       .describe(
         "Law type — 'pub' (public laws, general application, most common) or 'priv' (private laws, specific individuals or entities). Required for 'get'.",

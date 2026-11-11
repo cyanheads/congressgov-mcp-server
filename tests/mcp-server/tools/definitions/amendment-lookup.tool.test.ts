@@ -23,6 +23,12 @@ import { amendmentLookupTool } from '@/mcp-server/tools/definitions/amendment-lo
 import { formatBills, formatMembers, formatVotes } from '@/mcp-server/tools/format-helpers.js';
 import { initCongressApi } from '@/services/congress-api/congress-api-service.js';
 import { initCongressDocuments } from '@/services/congress-documents/congress-documents-service.js';
+import {
+  type TextVersionRow,
+  textVersionsBody,
+  versionsByIndex,
+  walkTextPages,
+} from '../../../helpers/text-versions.js';
 
 /** Join a formatter's blocks into the single string a content[]-only client sees. */
 function joinText(blocks: Array<{ type: string; text?: string }>): string {
@@ -939,12 +945,41 @@ describe('congressgov_amendment_lookup — sub-resources', () => {
       pagination: { count: 2, nextOffset: null },
     });
     const text = rendered(result);
-    expect(text).toContain('### 1. Proposed');
-    expect(text).toContain('### 2. Submitted');
+    expect(text).toContain('### textVersionIndex 0: Proposed');
+    expect(text).toContain('### textVersionIndex 1: Submitted');
     for (const version of SAMDT_4199_VERSIONS) {
       for (const format of version.formats)
         expect(text).toContain(`**${format.type}:** ${format.url}`);
     }
+  });
+
+  it("heads a later page's text version with the textVersionIndex 'content' takes", async () => {
+    const result = await call({
+      operation: 'text',
+      congress: 110,
+      amendmentType: 'samdt',
+      amendmentNumber: 4199,
+      limit: 1,
+      offset: 1,
+    });
+    expect(result.structuredContent).toMatchObject({
+      data: [SAMDT_4199_VERSIONS[1]],
+      pagination: { count: 2, nextOffset: null },
+    });
+    expect(rendered(result)).toContain('### textVersionIndex 1: Submitted');
+    expect(rendered(result)).not.toContain('### 1.');
+  });
+
+  it("carries each text version's textVersionIndex on structuredContent", async () => {
+    const result = await call({
+      operation: 'text',
+      congress: 110,
+      amendmentType: 'samdt',
+      amendmentNumber: 4199,
+    });
+    expect(result.structuredContent).toMatchObject({
+      data: SAMDT_4199_VERSIONS.map((version, i) => ({ ...version, textVersionIndex: i })),
+    });
   });
 
   it('reports an empty sub-resource on both surfaces, composed with the ignored-bound notice', async () => {
@@ -962,6 +997,79 @@ describe('congressgov_amendment_lookup — sub-resources', () => {
     expect(text).toContain('_No matching results._');
     expect(text).toContain(notice);
   });
+});
+
+// ── text: every row carries the textVersionIndex 'content' reads it by ──
+
+describe("congressgov_amendment_lookup — 'text' rows carry the index 'content' reads", () => {
+  /** A text version whose HTML Record page names the version. */
+  const version = (slug: string, type: string): TextVersionRow => ({
+    date: '2023-07-14T04:00:00Z',
+    formats: [
+      { type: 'HTML', url: `https://www.congress.gov/118/crec/2023/07/14/${slug}.htm` },
+      { type: 'PDF', url: `https://www.congress.gov/118/crec/2023/07/14/${slug}.pdf` },
+    ],
+    type,
+  });
+
+  /**
+   * Four versions, so a walk at limit 1 passes a first, two middle, and a last
+   * page. Amendment text pages carry nothing past their limit (110th SAMDT 4199,
+   * 2026-11-11); the second list adds a trailing version after every page, the
+   * enacted-bill shape, to run the other side of the shared stamping rule.
+   */
+  const VERSIONS = [
+    version('a', 'Proposed'),
+    version('b', 'Submitted'),
+    version('c', 'Modified'),
+    version('d', 'Reported'),
+  ];
+  const TRAILING = version('e', 'Trailing');
+
+  beforeEach(() => {
+    apiRoutes.set('/v3/amendment/118/samdt/900/text', (url) => ({
+      body: textVersionsBody(url, VERSIONS),
+    }));
+    apiRoutes.set('/v3/amendment/118/samdt/901/text', (url) => ({
+      body: textVersionsBody(url, VERSIONS, TRAILING),
+    }));
+    for (const row of [...VERSIONS, TRAILING]) {
+      documents.set(new URL(row.formats[0]!.url).pathname, `<pre>${row.type}</pre>`);
+    }
+  });
+
+  const text = (amendmentNumber: number) => (paging: { limit: number; offset: number }) =>
+    call({ operation: 'text', congress: 118, amendmentType: 'samdt', amendmentNumber, ...paging });
+
+  const content = (amendmentNumber: number, textVersionIndex: number) =>
+    call({
+      operation: 'content',
+      congress: 118,
+      amendmentType: 'samdt',
+      amendmentNumber,
+      textVersionIndex,
+    });
+
+  it.each([
+    [900, 1, [[0], [1], [2], [3], []]],
+    [900, 3, [[0, 1, 2], [3], []]],
+    [901, 1, [[0], [1], [2], [3], [4], []]],
+    [901, 3, [[0, 1, 2], [3, 4], []]],
+  ])(
+    'SAMDT %i at limit %i: every row on every page, past the end included, is headed by the index content reads',
+    async (amendmentNumber, limit, indices) => {
+      const pages = await walkTextPages(text(amendmentNumber), limit);
+      expect(pages.map((page) => page.rows.map((row) => row.textVersionIndex))).toEqual(indices);
+
+      const byIndex = versionsByIndex(pages);
+      for (const [index, row] of byIndex) {
+        const result = await content(amendmentNumber, index);
+        expect(result.structuredContent, `index ${index}`).toMatchObject({
+          content: { sourceUrl: row.formats[0]!.url, text: row.type },
+        });
+      }
+    },
+  );
 });
 
 // ── list ──────────────────────────────────────────────────────────────

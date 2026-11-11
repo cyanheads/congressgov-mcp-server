@@ -19,7 +19,7 @@ import {
 } from '@cyanheads/mcp-ts-core/mirror';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 import { createCongressBillIngester, type MirrorApi } from './ingest.js';
-import { toFtsMatch } from './normalize.js';
+import { type FtsQuery, toFtsMatch } from './normalize.js';
 import { BILLS_TABLE, billStoreSpec } from './schema.js';
 import type { SearchBillResult, SearchBillsFilters, SearchBillsPage } from './types.js';
 
@@ -100,16 +100,17 @@ export class CongressMirrorService {
   }
 
   /**
-   * Keyword-search the mirror. The query is tokenized and each token individually
-   * quoted before the FTS5 `MATCH` is built; an input with no searchable tokens
-   * yields an empty page rather than a thrown query. Optional exact-match filters
-   * ride the indexed columns; results are BM25-ranked.
+   * Keyword-search the mirror. `toFtsMatch` translates the query grammar to the
+   * FTS5 `MATCH`, every term individually quoted; a query it can't translate
+   * fails `invalid_query` before any SQL runs, and the page carries each unmatched
+   * `(`, `)`, or `"` the translation ignored and each exclusion form it applied.
+   * Optional exact-match filters ride the indexed columns; results are BM25-ranked.
    */
-  async search(filters: SearchBillsFilters, ctx: Context): Promise<SearchBillsPage> {
-    const match = toFtsMatch(filters.query);
-    if (match === '') {
-      return { items: [], total: 0, offset: filters.offset, limit: filters.limit };
-    }
+  async search(
+    filters: SearchBillsFilters,
+    ctx: Context,
+  ): Promise<SearchBillsPage & Pick<FtsQuery, 'exclusions' | 'unmatched'>> {
+    const { exclusions, match, unmatched } = toFtsMatch(filters.query);
 
     const structured: QueryFilter[] = [];
     if (filters.congress !== undefined) {
@@ -142,6 +143,8 @@ export class CongressMirrorService {
       total: result.total,
       offset: filters.offset,
       limit: filters.limit,
+      unmatched,
+      exclusions,
     };
   }
 }

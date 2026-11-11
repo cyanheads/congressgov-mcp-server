@@ -196,6 +196,35 @@ export function toLawNumber(value: number | string, congress: number): number {
   return lawNumber;
 }
 
+/** The letter case an input's canonical spelling is written in. */
+type LetterCase = 'lower' | 'upper' | 'title';
+
+const TO_LETTER_CASE = {
+  lower: (value) => value.toLowerCase(),
+  upper: (value) => value.toUpperCase(),
+  title: (value) => value.charAt(0).toUpperCase() + value.slice(1).toLowerCase(),
+} as const satisfies Record<LetterCase, (value: string) => string>;
+
+/**
+ * Accept a code in any letter case: a string is rewritten in `canonical` case
+ * before `schema` checks it. Congress.gov rows and sibling tools spell one code
+ * several ways (`HR` beside `hr`, `HRPT`, `House` beside `house`) while each
+ * input names a single spelling, so a value copied from a row into the next
+ * call reads like the canonical one.
+ *
+ * The rewrite runs inside the schema, ahead of its enum or pattern, and
+ * `toJSONSchema` emits only `schema`, so the advertised check is unchanged and
+ * names the canonical spelling; an unknown value still fails it under the
+ * field's name, and a non-string reaches `schema` untouched to be rejected.
+ * Over a preprocess an advertised default needs `.prefault()`, not `.default()`.
+ * `title` capitalizes the first letter and lower-cases the rest — one-word
+ * values only.
+ */
+export function anyLetterCase<T extends z.ZodType>(schema: T, canonical: LetterCase = 'lower') {
+  const toCase = TO_LETTER_CASE[canonical];
+  return z.preprocess((value) => (typeof value === 'string' ? toCase(value) : value), schema);
+}
+
 export function normalizeOptionalString(value: string | undefined): string | undefined {
   const normalized = value?.trim();
   return normalized || undefined;

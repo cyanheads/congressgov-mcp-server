@@ -35,6 +35,7 @@ import {
   track,
   useFakeClock,
 } from '../../helpers/budget-fixtures.js';
+import { halvedBodyResponse } from '../congress-mirror/fake-bill-list.js';
 
 function okJson(data: unknown) {
   return {
@@ -231,6 +232,29 @@ describe('CongressApiService', () => {
         message: expect.stringMatching(/R99999.*R40097.*96-548/),
       });
     });
+
+    it.each([
+      [
+        'a committee',
+        () => service.getCommittee('senate', 'n79043125', createMockContext()),
+        "Committee n79043125 not found in the senate chamber. Most committee codes are a chamber prefix, letters, and two digits (`hsju00`); some historical ones are not (`n79043125`, `sp2k00`). Call `congressgov_committee_lookup` with `operation: 'list'` and an optional `filter` to discover valid codes.",
+      ],
+      [
+        "a committee's sub-resource",
+        () =>
+          service.getCommitteeSubResource(
+            { chamber: 'house', committeeCode: 'hsxx99', subResource: 'reports' },
+            createMockContext(),
+          ),
+        "Committee hsxx99 (house) or its reports not found. Most committee codes are a chamber prefix, letters, and two digits (`hsju00`); some historical ones are not (`n79043125`, `sp2k00`). Call `congressgov_committee_lookup` with `operation: 'list'` and an optional `filter` to discover valid codes.",
+      ],
+    ])(
+      'describes the code shapes and the list recovery when %s is not found',
+      async (_label, request, message) => {
+        mockFetch.mockResolvedValue(errorResponse(404, 'Unknown resource', 'Not Found'));
+        await expect(request()).rejects.toMatchObject({ code: JsonRpcErrorCode.NotFound, message });
+      },
+    );
   });
 
   // ── #103: the list filters the three list endpoints honor ──
@@ -270,6 +294,48 @@ describe('CongressApiService', () => {
           mockFetch.mock.calls.map(([url]) => new URL(url).searchParams.get('conference')),
         ).toEqual(['true', 'false', null]);
       }
+    });
+  });
+
+  // ── #119: a committee's bills and reports take the update-date window ──
+
+  describe('committee sub-resource update-date window', () => {
+    const FROM = '2025-03-01T00:00:00Z';
+    const TO = '2025-03-31T23:59:59Z';
+
+    it('sends the window on bills and reports, and no window parameter when absent', async () => {
+      const ctx = createMockContext();
+      const committee = { chamber: 'senate', committeeCode: 'ssju00' } as const;
+      await service.getCommitteeSubResource(
+        {
+          ...committee,
+          subResource: 'bills',
+          limit: 1,
+          offset: 0,
+          fromDateTime: FROM,
+          toDateTime: TO,
+        },
+        ctx,
+      );
+      await service.getCommitteeSubResource(
+        { ...committee, subResource: 'reports', fromDateTime: FROM },
+        ctx,
+      );
+      await service.getCommitteeSubResource({ ...committee, subResource: 'bills' }, ctx);
+      expect(
+        mockFetch.mock.calls.map(([url]) => {
+          const parsed = new URL(url);
+          return [
+            parsed.pathname,
+            parsed.searchParams.get('fromDateTime'),
+            parsed.searchParams.get('toDateTime'),
+          ];
+        }),
+      ).toEqual([
+        ['/v3/committee/senate/ssju00/bills', FROM, TO],
+        ['/v3/committee/senate/ssju00/reports', FROM, null],
+        ['/v3/committee/senate/ssju00/bills', null, null],
+      ]);
     });
   });
 
@@ -615,6 +681,48 @@ describe('CongressApiService', () => {
       });
     });
 
+    describe('captured upstream bodies stay server-side', () => {
+      const SENTINEL = 'sentinel-upstream-body-4Kq7';
+      it.each([
+        [
+          400,
+          JSON.stringify({ error: `${SENTINEL} (UserInputException)` }),
+          JsonRpcErrorCode.InvalidParams,
+          'invalid_request',
+        ],
+        [
+          403,
+          JSON.stringify({ error: { code: 'API_KEY_INVALID', message: SENTINEL } }),
+          JsonRpcErrorCode.ConfigurationError,
+          'api_key_rejected',
+        ],
+        [429, SENTINEL, JsonRpcErrorCode.RateLimited, 'rate_limited'],
+        [500, `<html><body>${SENTINEL}</body></html>`, undefined, 'upstream_error'],
+      ])(
+        'classifies HTTP %i on its body and leaves the body off both tool surfaces',
+        async (status, body, code, reason) => {
+          vi.useFakeTimers();
+          initCongressApi();
+          mockFetch.mockResolvedValue(errorResponse(status, body));
+          const pending = runToolContract(billLookupTool, {
+            operation: 'get',
+            congress: 118,
+            billType: 'hr',
+            billNumber: 1,
+          });
+          await vi.runAllTimersAsync();
+          const result = await pending;
+          const error = (result.structuredContent as { error: McpError }).error;
+          expect(error.data).toMatchObject({ reason, status });
+          if (code !== undefined) expect(error.code).toBe(code);
+          expect(error.data).not.toHaveProperty('body');
+          expect(error.data).not.toHaveProperty('responseBody');
+          expect(JSON.stringify(result.structuredContent)).not.toContain(SENTINEL);
+          expect(contentText(result)).not.toContain(SENTINEL);
+        },
+      );
+    });
+
     it('ignores signal-like objects that are not native AbortSignal instances', async () => {
       mockFetch.mockResolvedValue(okJson({ congress: {} }));
       const ctx = {
@@ -656,11 +764,15 @@ describe('CongressApiService', () => {
       expect(mockFetch).toHaveBeenCalledTimes(3);
     });
     it('rejects when the registered fallback reaches 5000 attempts', async () => {
-      for (let i = 0; i < 5000; i++) await service.getCurrentCongress();
+      /** 4,999 attempts already in this hour, seeded rather than sent, so the test's time never depends on machine speed. */
+      const seeded = Array.from({ length: 4999 }, () => Date.now());
+      (service as unknown as { attempts: number[] }).attempts = seeded;
+      await service.getCurrentCongress();
       await expect(service.getCurrentCongress()).rejects.toMatchObject({
         code: JsonRpcErrorCode.RateLimited,
+        data: { reason: 'rate_limited', scope: 'process-local', hourlyLimit: 5000 },
       });
-      expect(mockFetch).toHaveBeenCalledTimes(5000);
+      expect(mockFetch).toHaveBeenCalledOnce();
     });
 
     it('expires hourly attempts at the rolling boundary and keeps demo daily attempts', async () => {
@@ -827,6 +939,29 @@ describe('CongressApiService', () => {
       );
       /** The container's `count`/`url` siblings are metadata, not rows — only the array becomes data. */
       expect(result.data).toEqual([{ number: '1234' }, { number: '5678' }]);
+    });
+
+    /** /bill/119/hr/1/text?limit=2&offset=0 (2026-11-11): two versions, then the Public Law version. */
+    it("cuts the copy of the Public Law version an enacted bill's text page carries past the limit", async () => {
+      mockFetch.mockResolvedValue(
+        okJson({
+          textVersions: [
+            { type: 'Enrolled Bill', date: null },
+            { type: 'Engrossed Amendment Senate', date: '2025-07-01T04:00:00Z' },
+            { type: 'Public Law', date: '2025-07-05T03:59:59Z' },
+          ],
+          pagination: { count: 6, next: 'https://api.congress.gov/v3/bill/119/hr/1/text' },
+        }),
+      );
+      const result = await service.getBillSubResource(
+        { congress: 119, billType: 'hr', billNumber: 1, subResource: 'text', limit: 2, offset: 0 },
+        createMockContext(),
+      );
+      expect(result.data.map((row) => row.type)).toEqual([
+        'Enrolled Bill',
+        'Engrossed Amendment Senate',
+      ]);
+      expect(result.pagination).toEqual({ count: 6, nextOffset: 2 });
     });
   });
 
@@ -1172,6 +1307,98 @@ describe('CongressApiService', () => {
       /** Two honored 30 s waits: a tool call's budget would have ended this at 50 s. */
       expect((run.state.settledAt as number) - start).toBeGreaterThanOrEqual(60_000);
       expect(summaryAttempts).toBe(3);
+    });
+  });
+
+  /**
+   * A request with no call behind it — the mirror ingester's — gives each of its
+   * three attempts 30 s; a tool call's attempts keep 10 s inside its budget. The
+   * upstream answers a 200 and then holds the second half of its body.
+   */
+  describe('attempt timeout (#106)', () => {
+    const BODY = JSON.stringify({ congress: { number: 119 } });
+
+    beforeEach(() => useFakeClock());
+
+    it('lets a body that pauses 20 s finish on the first attempt of a request with no call', async () => {
+      mockFetch.mockImplementation((_url, init: RequestInit) =>
+        Promise.resolve(halvedBodyResponse(BODY, init.signal, 20_000)),
+      );
+      const start = Date.now();
+      const request = track(service.getCurrentCongress());
+      await vi.advanceTimersByTimeAsync(CLIENT_TIMEOUT_MS);
+
+      expect(request.state.error).toBeUndefined();
+      expect(request.state.value).toEqual({ number: 119 });
+      expect((request.state.settledAt as number) - start).toBe(20_000);
+      expect(mockFetch).toHaveBeenCalledOnce();
+    });
+
+    it('fails a request with no call whose body stalls after three 30 s attempts, naming that deadline', async () => {
+      mockFetch.mockImplementation((_url, init: RequestInit) =>
+        Promise.resolve(halvedBodyResponse(BODY, init.signal)),
+      );
+      const start = Date.now();
+      const request = track(service.getCurrentCongress());
+      await vi.advanceTimersByTimeAsync(2 * CLIENT_TIMEOUT_MS);
+
+      expect(request.state.error).toMatchObject({
+        code: JsonRpcErrorCode.Timeout,
+        data: { reason: 'upstream_timeout', retryable: true, retryAttempts: 3 },
+      });
+      expect((request.state.error as McpError).message).toBe(
+        'Congress.gov did not complete the request within the 30000-millisecond deadline. (failed after 3 attempts)',
+      );
+      /** Three full attempts and the two backoffs between them (1 s and 2 s, ±25% jitter). */
+      const elapsed = (request.state.settledAt as number) - start;
+      expect(elapsed).toBeGreaterThanOrEqual(90_000 + 750 + 1_500);
+      expect(elapsed).toBeLessThanOrEqual(90_000 + 1_250 + 2_500);
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+    });
+
+    it('fails a request with no call whose upstream never answers after three 30 s attempts, naming that deadline', async () => {
+      mockFetch.mockImplementation(
+        (_url, init: RequestInit) =>
+          new Promise((_resolve, reject) => {
+            init.signal?.addEventListener('abort', () => reject(init.signal?.reason), {
+              once: true,
+            });
+          }),
+      );
+      const start = Date.now();
+      const request = track(service.getCurrentCongress());
+      await vi.advanceTimersByTimeAsync(2 * CLIENT_TIMEOUT_MS);
+
+      expect(request.state.error).toMatchObject({
+        code: JsonRpcErrorCode.Timeout,
+        data: { reason: 'upstream_timeout', retryable: true, retryAttempts: 3 },
+      });
+      expect((request.state.error as McpError).message).toBe(
+        'Congress.gov did not complete the request within the 30000-millisecond deadline. (failed after 3 attempts)',
+      );
+      const elapsed = (request.state.settledAt as number) - start;
+      expect(elapsed).toBeGreaterThanOrEqual(90_000 + 750 + 1_500);
+      expect(elapsed).toBeLessThanOrEqual(90_000 + 1_250 + 2_500);
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+    });
+
+    it('cuts each attempt of a tool call at 10 s, so the same paused body fails inside the budget', async () => {
+      mockFetch.mockImplementation((_url, init: RequestInit) =>
+        Promise.resolve(halvedBodyResponse(BODY, init.signal, 20_000)),
+      );
+      const start = Date.now();
+      const call = track(service.getCurrentCongress(createMockContext()));
+      await vi.advanceTimersByTimeAsync(CLIENT_TIMEOUT_MS);
+
+      expect(call.state.error).toMatchObject({
+        code: JsonRpcErrorCode.Timeout,
+        data: { reason: 'upstream_timeout', retryAttempts: 3 },
+      });
+      expect((call.state.error as McpError).message).toBe(
+        'Congress.gov did not complete the request within the 10000-millisecond deadline. (failed after 3 attempts)',
+      );
+      expect((call.state.settledAt as number) - start).toBeLessThan(CALL_BUDGET_MS);
+      expect(mockFetch).toHaveBeenCalledTimes(3);
     });
   });
 });

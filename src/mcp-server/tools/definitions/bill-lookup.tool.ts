@@ -13,8 +13,10 @@ import {
   summaryWindowNotice,
   windowSummaryPage,
 } from '@/mcp-server/tools/summary-window.js';
+import { textVersionIndexSchema, textVersionPage } from '@/mcp-server/tools/text-version-index.js';
 import {
   addNotice,
+  anyLetterCase,
   buildEffectiveQuery,
   congressErrorContracts,
   documentErrorContracts,
@@ -41,10 +43,7 @@ import {
 } from '@/services/congress-documents/document-formats.js';
 import { ordinal } from '@/utils/congress-calendar.js';
 
-const BillTypeEnum = z.preprocess(
-  (value) => (typeof value === 'string' ? value.toLowerCase() : value),
-  z.enum(BILL_TYPE_CODES),
-);
+const BillTypeEnum = anyLetterCase(z.enum(BILL_TYPE_CODES));
 
 const OperationEnum = z.preprocess(
   (value) =>
@@ -69,7 +68,7 @@ const SUB_RESOURCE_MAP: Record<string, string> = {
   related: 'relatedbills',
 };
 
-/** The bill envelope with `rollVote` declared on its rows. */
+/** The bill envelope with `rollVote` and `textVersionIndex` declared on its rows. */
 const billOutput = listOrDetail(
   { bill: 'record', content: 'record' },
   "Bill record (sponsor, policy area, latest action, CBO estimates, law citation) for `get`; absent for `list` and sub-resources. For `content`, an alternative key 'content' carries {text, format, sourceUrl, documentTitle, totalCharacters, offset, truncated, nextOffset} — one exact character window of the document.",
@@ -77,10 +76,13 @@ const billOutput = listOrDetail(
     data: z
       .array(
         z
-          .object({ rollVote: recordedRollVoteSchema.optional() })
+          .object({
+            rollVote: recordedRollVoteSchema.optional(),
+            textVersionIndex: textVersionIndexSchema.optional(),
+          })
           .passthrough()
           .describe(
-            'Upstream JSON record: a bill (`list`) or a sub-resource row. An `actions` row carries `rollVote` when it records one roll call vote congressgov_roll_votes serves.',
+            "Upstream JSON record: a bill (`list`) or a sub-resource row. An `actions` row carries `rollVote` when it records one roll call vote congressgov_roll_votes serves; a `text` row carries `textVersionIndex`, the index 'content' reads it by.",
           ),
       )
       .optional()
@@ -129,7 +131,7 @@ export const billLookupTool = tool('congressgov_bill_lookup', {
       .min(0)
       .default(0)
       .describe(
-        "Which text version 'content' reads, 0-based against the same order 'text' returns — 0 is the most recent version. Ignored by other operations.",
+        "Which text version 'content' reads: the version's 0-based position in the rows 'text' returns, counted across pages. Dated versions run newest first, but an enrolled bill's undated Enrolled Bill version is 0 and an enacted bill's Public Law version is last, so read 'text' first: each row carries the textVersionIndex that reads it. Ignored by other operations.",
       ),
     versionCode: z
       .string()
@@ -452,6 +454,7 @@ export const billLookupTool = tool('congressgov_bill_lookup', {
       result,
       `No ${input.operation} found for ${input.billType.toUpperCase()} ${billNumber}.`,
     );
+    if (input.operation === 'text') return textVersionPage(result, input);
     if (input.operation !== 'actions') return result;
     return {
       ...result,

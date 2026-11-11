@@ -4,6 +4,7 @@
  */
 
 import { resource, z } from '@cyanheads/mcp-ts-core';
+import { anyLetterCase } from '@/mcp-server/tools/tool-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 
 export const memberResource = resource('congress://member/{bioguideId}', {
@@ -11,13 +12,15 @@ export const memberResource = resource('congress://member/{bioguideId}', {
   description: 'Member profile: name, state, party, terms, leadership, office, legislation counts.',
   mimeType: 'application/json',
   params: z.object({
-    bioguideId: z
-      .string()
-      .regex(
-        /^[A-Z]\d{6}$/,
-        'Bioguide ID must be one uppercase letter followed by 6 digits (e.g., P000197).',
-      )
-      .describe('Bioguide identifier for the member (e.g., P000197).'),
+    bioguideId: anyLetterCase(
+      z
+        .string()
+        .regex(
+          /^[A-Z]\d{6}$/,
+          'Bioguide ID must be one letter followed by 6 digits (e.g., P000197).',
+        ),
+      'upper',
+    ).describe('Bioguide identifier for the member (e.g., P000197), in any letter case.'),
   }),
 
   async handler(params, ctx) {

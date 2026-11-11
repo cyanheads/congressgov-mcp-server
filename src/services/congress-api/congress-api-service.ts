@@ -216,11 +216,22 @@ const MAX_ATTEMPTS = 3;
 const BASE_BACKOFF_MS = 1000;
 const RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000;
 const DEMO_DAILY_WINDOW_MS = 24 * RATE_LIMIT_WINDOW_MS;
-const REQUEST_TIMEOUT_MS = 10_000;
+/** One attempt of a tool call or resource read, inside the call's 50 s budget (`call-budget.ts`). */
+const CALL_ATTEMPT_TIMEOUT_MS = 10_000;
+/**
+ * One attempt of a request with no call behind it — the mirror ingester. Nothing
+ * waits on a client clock there, and an uncached 250-row page of the bill or
+ * summaries list can outlast a tool call's 10 s, so it gets the 30 s a document
+ * fetch gets.
+ */
+const UNBUDGETED_ATTEMPT_TIMEOUT_MS = 30_000;
 const HTML_RESPONSE_RE = /^\s*<(!DOCTYPE\s+html|html[\s>])/i;
 
 const RATE_LIMIT_MESSAGE =
   'Congress.gov API quota reached. Quotas are shared across clients using the same key or demo IP; this server only tracks its own attempts.';
+
+const COMMITTEE_CODE_HINT =
+  "Most committee codes are a chamber prefix, letters, and two digits (`hsju00`); some historical ones are not (`n79043125`, `sp2k00`). Call `congressgov_committee_lookup` with `operation: 'list'` and an optional `filter` to discover valid codes.";
 
 /**
  * `data.reason` + `data.recovery.hint` payloads matching the `errors[]` contract
@@ -258,17 +269,25 @@ const UPSTREAM_ERROR_RECOVERY = {
 
 /**
  * Read the upstream HTTP status off an McpError's `data`. `fetchWithTimeout`
- * and `httpErrorFromResponse` both emit the Fetch `Response`-aligned `status`
- * and `body` fields; `classifyUpstreamError` re-emits them under the same names
- * so downstream classification reads one vocabulary.
+ * and `httpErrorFromResponse` both emit the Fetch `Response`-aligned `status`;
+ * `classifyUpstreamError` re-emits it under the same name so downstream
+ * classification reads one vocabulary.
  */
 function readUpstreamStatus(error: McpError): number | undefined {
   return typeof error.data?.status === 'number' ? error.data.status : undefined;
 }
 
-/** Read the captured upstream response body off an McpError's `data`. */
+/**
+ * Read the captured upstream response body from the first error in `error`'s
+ * cause chain that carries one: the `fetchWithTimeout` error, under the
+ * classified error and any retry-exhausted wrapper. The framework keeps that
+ * body off every client envelope, so the classified errors never copy it.
+ */
 function readUpstreamBody(error: McpError): string | undefined {
-  return typeof error.data?.body === 'string' ? error.data.body : undefined;
+  for (let current: unknown = error; current instanceof McpError; current = current.cause) {
+    if (typeof current.data?.body === 'string') return current.data.body;
+  }
+  return;
 }
 
 /**
@@ -295,17 +314,18 @@ function readGatewayKeyCode(body: string | undefined): string | undefined {
  * domain error: a stable `data.reason`, an actionable `data.recovery.hint`, and
  * a message that never echoes the request URL. The framework's status-mapped
  * code is preserved for the upstream-error bucket, including cancellation and
- * non-retryable status outcomes, and the
- * upstream `status`/`body` are carried through so tryNotFound() can still
- * classify the 404 and 500 cases at call sites.
+ * non-retryable status outcomes. The upstream `status` is carried through and
+ * the original error rides as `cause`, so tryNotFound() can still classify the
+ * 404 and 500 cases at call sites; the captured body is read from that cause
+ * and stays off the client envelope. `timeoutMs` is the failed attempt's own
+ * deadline, which an attempt-timeout message names.
  * Resolves cyanheads/congressgov-mcp-server#34.
  */
-function classifyUpstreamError(error: McpError, path: string): McpError {
+function classifyUpstreamError(error: McpError, path: string, timeoutMs: number): McpError {
   const status = readUpstreamStatus(error);
   const body = readUpstreamBody(error);
   const meta: Record<string, unknown> = { path };
   if (status !== undefined) meta.status = status;
-  if (body !== undefined) meta.body = body;
   if (error.data?.retryable === false) meta.retryable = false;
   if (typeof error.data?.retryAfter === 'string') meta.retryAfter = error.data.retryAfter;
   const opts = { cause: error };
@@ -333,7 +353,7 @@ function classifyUpstreamError(error: McpError, path: string): McpError {
       return new McpError(
         error.code,
         status === undefined
-          ? `Congress.gov did not complete the request within the ${REQUEST_TIMEOUT_MS}-millisecond deadline.`
+          ? `Congress.gov did not complete the request within the ${timeoutMs}-millisecond deadline.`
           : `Congress.gov returned a timeout response${suffix}.`,
         {
           retryable: true,
@@ -532,7 +552,7 @@ export class CongressApiService {
   ): Promise<EntityResult<'committee'>> {
     const data = await this.tryNotFound(
       () => this.get(apiPath`/committee/${chamber}/${committeeCode}`, ctx),
-      `Committee ${committeeCode} not found in the ${chamber} chamber. Committee system codes look like \`hspw00\` (chamber prefix + abbreviation + digits). Call \`congressgov_committee_lookup\` with \`operation: 'list'\` and an optional \`filter\` to discover valid codes.`,
+      `Committee ${committeeCode} not found in the ${chamber} chamber. ${COMMITTEE_CODE_HINT}`,
       { chamber, committeeCode },
     );
     return { committee: data.committee as ApiRecord };
@@ -546,7 +566,7 @@ export class CongressApiService {
     const key = this.inferListKey(params.subResource);
     const result = await this.tryNotFound(
       () => this.fetchList(path, key, params, ctx),
-      `Committee ${params.committeeCode} (${params.chamber}) or its ${params.subResource} not found. Committee system codes look like \`hspw00\` (chamber prefix + abbreviation + digits). Call \`congressgov_committee_lookup\` with \`operation: 'list'\` and an optional \`filter\` to discover valid codes.`,
+      `Committee ${params.committeeCode} (${params.chamber}) or its ${params.subResource} not found. ${COMMITTEE_CODE_HINT}`,
       { ...params },
     );
     if (params.subResource === 'reports') {
@@ -833,8 +853,11 @@ export class CongressApiService {
   ): Promise<FetchListResult> {
     const data = await this.get(path, ctx, this.buildQuery(params, extraQuery));
     const rawItems = this.extractListItems(data[listKey]);
-    /** The /bill/{c}/{t}/{n}/text endpoint always returns limit+1 items —
-     * truncate to honor the requested page size and keep pagination consistent. */
+    /**
+     * A page longer than `limit` is cut to it. An enacted bill's
+     * `/bill/{c}/{t}/{n}/text` appends its Public Law version to every page, a
+     * copy of the version at index `count − 1` (`text-version-index.ts`).
+     */
     const items =
       params?.limit != null && rawItems.length > params.limit
         ? rawItems.slice(0, params.limit)
@@ -857,7 +880,8 @@ export class CongressApiService {
 
   /**
    * One request under its call's budget (`call-budget.ts`) when `ctx` is the
-   * handler's context; without one — the mirror ingester — the plain ladder.
+   * handler's context, 10 s an attempt; without one — the mirror ingester — the
+   * plain ladder, 30 s an attempt. Three attempts either way.
    */
   // biome-ignore lint/suspicious/noExplicitAny: API responses are dynamic JSON
   private get(path: string, ctx?: Context, query?: Record<string, string>): Promise<any> {
@@ -875,14 +899,16 @@ export class CongressApiService {
         try {
           text = await response.text();
         } catch (error) {
-          if (error instanceof McpError) throw classifyUpstreamError(error, path);
+          if (error instanceof McpError) {
+            throw classifyUpstreamError(error, path, attempt.timeoutMs);
+          }
           throw error;
         }
         return this.parseJsonResponse(text, path);
       },
       {
         call: ctx,
-        attemptTimeoutMs: REQUEST_TIMEOUT_MS,
+        attemptTimeoutMs: ctx ? CALL_ATTEMPT_TIMEOUT_MS : UNBUDGETED_ATTEMPT_TIMEOUT_MS,
         upstream: 'Congress.gov',
         request: 'the API response',
         recovery: UPSTREAM_ERROR_RECOVERY.recovery,
@@ -1056,7 +1082,7 @@ export class CongressApiService {
         if (error.data?.headers && typeof error.data.headers === 'object') {
           this.observeQuota(new Headers(error.data.headers as Record<string, string>), sequence);
         }
-        throw classifyUpstreamError(error, path);
+        throw classifyUpstreamError(error, path, attempt.timeoutMs);
       }
       throw error;
     }

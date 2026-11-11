@@ -7,6 +7,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  formatAmendments,
   formatBills,
   formatCommitteeReports,
   formatCommittees,
@@ -297,65 +298,190 @@ describe('pagination edge cases', () => {
 
 // ── formatMembers: terms rendering ───────────────────────────────────────────
 
-describe('formatMembers — terms rendering', () => {
-  it('renders latest term from a flat array', () => {
-    const text = textOf(
-      formatMembers({
-        data: [
-          {
-            bioguideId: 'P000197',
-            name: 'Pelosi, Nancy',
-            party: 'D',
-            state: 'CA',
-            terms: [{ chamber: 'House of Representatives', startYear: '1987', endYear: '2023' }],
-          },
-        ],
-        pagination: { count: 1, nextOffset: null },
-      }),
-    );
-    expect(text).toContain('Latest Term:');
-    expect(text).toContain('1987');
+/**
+ * A member `list` row carries `terms.item` as one entry per continuous span of
+ * service in a chamber, with no `endYear` on a span still being served (#123).
+ */
+describe('formatMembers — service spans on list rows (issue #123)', () => {
+  const listRow = (row: Record<string, unknown>) =>
+    textOf(formatMembers({ data: [row], pagination: { count: 1, nextOffset: null } }));
+  /** The row's rendered lines, so an assertion pins a whole line. */
+  const linesOf = (row: Record<string, unknown>) => listRow(row).split('\n');
+
+  /** /member/WA/9?currentMember=true (2026-11-11). */
+  const SMITH = {
+    bioguideId: 'S000510',
+    name: 'Smith, Adam',
+    partyName: 'Democratic',
+    state: 'Washington',
+    district: 9,
+    terms: { item: [{ chamber: 'House of Representatives', startYear: 1997 }] },
+  };
+
+  /** /member?stateCode=WA (2026-11-11): a House span, then a Senate span still open. */
+  const CANTWELL = {
+    bioguideId: 'C000127',
+    name: 'Cantwell, Maria',
+    partyName: 'Democratic',
+    state: 'Washington',
+    terms: {
+      item: [
+        { chamber: 'House of Representatives', endYear: 1995, startYear: 1993 },
+        { chamber: 'Senate', startYear: 2001 },
+      ],
+    },
+  };
+
+  it('renders a span with no end year as still being served', () => {
+    expect(linesOf(SMITH)).toContain('**Service:** House of Representatives, 1997–present');
+    expect(listRow(SMITH)).not.toContain('Latest Term');
   });
 
-  it('renders latest term from nested { item: [...] } shape', () => {
-    const text = textOf(
-      formatMembers({
-        data: [
-          {
-            bioguideId: 'S000148',
-            name: 'Schumer, Charles E.',
-            party: 'D',
-            state: 'NY',
-            terms: {
-              item: [{ chamber: 'Senate', startYear: '1999', endYear: '2027' }],
-            },
-          },
-        ],
-        pagination: { count: 1, nextOffset: null },
-      }),
+  it('lists every span in order, and the fall-through does not repeat them', () => {
+    expect(linesOf(CANTWELL)).toContain(
+      '**Service:** House of Representatives, 1993–1995; Senate, 2001–present',
     );
-    expect(text).toContain('Latest Term:');
-    expect(text).toContain('Senate');
+    expect(listRow(CANTWELL)).not.toContain('terms:');
+    expect(listRow(CANTWELL)).not.toContain('(2 total)');
   });
 
-  it('shows total term count when more than one term', () => {
-    const text = textOf(
-      formatMembers({
-        data: [
+  it('reads a flat array of spans as the wrapped shape', () => {
+    expect(linesOf({ ...CANTWELL, terms: CANTWELL.terms.item })).toContain(
+      '**Service:** House of Representatives, 1993–1995; Senate, 2001–present',
+    );
+  });
+
+  it('renders a span field the line does not name on that span', () => {
+    const lines = linesOf({
+      bioguideId: 'S000148',
+      name: 'Schumer, Charles E.',
+      terms: {
+        item: [
           {
-            bioguideId: 'S000148',
-            name: 'Schumer, Charles E.',
-            terms: [
-              { chamber: 'Senate', startYear: '1999', endYear: '2005' },
-              { chamber: 'Senate', startYear: '2005', endYear: '2011' },
-              { chamber: 'Senate', startYear: '2011', endYear: '2027' },
-            ],
+            chamber: 'House of Representatives',
+            endYear: 1999,
+            memberType: 'Representative',
+            startYear: 1981,
+          },
+          { chamber: 'Senate', startYear: 1999 },
+        ],
+      },
+    });
+    expect(lines).toContain(
+      '**Service:** House of Representatives, 1981–1999 — memberType: Representative; Senate, 1999–present',
+    );
+  });
+
+  it('renders no Service line for a row without terms', () => {
+    const text = listRow({ bioguideId: 'S000510', name: 'Smith, Adam' });
+    expect(text).not.toContain('**Service:**');
+  });
+});
+
+describe('formatMembers — terms on member detail', () => {
+  /** /member/C000127 (2026-11-11), trimmed to its last two terms. */
+  const text = textOf(
+    formatMembers({
+      member: {
+        bioguideId: 'C000127',
+        directOrderName: 'Maria Cantwell',
+        terms: [
+          {
+            chamber: 'Senate',
+            congress: 118,
+            endYear: 2025,
+            memberType: 'Senator',
+            startYear: 2023,
+            stateCode: 'WA',
+            stateName: 'Washington',
+          },
+          {
+            chamber: 'Senate',
+            congress: 119,
+            memberType: 'Senator',
+            startYear: 2025,
+            stateCode: 'WA',
+            stateName: 'Washington',
           },
         ],
-        pagination: { count: 1, nextOffset: null },
-      }),
-    );
-    expect(text).toContain('3 total');
+      },
+    }),
+  );
+
+  it('renders a term with no end year as still being served', () => {
+    expect(text).toContain('- Senate, 2025–present, Washington — congress: 119');
+  });
+
+  it('renders a closed term with both years', () => {
+    expect(text).toContain('- Senate, 2023–2025, Washington — congress: 118');
+  });
+});
+
+// ── Text versions: each row is headed by the textVersionIndex it carries ─────
+
+/**
+ * The `text` handlers stamp each row with the 0-based `textVersionIndex` that
+ * `content` reads it by (`text-version-index.ts`); `format()` heads the row with
+ * that field, never with a position worked out from the page.
+ */
+describe('text version rows are headed by their stamped textVersionIndex', () => {
+  /** /bill/119/hr/1/text (2026-11-11), each row stamped with its index. */
+  const HR1 = [
+    ['Enrolled Bill', null],
+    ['Engrossed Amendment Senate', '2025-07-01T04:00:00Z'],
+    ['Placed on Calendar Senate', '2025-06-28T04:00:00Z'],
+    ['Engrossed in House', '2025-05-22T04:00:00Z'],
+    ['Reported in House', '2025-05-20T04:00:00Z'],
+    ['Public Law', '2025-07-05T03:59:59Z'],
+  ].map(([type, date], textVersionIndex) => ({
+    date,
+    formats: [{ type: 'Formatted Text', url: `https://www.congress.gov/119/${type}.htm` }],
+    type,
+    textVersionIndex,
+  }));
+
+  /** The headings of a rendered page, in order. */
+  const headings = (text: string) => text.split('\n').filter((line) => line.startsWith('### '));
+
+  const billPage = (rows: typeof HR1, nextOffset: number | null) =>
+    textOf(formatBills({ data: rows, pagination: { count: 6, nextOffset } }));
+
+  it('heads a middle page by its own indices', () => {
+    expect(headings(billPage([HR1[2]!, HR1[3]!], 4))).toEqual([
+      '### textVersionIndex 2: Placed on Calendar Senate',
+      '### textVersionIndex 3: Engrossed in House',
+    ]);
+  });
+
+  it('heads the page that covers the Public Law version by its own indices', () => {
+    expect(headings(billPage([HR1[4]!, HR1[5]!], null))).toEqual([
+      '### textVersionIndex 4: Reported in House',
+      '### textVersionIndex 5: Public Law',
+    ]);
+  });
+
+  it('heads the Public Law version alone at its own index', () => {
+    expect(headings(billPage([HR1[5]!], null))).toEqual(['### textVersionIndex 5: Public Law']);
+  });
+
+  it('renders the index once, in the heading, beside every other field', () => {
+    const text = billPage([HR1[0]!], 1);
+    expect(text).not.toContain('**textVersionIndex:**');
+    expect(text).toContain('**Formatted Text:** https://www.congress.gov/119/Enrolled Bill.htm');
+  });
+
+  it('heads amendment text versions the same way', () => {
+    const versions = [
+      { date: '2008-03-14T00:55:21Z', formats: [], type: 'Proposed', textVersionIndex: 0 },
+      { date: '2008-03-12T04:00:00Z', formats: [], type: 'Submitted', textVersionIndex: 1 },
+    ];
+    expect(
+      headings(
+        textOf(
+          formatAmendments({ data: versions.slice(1), pagination: { count: 2, nextOffset: null } }),
+        ),
+      ),
+    ).toEqual(['### textVersionIndex 1: Submitted']);
   });
 });
 

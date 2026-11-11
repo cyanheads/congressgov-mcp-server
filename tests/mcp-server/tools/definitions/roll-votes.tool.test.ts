@@ -9,6 +9,7 @@ import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  CALL_BUDGET_MS,
   CLIENT_TIMEOUT_MS,
   expectBudgetTimeout,
   jsonResponse,
@@ -118,67 +119,6 @@ describe('rollVotesTool', () => {
     await expect(rollVotesTool.handler(input, ctx)).rejects.toThrow(/voteNumber/);
   });
 
-  it("order='recent' sorts strictly by updateDate desc across the full session (issue #27)", async () => {
-    /** Mirrors the bug repro: upstream returns rows in opaque order; the head row
-     * (Roll 176) has an older updateDate than Rolls 182-185. Strict newest-first
-     * must put 185 first, not 176. */
-    const ctx = createMockContext({ errors: rollVotesTool.errors });
-    mockApi.listVotes.mockResolvedValue({
-      data: [
-        { rollCallNumber: 176, updateDate: '2026-05-21T00:53:25-04:00' },
-        { rollCallNumber: 185, updateDate: '2026-05-21T01:01:45-04:00' },
-        { rollCallNumber: 184, updateDate: '2026-05-21T01:00:51-04:00' },
-        { rollCallNumber: 183, updateDate: '2026-05-21T00:59:54-04:00' },
-        { rollCallNumber: 182, updateDate: '2026-05-21T00:58:53-04:00' },
-      ],
-      pagination: { count: 5, nextOffset: null },
-    });
-    const input = rollVotesTool.input.parse({
-      operation: 'list',
-      congress: 119,
-      session: 2,
-      limit: 5,
-      order: 'recent',
-    });
-    const result = await rollVotesTool.handler(input, ctx);
-    const rolls = (result.data as Array<{ rollCallNumber: number }>).map((r) => r.rollCallNumber);
-    expect(rolls).toEqual([185, 184, 183, 182, 176]);
-  });
-
-  it("order='recent' paginates across multiple upstream pages and returns the requested slice", async () => {
-    const ctx = createMockContext({ errors: rollVotesTool.errors });
-    /** Total > PAGE_SIZE(250) triggers parallel page fetches. */
-    mockApi.listVotes
-      .mockResolvedValueOnce({
-        data: Array.from({ length: 250 }, (_, i) => ({
-          rollCallNumber: 1 + i,
-          updateDate: `2026-01-${String((i % 28) + 1).padStart(2, '0')}T00:00:00Z`,
-        })),
-        pagination: { count: 300, nextOffset: 250 },
-      })
-      .mockResolvedValueOnce({
-        data: Array.from({ length: 50 }, (_, i) => ({
-          rollCallNumber: 251 + i,
-          updateDate: `2026-05-${String(i + 1).padStart(2, '0')}T00:00:00Z`,
-        })),
-        pagination: { count: 300, nextOffset: null },
-      });
-    const input = rollVotesTool.input.parse({
-      operation: 'list',
-      congress: 119,
-      session: 2,
-      limit: 3,
-      offset: 0,
-      order: 'recent',
-    });
-    const result = await rollVotesTool.handler(input, ctx);
-    expect(result.data).toHaveLength(3);
-    expect(result.pagination).toEqual({ count: 300, nextOffset: 3 });
-    /** The strictly-newest 3 come from the second-page tail (rolls 300, 299, 298 by date). */
-    const rolls = (result.data as Array<{ rollCallNumber: number }>).map((r) => r.rollCallNumber);
-    expect(rolls[0]).toBe(300);
-  });
-
   it("defaults chamber to 'house' and routes to the Congress.gov API", async () => {
     const ctx = createMockContext({ errors: rollVotesTool.errors });
     mockApi.listVotes.mockResolvedValue({ data: [], pagination: { count: 0, nextOffset: null } });
@@ -278,10 +218,10 @@ describe('rollVotesTool — Senate chamber', () => {
 });
 
 /**
- * House `list` in recent order chains a first page and then a parallel stage
- * for the rest. Both stages spend the call's one budget.
+ * House `list` in either order chains a first page and then a parallel stage
+ * for the rest of the session. Both stages spend the call's one budget.
  */
-describe('rollVotesTool — call budget across the recent-order stages', () => {
+describe('rollVotesTool — call budget across the House list stages', () => {
   const upstream = scriptedCongressApi({
     /** The first page answers on its third attempt, after two full 10 s stalls. */
     '/v3/house-vote/118/1?offset=0': {
@@ -306,20 +246,266 @@ describe('rollVotesTool — call budget across the recent-order stages', () => {
     vi.useRealTimers();
   });
 
-  it('settles inside the budget when the parallel stage stalls after a slow first page', async () => {
-    const start = Date.now();
-    const call = track(
-      runToolContract(rollVotesTool, { operation: 'list', congress: 118, session: 1 }),
-    );
-    await vi.advanceTimersByTimeAsync(CLIENT_TIMEOUT_MS);
+  it.each(['recent', 'oldest'] as const)(
+    "settles inside the budget when the parallel stage stalls after a slow first page ('%s')",
+    async (order) => {
+      const start = Date.now();
+      const call = track(
+        runToolContract(rollVotesTool, { operation: 'list', congress: 118, session: 1, order }),
+      );
+      await vi.advanceTimersByTimeAsync(CLIENT_TIMEOUT_MS);
 
-    expectBudgetTimeout(call, start);
-    /** The first page took ~22 s; the parallel page got two full attempts and a clamped third. */
-    expect(upstream.hits).toEqual({
-      '/v3/house-vote/118/1?offset=0': 3,
-      '/v3/house-vote/118/1?offset=250': 3,
+      expectBudgetTimeout(call, start);
+      /** The first page took ~22 s; the parallel page got two full attempts and a clamped third. */
+      expect(upstream.hits).toEqual({
+        '/v3/house-vote/118/1?offset=0': 3,
+        '/v3/house-vote/118/1?offset=250': 3,
+      });
+    },
+  );
+});
+
+// ── House list order (issue #117) ────────────────────────────────────────────
+
+/**
+ * A session's vote list as Congress.gov serves it: rows in neither roll, date,
+ * nor update order. Odd rolls run down, then even rolls up, so the newest and the
+ * oldest roll sit on different 250-row pages once a session passes 250 votes.
+ * Rolls 186–199 carry the latest update date, as a batch re-touch leaves them.
+ */
+function shuffledSession(size: number): Array<Record<string, unknown>> {
+  const topOdd = size % 2 === 0 ? size - 1 : size;
+  const odd = Array.from({ length: Math.ceil(size / 2) }, (_, i) => topOdd - 2 * i);
+  const even = Array.from({ length: Math.floor(size / 2) }, (_, i) => 2 * (i + 1));
+  return [...odd, ...even].map((roll) => ({
+    rollCallNumber: roll,
+    updateDate:
+      roll >= 186 && roll <= 199
+        ? `2026-04-16T12:00:${String(roll - 186).padStart(2, '0')}-04:00`
+        : '2025-12-19T09:53:45-05:00',
+  }));
+}
+
+/**
+ * api.congress.gov serving one House session's vote list from `rows`, honoring
+ * `offset` and `limit` and recording the offset of every request. A request at
+ * `failing.offset` gets `failing.respond()` instead, on every attempt.
+ */
+function houseSessionFetch(
+  congress: number,
+  session: number,
+  rows: Array<Record<string, unknown>>,
+  failing?: { offset: number; respond: () => Response },
+) {
+  const path = `/v3/house-vote/${congress}/${session}`;
+  const offsets: number[] = [];
+  const fetch = vi.fn(async (url: string | URL) => {
+    const parsed = new URL(String(url));
+    if (parsed.origin !== 'https://api.congress.gov' || parsed.pathname !== path) {
+      throw new Error(`unrouted request ${parsed.hostname}${parsed.pathname}`);
+    }
+    const offset = Number(parsed.searchParams.get('offset'));
+    const limit = Number(parsed.searchParams.get('limit'));
+    offsets.push(offset);
+    if (offset === failing?.offset) return failing.respond();
+    const end = offset + limit;
+    return jsonResponse({
+      houseRollCallVotes: rows.slice(offset, end),
+      pagination: {
+        count: rows.length,
+        ...(end < rows.length
+          ? { next: `https://api.congress.gov${path}?offset=${end}&limit=${limit}&format=json` }
+          : {}),
+      },
     });
   });
+  return { fetch, offsets };
+}
+
+describe('rollVotesTool — House list in roll call order (issue #117)', () => {
+  let upstream: ReturnType<typeof houseSessionFetch>;
+  const serve = (size: number) => {
+    upstream = houseSessionFetch(119, 1, shuffledSession(size));
+    vi.stubGlobal('fetch', upstream.fetch);
+  };
+  const list = (args: Record<string, unknown>) =>
+    runToolContract(rollVotesTool, { operation: 'list', congress: 119, session: 1, ...args });
+  const rollsOf = (result: ContractResult) =>
+    structuredOf(result).data.map((row) => row.rollCallNumber);
+  const range = (from: number, to: number) =>
+    Array.from({ length: Math.abs(to - from) + 1 }, (_, i) => (from <= to ? from + i : from - i));
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getCongressApi).mockReturnValue(new CongressApiService());
+    serve(362);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("'recent' opens on the session's last roll call, though its update date is older", async () => {
+    const result = await list({ order: 'recent' });
+    expect(rollsOf(result)).toEqual(range(362, 343));
+    expect(structuredOf(result).pagination).toEqual({ count: 362, nextOffset: 20 });
+    const text = contentOf(result);
+    expect(text).toContain('**362 results** | next offset: 20');
+    expect(text.indexOf('### 1. Roll 362')).toBeGreaterThan(-1);
+    expect(text.indexOf('### 1. Roll 362')).toBeLessThan(text.indexOf('### 20. Roll 343'));
+  });
+
+  it("'recent' continues at roll 342 from nextOffset 20", async () => {
+    const result = await list({ order: 'recent', offset: 20 });
+    expect(rollsOf(result)).toEqual(range(342, 323));
+    expect(structuredOf(result).pagination).toEqual({ count: 362, nextOffset: 40 });
+  });
+
+  it("'oldest' opens on roll 1, though Congress.gov serves it last", async () => {
+    const result = await list({ order: 'oldest' });
+    expect(rollsOf(result)).toEqual(range(1, 20));
+    expect(structuredOf(result).pagination).toEqual({ count: 362, nextOffset: 20 });
+    const text = contentOf(result);
+    expect(text.indexOf('### 1. Roll 1\n')).toBeGreaterThan(-1);
+    expect(text.indexOf('### 1. Roll 1\n')).toBeLessThan(text.indexOf('### 20. Roll 20\n'));
+  });
+
+  it.each([
+    ['oldest', range(1, 362)],
+    ['recent', range(362, 1)],
+  ] as const)(
+    "walking '%s' by nextOffset visits every roll once, in order",
+    async (order, expected) => {
+      const visited: unknown[] = [];
+      let offset: number | null = 0;
+      while (offset !== null) {
+        const result = await list({ order, offset, limit: 100 });
+        visited.push(...rollsOf(result));
+        offset = structuredOf(result).pagination.nextOffset;
+      }
+      expect(visited).toEqual(expected);
+    },
+  );
+
+  it.each(['recent', 'oldest'] as const)(
+    "'%s' past the end is an empty page carrying the session's count",
+    async (order) => {
+      const result = await list({ order, offset: 362 });
+      expect(structuredOf(result).data).toEqual([]);
+      expect(structuredOf(result).pagination).toEqual({ count: 362, nextOffset: null });
+      expect(contentOf(result)).toContain('offset is past the end of 362 total items');
+    },
+  );
+
+  it.each([
+    [1, [0]],
+    [250, [0]],
+    [251, [0, 250]],
+    [724, [0, 250, 500]],
+  ])(
+    'reads a %i-vote session in 250-row requests at offsets %j, in either order',
+    async (size, offsets) => {
+      serve(size);
+      for (const order of ['recent', 'oldest'] as const) {
+        upstream.offsets.length = 0;
+        const result = await list({ order, limit: 5 });
+        expect([...upstream.offsets].sort((a, b) => a - b)).toEqual(offsets);
+        expect(rollsOf(result)).toEqual(
+          order === 'recent' ? range(size, Math.max(size - 4, 1)) : range(1, Math.min(size, 5)),
+        );
+      }
+    },
+  );
+});
+
+/**
+ * Either order reads the whole session — the first page, then the rest in
+ * parallel — so one page that fails fails the call, though its siblings answered:
+ * no slice of a session missing rows is served as the session.
+ */
+describe('rollVotesTool — a House session read with a failing page (issue #117)', () => {
+  /** A 724-vote session — pages at offsets 0, 250, and 500 — whose page at 250 fails. */
+  const failAt250 = (respond: () => Response) => {
+    const upstream = houseSessionFetch(119, 1, shuffledSession(724), { offset: 250, respond });
+    vi.stubGlobal('fetch', upstream.fetch);
+    return upstream;
+  };
+  const attemptsAt = (offsets: readonly number[], offset: number) =>
+    offsets.filter((requested) => requested === offset).length;
+  const textResponse = (status: number, text: string) =>
+    new Response(text, { status, headers: { 'content-type': 'text/plain' } });
+
+  /** Run a `list` call to its end on the fake clock, recording when it settled. */
+  async function list(order: 'recent' | 'oldest') {
+    const start = Date.now();
+    const call = track(
+      runToolContract(rollVotesTool, { operation: 'list', congress: 119, session: 1, order }),
+    );
+    await vi.advanceTimersByTimeAsync(CLIENT_TIMEOUT_MS);
+    return {
+      elapsedMs: (call.state.settledAt as number) - start,
+      result: call.state.value as ContractResult,
+    };
+  }
+
+  /** The call failed on both surfaces and handed back no vote row on either. */
+  function expectNoRows(result: ContractResult) {
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).not.toHaveProperty('data');
+    expect(result.structuredContent).not.toHaveProperty('pagination');
+    expect(contentOf(result)).not.toMatch(/Roll \d+/);
+  }
+
+  beforeEach(() => {
+    useFakeClock();
+    vi.mocked(getCongressApi).mockReturnValue(new CongressApiService());
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it.each(['recent', 'oldest'] as const)(
+    "fails upstream_error when a later page answers 503 on all three attempts ('%s')",
+    async (order) => {
+      const upstream = failAt250(() => textResponse(503, 'Service Unavailable'));
+      const { elapsedMs, result } = await list(order);
+
+      expectNoRows(result);
+      const error = (result.structuredContent as { error: Record<string, any> }).error;
+      expect(error).toMatchObject({
+        code: JsonRpcErrorCode.ServiceUnavailable,
+        data: { reason: 'upstream_error', retryAttempts: 3 },
+      });
+      expect(error.message).toContain('HTTP 503');
+      expect(contentOf(result)).toContain(error.message);
+      /** The failing page is tried three times; its siblings answered once each. */
+      expect(attemptsAt(upstream.offsets, 250)).toBe(3);
+      expect(attemptsAt(upstream.offsets, 0)).toBe(1);
+      expect(attemptsAt(upstream.offsets, 500)).toBe(1);
+      /** Two backoffs — 1 s and 2 s, each less up to a quarter of jitter — then the failure, inside the budget. */
+      expect(elapsedMs).toBeGreaterThanOrEqual(2_250);
+      expect(elapsedMs).toBeLessThan(CALL_BUDGET_MS);
+    },
+  );
+
+  it.each(['recent', 'oldest'] as const)(
+    "fails rate_limited at once when a later page answers 429, retrying nothing ('%s')",
+    async (order) => {
+      const upstream = failAt250(() => textResponse(429, 'Too Many Requests'));
+      const { elapsedMs, result } = await list(order);
+
+      expectNoRows(result);
+      const error = (result.structuredContent as { error: Record<string, any> }).error;
+      expect(error).toMatchObject({
+        code: JsonRpcErrorCode.RateLimited,
+        data: { reason: 'rate_limited' },
+      });
+      expect(contentOf(result)).toContain(error.message);
+      expect(attemptsAt(upstream.offsets, 250)).toBe(1);
+      expect(attemptsAt(upstream.offsets, 0)).toBe(1);
+      expect(elapsedMs).toBe(0);
+    },
+  );
 });
 
 // ── Member filters (issue #102) ──────────────────────────────────────────────

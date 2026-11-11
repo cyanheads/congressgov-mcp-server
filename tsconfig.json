@@ -9,11 +9,6 @@
       "@/*": ["./src/*"]
     }
   },
-  "include": [
-    "src/**/*",
-    "tests/**/*",
-    "scripts/_mirror-context.ts",
-    "scripts/congress-mirror-*.ts"
-  ],
+  "include": ["src/**/*", "tests/**/*"],
   "exclude": ["node_modules", "dist"]
 }

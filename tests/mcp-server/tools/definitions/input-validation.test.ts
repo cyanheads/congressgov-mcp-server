@@ -5,7 +5,8 @@
  */
 
 import { z } from '@cyanheads/mcp-ts-core';
-import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
+import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/services/congress-api/congress-api-service.js', () => ({
@@ -23,7 +24,9 @@ import { dailyRecordTool } from '@/mcp-server/tools/definitions/daily-record.too
 import { enactedLawsTool } from '@/mcp-server/tools/definitions/enacted-laws.tool.js';
 import { memberLookupTool } from '@/mcp-server/tools/definitions/member-lookup.tool.js';
 import { rollVotesTool } from '@/mcp-server/tools/definitions/roll-votes.tool.js';
+import { searchBillsTool } from '@/mcp-server/tools/definitions/search-bills.tool.js';
 import { senateNominationsTool } from '@/mcp-server/tools/definitions/senate-nominations.tool.js';
+import { anyLetterCase } from '@/mcp-server/tools/tool-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 
 const mockApi = {
@@ -402,12 +405,50 @@ describe('committeeLookupTool — handler validation', () => {
 
   it('throws when committeeCode has unknown chamber prefix and chamber is not explicit', async () => {
     const ctx = createMockContext({ errors: committeeLookupTool.errors });
-    // A committeeCode with prefix that cannot be inferred triggers a validation error
+    // A code-shaped value whose prefix names no chamber keeps its validation error,
+    // before any request: no roster code of that shape lacks an h/s/j prefix (#114).
     const input = committeeLookupTool.input.parse({
       operation: 'bills',
       committeeCode: 'zzjd00',
     });
-    await expect(committeeLookupTool.handler(input, ctx)).rejects.toThrow();
+    await expect(committeeLookupTool.handler(input, ctx)).rejects.toThrow(
+      /Could not infer chamber from committeeCode 'zzjd00'/,
+    );
+    expect(mockApi.listCommittees).not.toHaveBeenCalled();
+    expect(mockApi.getCommitteeSubResource).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['list', {}],
+    ['bills', { committeeCode: 'ssju00' }],
+    ['nominations', { committeeCode: 'ssju00' }],
+  ] as const)(
+    'rejects a malformed fromDateTime on %s before any request',
+    async (operation, rest) => {
+      const ctx = createMockContext({ errors: committeeLookupTool.errors });
+      const input = committeeLookupTool.input.parse({
+        operation,
+        ...rest,
+        fromDateTime: '2025-03-01',
+      });
+      await expect(committeeLookupTool.handler(input, ctx)).rejects.toThrow(/ISO 8601/);
+      expect(mockApi.listCommittees).not.toHaveBeenCalled();
+      expect(mockApi.getCommitteeSubResource).not.toHaveBeenCalled();
+    },
+  );
+
+  it('rejects a reversed date range on reports before any request', async () => {
+    const ctx = createMockContext({ errors: committeeLookupTool.errors });
+    const input = committeeLookupTool.input.parse({
+      operation: 'reports',
+      committeeCode: 'hsju00',
+      fromDateTime: '2025-12-31T00:00:00Z',
+      toDateTime: '2025-01-01T00:00:00Z',
+    });
+    await expect(committeeLookupTool.handler(input, ctx)).rejects.toThrow(
+      /earlier than or equal to/,
+    );
+    expect(mockApi.getCommitteeSubResource).not.toHaveBeenCalled();
   });
 });
 
@@ -754,4 +795,202 @@ describe('strict tool inputs', () => {
       expect(json.additionalProperties).toBe(false);
     });
   }
+});
+
+// ── Codes in any letter case (#122) ──────────────────────────────────────────
+
+describe('anyLetterCase', () => {
+  it.each([
+    ['lower', 'HRPT', 'hrpt'],
+    ['lower', 'hRpT', 'hrpt'],
+    ['upper', 'p000197', 'P000197'],
+    ['title', 'hOUSE', 'House'],
+    ['title', 'senate', 'Senate'],
+  ] as const)('%s case reads %j as %j', (letterCase, sent, expected) => {
+    expect(anyLetterCase(z.string(), letterCase).parse(sent)).toBe(expected);
+  });
+
+  it('writes lower case when no case is named', () => {
+    expect(anyLetterCase(z.string()).parse('HJRES')).toBe('hjres');
+  });
+
+  it('rewrites before the inner check, so a pattern stating the canonical form takes any case', () => {
+    const bioguide = anyLetterCase(z.string().regex(/^[A-Z]\d{6}$/), 'upper');
+    expect(bioguide.safeParse('p000197').success).toBe(true);
+    expect(bioguide.safeParse('p00019').success).toBe(false);
+  });
+
+  it('hands a non-string to the inner schema untouched', () => {
+    expect(anyLetterCase(z.union([z.string(), z.number()])).parse(7)).toBe(7);
+    expect(anyLetterCase(z.enum(['hr'])).safeParse(7).success).toBe(false);
+  });
+
+  it('advertises the inner schema alone', () => {
+    const inner = z.enum(['hrpt', 'srpt', 'erpt']);
+    expect(z.toJSONSchema(anyLetterCase(inner), { io: 'input' })).toEqual(
+      z.toJSONSchema(inner, { io: 'input' }),
+    );
+  });
+});
+
+const BILL_TYPES = ['hr', 's', 'hjres', 'sjres', 'hconres', 'sconres', 'hres', 'sres'];
+
+/**
+ * Every enum input whose value a Congress.gov row supplies, with spellings rows
+ * and sibling tools carry (`HRPT` on report rows, `PUB` on CRS related materials,
+ * `HR` on bill and summary rows, `house` as roll votes take it). The last four
+ * rows pin the per-tool preprocessors the shared helper replaced.
+ */
+const LETTER_CASE_INPUTS: ReadonlyArray<{
+  tool: { name: string; input: z.ZodType };
+  field: string;
+  base: Record<string, unknown>;
+  sent: readonly string[];
+  canonical: string;
+  advertised: readonly string[];
+}> = [
+  {
+    tool: committeeReportsTool,
+    field: 'reportType',
+    base: { operation: 'list', congress: 119 },
+    sent: ['HRPT', 'Hrpt'],
+    canonical: 'hrpt',
+    advertised: ['hrpt', 'srpt', 'erpt'],
+  },
+  {
+    tool: enactedLawsTool,
+    field: 'lawType',
+    base: { operation: 'list', congress: 119 },
+    sent: ['PUB', 'Pub'],
+    canonical: 'pub',
+    advertised: ['pub', 'priv'],
+  },
+  {
+    tool: billSummariesTool,
+    field: 'billType',
+    base: { congress: 119 },
+    sent: ['HR', 'Hr'],
+    canonical: 'hr',
+    advertised: BILL_TYPES,
+  },
+  {
+    tool: searchBillsTool,
+    field: 'billType',
+    base: { query: 'semiconductors' },
+    sent: ['HJRES', 'HJRes'],
+    canonical: 'hjres',
+    advertised: BILL_TYPES,
+  },
+  {
+    tool: searchBillsTool,
+    field: 'originChamber',
+    base: { query: 'semiconductors' },
+    sent: ['house', 'HOUSE', 'hOUSE'],
+    canonical: 'House',
+    advertised: ['House', 'Senate'],
+  },
+  {
+    tool: billLookupTool,
+    field: 'billType',
+    base: { operation: 'list', congress: 119 },
+    sent: ['HR', 'Hr'],
+    canonical: 'hr',
+    advertised: BILL_TYPES,
+  },
+  {
+    tool: amendmentLookupTool,
+    field: 'amendmentType',
+    base: { operation: 'list', congress: 119 },
+    sent: ['HAMDT', 'Hamdt'],
+    canonical: 'hamdt',
+    advertised: ['hamdt', 'samdt', 'suamdt'],
+  },
+  {
+    tool: rollVotesTool,
+    field: 'chamber',
+    base: { operation: 'list', congress: 119, session: 1 },
+    sent: ['SENATE', 'Senate'],
+    canonical: 'senate',
+    advertised: ['house', 'senate'],
+  },
+  {
+    tool: committeeLookupTool,
+    field: 'chamber',
+    base: { operation: 'list' },
+    sent: ['JOINT', 'Joint'],
+    canonical: 'joint',
+    advertised: ['house', 'senate', 'joint'],
+  },
+];
+
+describe.each(LETTER_CASE_INPUTS.map((row) => [`${row.tool.name} ${row.field}`, row] as const))(
+  '%s in any letter case (#122)',
+  (_label, row) => {
+    const parse = (value: unknown) => row.tool.input.safeParse({ ...row.base, [row.field]: value });
+
+    it.each([row.canonical, ...row.sent])('reads %j as the canonical code', (value) => {
+      const result = parse(value);
+      expect(result.success).toBe(true);
+      expect((result.data as Record<string, unknown>)[row.field]).toBe(row.canonical);
+    });
+
+    it.each(['XYZ', 7])('still rejects %j, naming the field', (value) => {
+      const result = parse(value);
+      expect(result.success).toBe(false);
+      expect(result.error?.issues.map((issue) => issue.path)).toEqual([[row.field]]);
+    });
+
+    it('advertises the canonical enum unchanged', () => {
+      const json = z.toJSONSchema(row.tool.input, { io: 'input' }) as {
+        properties: Record<string, unknown>;
+      };
+      expect(json.properties[row.field]).toMatchObject({ type: 'string', enum: row.advertised });
+    });
+  },
+);
+
+describe('a code in any letter case through the tool contract (#122)', () => {
+  const report = { operation: 'get', congress: 119, reportNumber: 106 } as const;
+
+  beforeEach(() => {
+    mockApi.getCommitteeReport.mockResolvedValue({
+      reports: [{ citation: 'H. Rept. 119-106', title: 'Report to accompany H.R. 1' }],
+    });
+  });
+
+  it('serves reportType HRPT exactly as hrpt on both surfaces', async () => {
+    const upper = await runToolContract(committeeReportsTool, {
+      ...report,
+      reportType: 'HRPT' as 'hrpt',
+    });
+    const canonical = await runToolContract(committeeReportsTool, {
+      ...report,
+      reportType: 'hrpt',
+    });
+
+    expect(upper.isError).toBeFalsy();
+    expect(mockApi.getCommitteeReport).toHaveBeenNthCalledWith(
+      1,
+      { congress: 119, reportType: 'hrpt', reportNumber: 106 },
+      expect.anything(),
+    );
+    expect(upper.structuredContent).toEqual(canonical.structuredContent);
+    expect(upper.content).toEqual(canonical.content);
+    expect(upper.structuredContent).toMatchObject({ effectiveQuery: 'HRPT 106 (119th Congress)' });
+  });
+
+  it('fails an unknown reportType as invalid arguments naming the field, before any request', async () => {
+    const result = await runToolContract(committeeReportsTool, {
+      ...report,
+      reportType: 'XYZ' as 'hrpt',
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      error: { code: JsonRpcErrorCode.InvalidParams, data: { reason: 'invalid_arguments' } },
+    });
+    const text = (result.content as Array<{ text?: string }>).map((block) => block.text).join('\n');
+    expect(text).toContain('reportType');
+    expect(mockApi.getCommitteeReport).not.toHaveBeenCalled();
+  });
 });

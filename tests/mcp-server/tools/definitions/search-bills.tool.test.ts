@@ -10,6 +10,7 @@
 import { existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { searchBillsTool } from '@/mcp-server/tools/definitions/search-bills.tool.js';
@@ -77,7 +78,7 @@ describe('congressgov_search_bills', () => {
   });
 
   it('returns an empty result with a notice when the mirror is not ready', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchBillsTool.errors });
     const input = searchBillsTool.input.parse({ query: 'semiconductor' });
     const result = await searchBillsTool.handler(input, ctx);
 
@@ -115,7 +116,7 @@ describe('congressgov_search_bills', () => {
       signal: AbortSignal.timeout(60_000),
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchBillsTool.errors });
     const input = searchBillsTool.input.parse({ query: 'semiconductor' });
     const result = await searchBillsTool.handler(input, ctx);
 
@@ -137,7 +138,7 @@ describe('congressgov_search_bills', () => {
       signal: AbortSignal.timeout(60_000),
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchBillsTool.errors });
     const input = searchBillsTool.input.parse({ query: 'semiconductor', offset: 5 });
     const result = await searchBillsTool.handler(input, ctx);
 
@@ -159,7 +160,7 @@ describe('congressgov_search_bills', () => {
       signal: AbortSignal.timeout(60_000),
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchBillsTool.errors });
     const input = searchBillsTool.input.parse({ query: 'zzznomatchzzz' });
     const result = await searchBillsTool.handler(input, ctx);
 
@@ -172,7 +173,7 @@ describe('congressgov_search_bills', () => {
       mode: 'init',
       signal: AbortSignal.timeout(60_000),
     });
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchBillsTool.errors });
     const input = searchBillsTool.input.parse({ query: 'semiconductor' });
     const result = await searchBillsTool.handler(input, ctx);
 
@@ -188,7 +189,7 @@ describe('congressgov_search_bills', () => {
       signal: AbortSignal.timeout(60_000),
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchBillsTool.errors });
     const input = searchBillsTool.input.parse({ query: 'zzznomatchzzz', congress: 119 });
     const result = await searchBillsTool.handler(input, ctx);
 
@@ -242,7 +243,7 @@ describe('congressgov_search_bills', () => {
         signal: AbortSignal.timeout(60_000),
       });
 
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: searchBillsTool.errors });
       const input = searchBillsTool.input.parse({ query: 'semiconductor', congress: 118 });
       const result = await searchBillsTool.handler(input, ctx);
 
@@ -280,7 +281,7 @@ describe('congressgov_search_bills', () => {
           signal: AbortSignal.timeout(60_000),
         });
 
-        const ctx = createMockContext();
+        const ctx = createMockContext({ errors: searchBillsTool.errors });
         const input = searchBillsTool.input.parse({ query: 'semiconductor', congress: 117 });
         await searchBillsTool.handler(input, ctx);
 
@@ -329,6 +330,147 @@ describe('congressgov_search_bills', () => {
       expect(String(structured.notice)).toMatch(/has not finished its initial build/);
       expect(contentText(result)).toContain('**Mirrored congresses:** none');
     });
+  });
+
+  /** The grammar itself is tabled at `toFtsMatch` and the service; these prove the tool's wiring. */
+  describe('query grammar (#116)', () => {
+    const contentText = (result: Awaited<ReturnType<typeof runToolContract>>) =>
+      result.content.map((block) => (block.type === 'text' ? block.text : '')).join('\n');
+
+    beforeEach(async () => {
+      await getCongressMirror().mirrorInstance.runSync({
+        mode: 'init',
+        signal: AbortSignal.timeout(60_000),
+      });
+    });
+
+    it('searches the translated query, so OR takes either alternative', async () => {
+      const result = await runToolContract(searchBillsTool, {
+        query: 'zzznomatch OR semiconductor',
+      });
+      const structured = result.structuredContent as Record<string, unknown>;
+      expect(structured).toMatchObject({ pagination: { count: 1 }, totalCount: 1 });
+      expect(structured.notice).toBeUndefined();
+      expect(contentText(result)).toContain('119/hr/1');
+    });
+
+    it('fails invalid_query on both surfaces, with the declared recovery', async () => {
+      const declared = searchBillsTool.errors?.find((entry) => entry.reason === 'invalid_query');
+      const result = await runToolContract(searchBillsTool, { query: '-semiconductor' });
+
+      expect(result.isError).toBe(true);
+      expect(result.structuredContent).toMatchObject({
+        error: {
+          code: JsonRpcErrorCode.ValidationError,
+          message:
+            'The query has no term to search for: -semiconductor only excludes. Add a term to search for beside it, as in wildfire -semiconductor.',
+          data: {
+            reason: 'invalid_query',
+            retryable: false,
+            recovery: { hint: declared?.recovery },
+          },
+        },
+      });
+      const text = contentText(result);
+      expect(text).toContain(
+        'Error: The query has no term to search for: `-semiconductor` only excludes.',
+      );
+      expect(text).toContain(`Recovery: ${declared?.recovery}`);
+      expect(text).toContain('(reason invalid_query · not retryable)');
+    });
+
+    it('names an ignored unmatched mark in the notice on both surfaces', async () => {
+      const result = await runToolContract(searchBillsTool, { query: 'semiconductor (export' });
+      const structured = result.structuredContent as Record<string, unknown>;
+      const notice = "The query's unmatched ( was ignored; pair ( with ) to group terms.";
+      expect(structured).toMatchObject({ pagination: { count: 1 }, notice });
+      expect(contentText(result)).toContain(`> ${notice}`);
+    });
+
+    it('adds the no-match notice after the unmatched one', async () => {
+      const ctx = createMockContext({ errors: searchBillsTool.errors });
+      const input = searchBillsTool.input.parse({ query: '("zzznomatch' });
+      await searchBillsTool.handler(input, ctx);
+      expect(getEnrichment(ctx).notice).toBe(
+        'The query\'s unmatched ( and " were ignored; pair ( with ) to group terms, and put " on both sides of an exact phrase. No bills matched "("zzznomatch". Try broader or fewer keywords, or remove the congress/billType/originChamber filters.',
+      );
+    });
+
+    const NOT_READ =
+      'The query\'s NOT was read as an exclusion; to search for the word NOT, quote it ("NOT").';
+    const HYPHEN_READ =
+      "The query's - at the start of a word was read as an exclusion; to search for a hyphenated term, join the hyphen to the word before it (covid-19).";
+
+    /** The search's notice on both surfaces: `structuredContent.notice`, and the same text quoted in `content[]`. */
+    async function searchNotice(query: string) {
+      const result = await runToolContract(searchBillsTool, { query });
+      expect(result.isError).toBeFalsy();
+      const structured = result.structuredContent as Record<string, unknown>;
+      const notice = structured.notice as string | undefined;
+      if (notice !== undefined) expect(contentText(result)).toContain(`> ${notice}`);
+      return { count: (structured.pagination as { count: number }).count, notice, result };
+    }
+
+    it('says how an uppercase NOT was read, on a search that found rows', async () => {
+      const { count, notice } = await searchNotice('EXPORT NOT CALL');
+      expect(count).toBe(1);
+      expect(notice).toBe(NOT_READ);
+    });
+
+    it('says how a - at the start of a word was read, on a search that found rows', async () => {
+      const { count, notice } = await searchNotice('semiconductor -19');
+      expect(count).toBe(1);
+      expect(notice).toBe(HYPHEN_READ);
+    });
+
+    it('names both exclusions in one notice, in the order the query used them', async () => {
+      const { count, notice } = await searchNotice('semiconductor -19 NOT wetlands');
+      expect(count).toBe(1);
+      expect(notice).toBe(
+        'The query\'s - at the start of a word and NOT were read as exclusions; to search for a hyphenated term, join the hyphen to the word before it (covid-19), and to search for the word NOT, quote it ("NOT").',
+      );
+    });
+
+    it('adds the exclusion notice after the unmatched one and before the no-match one', async () => {
+      const { count, notice, result } = await searchNotice('(export NOT semiconductor');
+      expect(count).toBe(0);
+      const unmatched = "The query's unmatched ( was ignored; pair ( with ) to group terms.";
+      const noMatch =
+        'No bills matched "(export NOT semiconductor". Try broader or fewer keywords, or remove the congress/billType/originChamber filters.';
+      expect(notice).toBe(`${unmatched} ${NOT_READ} ${noMatch}`);
+      const text = contentText(result);
+      expect(text.indexOf(unmatched)).toBeLessThan(text.indexOf(NOT_READ));
+      expect(text.indexOf(NOT_READ)).toBeLessThan(text.indexOf(noMatch));
+    });
+
+    it('adds no notice for OR, a phrase, a prefix, or a group', async () => {
+      const { count, notice, result } = await searchNotice(
+        '"export control" OR (semicond* equipment)',
+      );
+      expect(count).toBe(1);
+      expect(notice).toBeUndefined();
+      expect(contentText(result)).not.toContain('exclusion');
+    });
+
+    it('searches a lowercase not as a word, with no exclusion notice', async () => {
+      const { count, notice } = await searchNotice('semiconductor not wetlands');
+      expect(count).toBe(0);
+      expect(notice).toBe(
+        'No bills matched "semiconductor not wetlands". Try broader or fewer keywords, or remove the congress/billType/originChamber filters.',
+      );
+    });
+  });
+
+  /** A query the grammar can't translate is the caller's to fix: its failure record logs below error (#116). */
+  it('declares invalid_query as a non-retryable ValidationError at notice severity', () => {
+    expect(searchBillsTool.errors?.filter((entry) => entry.reason === 'invalid_query')).toEqual([
+      expect.objectContaining({
+        code: JsonRpcErrorCode.ValidationError,
+        reason: 'invalid_query',
+        retryable: false,
+        severity: 'notice',
+      }),
+    ]);
   });
 
   /** Every accepted filter is declared, so a stray key is a typo to name, not to strip. */

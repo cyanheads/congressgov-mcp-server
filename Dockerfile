@@ -135,22 +135,12 @@ LABEL org.opencontainers.image.version="${APP_VERSION}"
 COPY package.json ./
 COPY --from=deps /usr/src/app/node_modules ./node_modules
 
-# Copy the compiled application code from the build stage
+# Copy the compiled application code from the build stage. `dist/cli/` holds the
+# compiled mirror lifecycle CLI that `bun run mirror:init` / `mirror:refresh` /
+# `mirror:verify` run; `docker exec <container> bun run mirror:init` builds the
+# index in place.
 COPY --from=build /usr/src/app/dist ./dist
 COPY --from=build /usr/src/app/skills ./skills
-
-# Copy the mirror lifecycle scripts (mirror:init / mirror:refresh / mirror:verify)
-# and the shared context shim they import, then emit a runtime tsconfig so Bun
-# resolves the @/ path alias against the compiled ./dist (the source ./src never
-# reaches the runtime image). Same `bun run mirror:*` commands work in dev and the
-# image; run `docker exec <container> bun run mirror:init` to build the index.
-# See the api-mirror skill for the full recipe.
-COPY --from=build /usr/src/app/scripts/congress-mirror-init.ts \
-                  /usr/src/app/scripts/congress-mirror-refresh.ts \
-                  /usr/src/app/scripts/congress-mirror-verify.ts \
-                  /usr/src/app/scripts/_mirror-context.ts \
-                  ./scripts/
-RUN echo '{"compilerOptions":{"baseUrl":".","paths":{"@/*":["./dist/*"]}}}' > tsconfig.json
 
 # The 'oven/bun' image already provides a non-root user named 'bun'.
 # We will use this existing user for enhanced security.

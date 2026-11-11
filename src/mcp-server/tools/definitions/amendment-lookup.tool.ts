@@ -8,7 +8,9 @@ import { validationError } from '@cyanheads/mcp-ts-core/errors';
 
 import { formatAmendments } from '@/mcp-server/tools/format-helpers.js';
 import { recordedRollVote, recordedRollVoteSchema } from '@/mcp-server/tools/roll-vote-pointer.js';
+import { textVersionIndexSchema, textVersionPage } from '@/mcp-server/tools/text-version-index.js';
 import {
+  anyLetterCase,
   buildEffectiveQuery,
   congressErrorContracts,
   documentErrorContracts,
@@ -30,10 +32,7 @@ import { getCongressDocuments } from '@/services/congress-documents/congress-doc
 import { ordinal } from '@/utils/congress-calendar.js';
 
 /** Rows emit `HAMDT`/`SAMDT`, which the API path refuses; the advertised enum stays lower case. */
-const AmendmentTypeEnum = z.preprocess(
-  (value) => (typeof value === 'string' ? value.toLowerCase() : value),
-  z.enum(AMENDMENT_TYPE_CODES),
-);
+const AmendmentTypeEnum = anyLetterCase(z.enum(AMENDMENT_TYPE_CODES));
 
 /** The congresses Congress.gov holds Senate unprinted amendments (`suamdt`) for. */
 const SUAMDT_CONGRESSES = [97, 98];
@@ -92,7 +91,7 @@ export const amendmentLookupTool = tool('congressgov_amendment_lookup', {
       .min(0)
       .default(0)
       .describe(
-        "Which text version 'content' reads, 0-based against the order 'text' returns. Ignored by other operations.",
+        "Which text version 'content' reads, 0-based against the order 'text' returns; each 'text' row carries the textVersionIndex that reads it. Ignored by other operations.",
       ),
     ...documentWindowInput,
   }),
@@ -103,10 +102,13 @@ export const amendmentLookupTool = tool('congressgov_amendment_lookup', {
       data: z
         .array(
           z
-            .object({ rollVote: recordedRollVoteSchema.optional() })
+            .object({
+              rollVote: recordedRollVoteSchema.optional(),
+              textVersionIndex: textVersionIndexSchema.optional(),
+            })
             .passthrough()
             .describe(
-              'Upstream JSON record: an amendment (`list`, `amendments`) or a sub-resource row. An `actions` row carries `rollVote` when it records one roll call vote congressgov_roll_votes serves.',
+              "Upstream JSON record: an amendment (`list`, `amendments`) or a sub-resource row. An `actions` row carries `rollVote` when it records one roll call vote congressgov_roll_votes serves; a `text` row carries `textVersionIndex`, the index 'content' reads it by.",
             ),
         )
         .optional()
@@ -275,6 +277,7 @@ export const amendmentLookupTool = tool('congressgov_amendment_lookup', {
     ctx.enrich.echo(`${input.operation} for ${label} in the ${ordinal(input.congress)} Congress`);
     ctx.enrich.total(result.pagination.count);
     notifyIfNoMatches(ctx, result, `No ${input.operation} found for ${label}.`);
+    if (input.operation === 'text') return textVersionPage(result, input);
     if (input.operation !== 'actions') return result;
     return {
       ...result,

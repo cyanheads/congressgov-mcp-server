@@ -17,6 +17,7 @@ import {
 } from '@/mcp-server/tools/roll-vote-pointer.js';
 import {
   addNotice,
+  anyLetterCase,
   buildEffectiveQuery,
   congressErrorContracts,
   identityErrorContracts,
@@ -32,10 +33,7 @@ import { getSenateVoteService } from '@/services/senate-lis/senate-vote-service.
 import type { SenateVoteSource } from '@/services/senate-lis/types.js';
 import { currentCongressNumber, ordinal } from '@/utils/congress-calendar.js';
 
-const ChamberEnum = z.preprocess(
-  (value) => (typeof value === 'string' ? value.toLowerCase() : value),
-  z.enum(['house', 'senate']),
-);
+const ChamberEnum = anyLetterCase(z.enum(['house', 'senate']));
 
 /**
  * An optional `members` filter matching `pattern`. A form-based client submits a
@@ -183,7 +181,7 @@ export const rollVotesTool = tool('congressgov_roll_votes', {
       .enum(['recent', 'oldest'])
       .default('recent')
       .describe(
-        "Sort order for 'list'. 'recent' (default) returns newest first; 'oldest' returns ascending. House sorts by vote update date (with 'recent', offset=0 always returns the strictly newest page); Senate sorts by roll call number. Ignored by 'get' and 'members'.",
+        "Sort order for 'list', by roll call number in both chambers — the order votes were taken within a session. 'recent' (default) returns the session's latest vote first; 'oldest' starts at roll call 1. Ignored by 'get' and 'members'.",
       ),
     limit: z.number().int().min(1).max(250).default(20).describe('Results per page (1-250).'),
     offset: z.number().int().min(0).default(0).describe('Pagination offset.'),
@@ -219,43 +217,20 @@ export const rollVotesTool = tool('congressgov_roll_votes', {
       return handleSenateVotes(input, memberFilter, ctx);
     }
 
-    const api = getCongressApi();
-
     if (input.operation === 'list') {
-      const effectiveQuery = buildEffectiveQuery('roll call votes', {
-        congress: input.congress,
-        session: input.session,
-      });
-      if (input.order === 'recent') {
-        const recent = await fetchVotesRecent(
-          {
-            congress: input.congress,
-            session: input.session,
-            limit: input.limit,
-            offset: input.offset,
-          },
-          ctx,
-        );
-        ctx.enrich.echo(effectiveQuery);
-        ctx.enrich.total(recent.pagination.count);
-        notifyIfNoMatches(ctx, recent, HOUSE_NO_VOTES_NOTICE);
-        return recent;
-      }
-      const result = await api.listVotes(
-        {
+      const result = await listHouseVotesInRollOrder(input, ctx);
+      ctx.enrich.echo(
+        buildEffectiveQuery('roll call votes', {
           congress: input.congress,
           session: input.session,
-          limit: input.limit,
-          offset: input.offset,
-        },
-        ctx,
+        }),
       );
-      ctx.log.info('Votes listed', { congress: input.congress, session: input.session });
-      ctx.enrich.echo(effectiveQuery);
       ctx.enrich.total(result.pagination.count);
       notifyIfNoMatches(ctx, result, HOUSE_NO_VOTES_NOTICE);
       return result;
     }
+
+    const api = getCongressApi();
 
     if (!input.voteNumber) {
       throw validationError(
@@ -498,57 +473,56 @@ function notifyNoPositions(
   );
 }
 
+/** The most rows /house-vote/{congress}/{session} returns per request. */
+const HOUSE_VOTE_PAGE_SIZE = 250;
+
 /**
- * Fetch roll call votes in strict newest-first order. The /house-vote/{c}/{s}
- * endpoint returns rows in opaque insertion order (loosely correlated with roll
- * number but not with updateDate — late-edited votes break the sequence), and
- * ignores sort params. Fetch the full session, sort by updateDate desc, then
- * slice the requested page. Typical sessions are 200-750 votes; at PAGE_SIZE=250
- * that's 1-3 upstream requests per call, dispatched in parallel after the first.
+ * One page of a House session's votes in roll call order — `recent` descending,
+ * `oldest` ascending. Roll numbers follow vote time within a session, the order the
+ * Senate branch pages too. /house-vote/{congress}/{session} ignores `sort` and
+ * serves rows in neither roll, date, nor update order (Congress.gov re-touches old
+ * votes in batches), so the whole session is read — the first page, then the rest
+ * in parallel, one request per 250 votes — sorted, and sliced at the caller's
+ * offset.
  */
-async function fetchVotesRecent(
-  params: { congress: number; session: number; limit: number; offset: number },
+async function listHouseVotesInRollOrder(
+  params: {
+    congress: number;
+    session: number;
+    order: 'recent' | 'oldest';
+    limit: number;
+    offset: number;
+  },
   ctx: Context,
 ) {
   const api = getCongressApi();
-  const PAGE_SIZE = 250;
-  const first = await api.listVotes(
-    { congress: params.congress, session: params.session, limit: PAGE_SIZE, offset: 0 },
-    ctx,
-  );
+  const session = { congress: params.congress, session: params.session };
+  const first = await api.listVotes({ ...session, limit: HOUSE_VOTE_PAGE_SIZE, offset: 0 }, ctx);
   const total = first.pagination.count;
   if (total === 0 || params.offset >= total) {
     return { data: [], pagination: { count: total, nextOffset: null } };
   }
 
-  const remainingPages = Math.ceil(total / PAGE_SIZE) - 1;
+  const remainingPages = Math.ceil(total / HOUSE_VOTE_PAGE_SIZE) - 1;
   const pages = await Promise.all(
     Array.from({ length: remainingPages }, (_, i) =>
       api.listVotes(
-        {
-          congress: params.congress,
-          session: params.session,
-          limit: PAGE_SIZE,
-          offset: (i + 1) * PAGE_SIZE,
-        },
+        { ...session, limit: HOUSE_VOTE_PAGE_SIZE, offset: (i + 1) * HOUSE_VOTE_PAGE_SIZE },
         ctx,
       ),
     ),
   );
-  const all = [...first.data, ...pages.flatMap((p) => p.data)];
-
-  all.sort((a, b) => {
-    const ad = (a as { updateDate?: string }).updateDate ?? '';
-    const bd = (b as { updateDate?: string }).updateDate ?? '';
-    return bd.localeCompare(ad);
-  });
+  const direction = params.order === 'recent' ? -1 : 1;
+  const all = [...first.data, ...pages.flatMap((p) => p.data)].sort(
+    (a, b) => direction * (Number(a.rollCallNumber) - Number(b.rollCallNumber)),
+  );
 
   const slice = all.slice(params.offset, params.offset + params.limit);
   const nextOffset =
     params.offset + slice.length < all.length ? params.offset + slice.length : null;
-  ctx.log.info('Votes listed (recent order, strict)', {
-    congress: params.congress,
-    session: params.session,
+  ctx.log.info('Votes listed', {
+    ...session,
+    order: params.order,
     total: all.length,
     returned: slice.length,
     offset: params.offset,

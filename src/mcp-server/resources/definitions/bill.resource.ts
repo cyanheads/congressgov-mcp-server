@@ -4,6 +4,7 @@
  */
 
 import { resource, z } from '@cyanheads/mcp-ts-core';
+import { anyLetterCase } from '@/mcp-server/tools/tool-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
 import { BILL_TYPE_CODES } from '@/services/congress-api/types.js';
 
@@ -16,9 +17,9 @@ export const billResource = resource('congress://bill/{congress}/{billType}/{bil
       .string()
       .regex(/^\d+$/, 'Congress must be a positive integer (e.g., 118).')
       .describe('Congress number (e.g., 118).'),
-    billType: z
-      .enum(BILL_TYPE_CODES)
-      .describe(`Bill type code: one of ${BILL_TYPE_CODES.join(', ')}.`),
+    billType: anyLetterCase(z.enum(BILL_TYPE_CODES)).describe(
+      `Bill type code: one of ${BILL_TYPE_CODES.join(', ')}, in any letter case.`,
+    ),
     billNumber: z
       .string()
       .regex(/^\d+$/, 'Bill number must be a positive integer (e.g., 3076).')

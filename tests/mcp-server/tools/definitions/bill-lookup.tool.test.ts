@@ -5,11 +5,17 @@
 
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/services/congress-api/congress-api-service.js', () => ({
   getCongressApi: vi.fn(),
   initCongressApi: vi.fn(),
+}));
+vi.mock('@/config/server-config.js', () => ({
+  getServerConfig: vi.fn(() => ({
+    apiKey: 'test-api-key',
+    baseUrl: 'https://api.congress.gov/v3',
+  })),
 }));
 
 import { billLookupTool } from '@/mcp-server/tools/definitions/bill-lookup.tool.js';
@@ -18,6 +24,13 @@ import {
   DEFAULT_SUMMARY_TEXT_CHARACTERS,
 } from '@/mcp-server/tools/tool-helpers.js';
 import { getCongressApi } from '@/services/congress-api/congress-api-service.js';
+import { initCongressDocuments } from '@/services/congress-documents/congress-documents-service.js';
+import {
+  type TextVersionRow,
+  textVersionsBody,
+  versionsByIndex,
+  walkTextPages,
+} from '../../../helpers/text-versions.js';
 
 describe('billLookupTool', () => {
   const mockApi = {
@@ -1055,5 +1068,182 @@ describe('billLookupTool — actions roll vote pointer (issue #102)', () => {
   it('names the chain to congressgov_roll_votes in its description', () => {
     expect(billLookupTool.description).toContain('rollVote');
     expect(billLookupTool.description).toContain('congressgov_roll_votes');
+  });
+});
+
+// ── 'text' rows carry the textVersionIndex 'content' reads them by ──
+
+/**
+ * Run through the real CongressApiService and CongressDocumentsService behind a
+ * fetch stub that pages `/text` the way Congress.gov does (`textVersionsBody`):
+ * an enacted bill's Public Law version follows every page, and its index is the
+ * last one, not its position on the page.
+ */
+describe("billLookupTool — 'text' rows carry the index 'content' reads", () => {
+  /** A version row whose one Formatted Text URL names the version. */
+  const version = (congress: number, slug: string, type: string, date: string | null) => ({
+    date,
+    formats: [
+      {
+        type: 'Formatted Text',
+        url: `https://www.congress.gov/${congress}/bills/hr/BILLS-${congress}-${slug}.htm`,
+      },
+    ],
+    type,
+  });
+
+  /** /bill/119/hr/1/text (2026-11-11): five versions paged, the Public Law version after every page. */
+  const ENACTED_PAGED: TextVersionRow[] = [
+    version(119, 'enr', 'Enrolled Bill', null),
+    version(119, 'eas', 'Engrossed Amendment Senate', '2025-07-01T04:00:00Z'),
+    version(119, 'pcs', 'Placed on Calendar Senate', '2025-06-28T04:00:00Z'),
+    version(119, 'eh', 'Engrossed in House', '2025-05-22T04:00:00Z'),
+    version(119, 'rh', 'Reported in House', '2025-05-20T04:00:00Z'),
+  ];
+  const PUBLIC_LAW = version(119, 'pl', 'Public Law', '2025-07-05T03:59:59Z');
+  /** /bill/118/hr/2/text (2026-11-11): never enrolled, nothing appended. */
+  const NEVER_ENACTED: TextVersionRow[] = [
+    version(118, 'pcs', 'Placed on Calendar Senate', '2023-05-16T04:00:00Z'),
+    version(118, 'eh', 'Engrossed in House', '2023-05-11T04:00:00Z'),
+    version(118, 'ih', 'Introduced in House', '2023-05-02T04:00:00Z'),
+  ];
+  const DOCUMENT_URLS = [...ENACTED_PAGED, PUBLIC_LAW, ...NEVER_ENACTED].map(
+    (row) => row.formats[0]!.url,
+  );
+
+  function fetchStub(input: string | URL | Request): Promise<Response> {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    if (url.hostname === 'www.congress.gov') {
+      return Promise.resolve(
+        DOCUMENT_URLS.includes(url.href)
+          ? new Response(`<pre>${url.pathname}</pre>`, { headers: { 'content-type': 'text/html' } })
+          : new Response('Not Found', { status: 404, headers: { 'content-type': 'text/html' } }),
+      );
+    }
+    const body =
+      url.pathname === '/v3/bill/119/hr/1/text'
+        ? textVersionsBody(url, ENACTED_PAGED, PUBLIC_LAW)
+        : url.pathname === '/v3/bill/118/hr/2/text'
+          ? textVersionsBody(url, NEVER_ENACTED)
+          : undefined;
+    return Promise.resolve(
+      body
+        ? new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } })
+        : new Response('{}', { status: 404, headers: { 'content-type': 'application/json' } }),
+    );
+  }
+
+  beforeEach(async () => {
+    const actual = await vi.importActual<
+      typeof import('@/services/congress-api/congress-api-service.js')
+    >('@/services/congress-api/congress-api-service.js');
+    vi.mocked(getCongressApi).mockReturnValue(new actual.CongressApiService());
+    vi.stubGlobal('fetch', vi.fn(fetchStub));
+    initCongressDocuments();
+  });
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  const BILLS = {
+    enacted: { congress: 119, billNumber: 1, versions: [...ENACTED_PAGED, PUBLIC_LAW] },
+    'never enacted': { congress: 118, billNumber: 2, versions: NEVER_ENACTED },
+  } as const;
+
+  const text = (bill: keyof typeof BILLS) => (paging: { limit: number; offset: number }) =>
+    runToolContract(billLookupTool, {
+      operation: 'text',
+      congress: BILLS[bill].congress,
+      billType: 'hr',
+      billNumber: BILLS[bill].billNumber,
+      ...paging,
+    });
+
+  const content = (bill: keyof typeof BILLS, textVersionIndex: number) =>
+    runToolContract(billLookupTool, {
+      operation: 'content',
+      congress: BILLS[bill].congress,
+      billType: 'hr',
+      billNumber: BILLS[bill].billNumber,
+      textVersionIndex,
+    });
+
+  it.each(Object.keys(BILLS) as Array<keyof typeof BILLS>)(
+    "'content' reads the version at each index of the %s bill, and fails one past the last",
+    async (bill) => {
+      const { billNumber, versions } = BILLS[bill];
+      for (const [index, row] of versions.entries()) {
+        const result = await content(bill, index);
+        expect(result.structuredContent, `index ${index}`).toMatchObject({
+          content: {
+            sourceUrl: row.formats[0]!.url,
+            documentTitle: `HR ${billNumber} — ${row.type}`,
+          },
+        });
+      }
+      const past = await content(bill, versions.length);
+      expect(past.structuredContent).toMatchObject({
+        error: { data: { reason: 'document_unavailable', available: versions.length } },
+      });
+    },
+  );
+
+  it.each([
+    [1, [[0], [1], [2], [3], [4], [5], []]],
+    [2, [[0, 1], [2, 3], [4, 5], []]],
+    [3, [[0, 1, 2], [3, 4, 5], []]],
+    [5, [[0, 1, 2, 3, 4], [5], []]],
+    [20, [[0, 1, 2, 3, 4, 5], []]],
+  ])(
+    'heads every row of the enacted bill at limit %i with the index content reads, each version once',
+    async (limit, indices) => {
+      const pages = await walkTextPages(text('enacted'), limit);
+      expect(pages.map((page) => page.rows.map((row) => row.textVersionIndex))).toEqual(indices);
+      const publicLaw = pages
+        .flatMap((page) => page.rows)
+        .filter((row) => row.type === 'Public Law');
+      expect(publicLaw).toEqual([{ ...PUBLIC_LAW, textVersionIndex: 5 }]);
+
+      const byIndex = versionsByIndex(pages);
+      expect([...byIndex.keys()].sort((a, b) => a - b)).toEqual([0, 1, 2, 3, 4, 5]);
+      for (const [index, row] of byIndex) {
+        const result = await content('enacted', index);
+        expect(result.structuredContent, `index ${index}`).toMatchObject({
+          content: { sourceUrl: row.formats[0]!.url },
+        });
+      }
+    },
+  );
+
+  it.each([
+    [1, [[0], [1], [2], []]],
+    [2, [[0, 1], [2], []]],
+    [20, [[0, 1, 2], []]],
+  ])(
+    'heads every row of the never-enacted bill at limit %i by its offset, with nothing appended',
+    async (limit, indices) => {
+      const pages = await walkTextPages(text('never enacted'), limit);
+      expect(pages.map((page) => page.rows.map((row) => row.textVersionIndex))).toEqual(indices);
+
+      for (const [index, row] of versionsByIndex(pages)) {
+        const result = await content('never enacted', index);
+        expect(result.structuredContent, `index ${index}`).toMatchObject({
+          content: { sourceUrl: row.formats[0]!.url },
+        });
+      }
+    },
+  );
+
+  it('advertises textVersionIndex on the data rows of the output schema', () => {
+    const parsed = billLookupTool.output.parse({
+      data: [{ ...PUBLIC_LAW, textVersionIndex: 5 }],
+      pagination: { count: 6, nextOffset: null },
+    }) as { data: Array<Record<string, unknown>> };
+    expect(parsed.data[0]?.textVersionIndex).toBe(5);
+    expect(() =>
+      billLookupTool.output.parse({
+        data: [{ ...PUBLIC_LAW, textVersionIndex: -1 }],
+        pagination: { count: 6, nextOffset: null },
+      }),
+    ).toThrow();
   });
 });

@@ -12,6 +12,12 @@ vi.mock('@/services/congress-api/congress-api-service.js', () => ({
   getCongressApi: vi.fn(),
   initCongressApi: vi.fn(),
 }));
+vi.mock('@/config/server-config.js', () => ({
+  getServerConfig: vi.fn(() => ({
+    apiKey: 'test-api-key',
+    baseUrl: 'https://api.congress.gov/v3',
+  })),
+}));
 
 import { crsReportsTool } from '@/mcp-server/tools/definitions/crs-reports.tool.js';
 import { documentErrorContracts } from '@/mcp-server/tools/tool-helpers.js';
@@ -623,6 +629,274 @@ describe('crsReportsTool', () => {
         error: { data: { reason: 'incompatible_identity', field: 'reportNumber' } },
       });
       expect(contentText(result)).toContain("'content'");
+    });
+  });
+
+  // ── #110: 'get' pages the report's related materials ──
+
+  /**
+   * Congress.gov ignores limit/offset on /crsreport/{id} and returns every related
+   * material (R46406: 168 rows, 163 once the service drops repeated URLs), so
+   * 'get' pages the list itself with the tool's limit and offset.
+   */
+  describe('get pages relatedMaterials', () => {
+    /** `count` distinct related materials, in upstream order. */
+    const materials = (count: number) =>
+      Array.from({ length: count }, (_, i) => ({
+        congress: 117,
+        number: String(i + 1),
+        title: `Related material ${i + 1}`,
+        type: 'PUB',
+        url: `https://api.congress.gov/v3/law/117/pub/${i + 1}`,
+      }));
+
+    const serveReport = (id: string, rows: unknown[]) =>
+      mockApi.getCrsReport.mockResolvedValue({
+        report: { id, title: `Report ${id}`, summary: 'Summary text.', relatedMaterials: rows },
+      });
+
+    const get = (args: Record<string, unknown>) =>
+      runToolContract(crsReportsTool, { operation: 'get', reportNumber: 'R46406', ...args });
+
+    type Report = {
+      relatedMaterials: Array<{ title: string }>;
+      relatedMaterialsCount?: number;
+      relatedMaterialsNextOffset?: number | null;
+    };
+    const reportOf = (result: Awaited<ReturnType<typeof get>>) =>
+      (result.structuredContent as { report: Report }).report;
+
+    it('returns a list that fits the first page unchanged, with no paging field and no notice', async () => {
+      const rows = materials(19);
+      serveReport('R47900', rows);
+      const result = await get({ reportNumber: 'R47900' });
+      expect(result.isError).not.toBe(true);
+      expect(result.structuredContent).toEqual({
+        report: {
+          id: 'R47900',
+          title: 'Report R47900',
+          summary: 'Summary text.',
+          relatedMaterials: rows,
+        },
+        effectiveQuery: 'CRS report R47900',
+        totalCount: 1,
+      });
+      const text = contentText(result);
+      for (const row of rows) expect(text).toContain(row.title);
+      expect(text).not.toContain('Related materials:');
+    });
+
+    it.each([
+      { count: 20, limit: undefined },
+      { count: 250, limit: 250 },
+    ])(
+      'returns a list exactly limit long ($count) as served, with no paging field and no notice',
+      async ({ count, limit }) => {
+        const rows = materials(count);
+        serveReport('R47900', rows);
+        const result = await get({ reportNumber: 'R47900', ...(limit ? { limit } : {}) });
+        const report = reportOf(result);
+        expect(report.relatedMaterials).toEqual(rows);
+        expect(report).not.toHaveProperty('relatedMaterialsCount');
+        expect(report).not.toHaveProperty('relatedMaterialsNextOffset');
+        expect(result.structuredContent).not.toHaveProperty('notice');
+        expect(contentText(result)).not.toContain('Related materials:');
+      },
+    );
+
+    it('returns the first 20 of 163 with the count, next offset, and a notice, on both surfaces', async () => {
+      const rows = materials(163);
+      serveReport('R46406', rows);
+      const result = await get({});
+      const notice = 'Related materials 1–20 of 163 returned; pass offset 20 for the next page.';
+      expect(result.structuredContent).toMatchObject({
+        report: {
+          id: 'R46406',
+          summary: 'Summary text.',
+          relatedMaterials: rows.slice(0, 20),
+          relatedMaterialsCount: 163,
+          relatedMaterialsNextOffset: 20,
+        },
+        notice,
+        totalCount: 1,
+      });
+      expect(reportOf(result).relatedMaterials).toHaveLength(20);
+
+      const text = contentText(result);
+      expect(text).toContain('**Related materials:** 20 of 163 | next offset: 20');
+      expect(text).toContain(notice);
+      expect(text).toContain('Related material 20,');
+      expect(text).not.toContain('Related material 21,');
+    });
+
+    it('walks nextOffset to null, returning each of 163 rows once, in order', async () => {
+      const rows = materials(163);
+      serveReport('R46406', rows);
+      const seen: string[] = [];
+      let offset: number | null = 0;
+      let calls = 0;
+      while (offset !== null) {
+        if (++calls > 20) throw new Error('walk did not terminate');
+        const result = await get({ offset });
+        const report = reportOf(result);
+        expect(report.relatedMaterialsCount).toBe(163);
+        seen.push(...report.relatedMaterials.map((row) => row.title));
+        offset = report.relatedMaterialsNextOffset ?? null;
+        if (offset === null) {
+          expect(report.relatedMaterialsNextOffset).toBeNull();
+          expect(contentText(result)).toContain(
+            '**Related materials:** 3 of 163 | next offset: none',
+          );
+          expect(contentText(result)).toContain(
+            'Related materials 161–163 of 163 returned; this is the last page.',
+          );
+        }
+      }
+      expect(calls).toBe(9);
+      expect(seen).toEqual(rows.map((row) => row.title));
+    });
+
+    it('returns all 229 at limit 250 with no added field', async () => {
+      const rows = materials(229);
+      serveReport('RL31693', rows);
+      const result = await get({ reportNumber: 'RL31693', limit: 250 });
+      expect(reportOf(result).relatedMaterials).toEqual(rows);
+      expect(reportOf(result)).not.toHaveProperty('relatedMaterialsCount');
+      expect(reportOf(result)).not.toHaveProperty('relatedMaterialsNextOffset');
+      expect(result.structuredContent).not.toHaveProperty('notice');
+    });
+
+    it('pages a list one row longer than limit 250 at the cap', async () => {
+      serveReport('R46406', materials(251));
+      const report = reportOf(await get({ limit: 250 }));
+      expect(report.relatedMaterials).toHaveLength(250);
+      expect(report.relatedMaterialsCount).toBe(251);
+      expect(report.relatedMaterialsNextOffset).toBe(250);
+    });
+
+    it('adds the paging fields when offset is past 0, even on a list that fits one page', async () => {
+      const rows = materials(19);
+      serveReport('R47900', rows);
+      const result = await get({ reportNumber: 'R47900', offset: 5 });
+      expect(reportOf(result)).toMatchObject({
+        relatedMaterials: rows.slice(5),
+        relatedMaterialsCount: 19,
+        relatedMaterialsNextOffset: null,
+      });
+      expect(result.structuredContent).toMatchObject({
+        notice: 'Related materials 6–19 of 19 returned; this is the last page.',
+      });
+    });
+
+    it('returns no rows, the count, a null next offset, and a notice for an offset past the end', async () => {
+      serveReport('R46406', materials(163));
+      const result = await get({ offset: 200 });
+      const notice =
+        "offset 200 is past the end of this report's 163 related materials; restart at offset 0.";
+      expect(result.isError).not.toBe(true);
+      expect(result.structuredContent).toMatchObject({
+        report: {
+          relatedMaterials: [],
+          relatedMaterialsCount: 163,
+          relatedMaterialsNextOffset: null,
+        },
+        notice,
+      });
+      const text = contentText(result);
+      expect(text).toContain('**Related materials:** 0 of 163 | next offset: none');
+      expect(text).toContain(notice);
+    });
+
+    it('leaves a report without relatedMaterials as served, whatever the offset', async () => {
+      mockApi.getCrsReport.mockResolvedValue({ report: { id: 'R40097', title: 'Sparse' } });
+      const result = await get({ reportNumber: 'R40097', offset: 40 });
+      expect(result.structuredContent).toEqual({
+        report: { id: 'R40097', title: 'Sparse' },
+        effectiveQuery: 'CRS report R40097',
+        totalCount: 1,
+      });
+    });
+
+    it('composes its notice after the ignored-date notice', async () => {
+      serveReport('R46406', materials(163));
+      const result = await get({ fromDateTime: '2026-10-01T00:00:00Z' });
+      expect(result.structuredContent).toMatchObject({
+        notice:
+          "'get' does not use fromDateTime, so it was ignored. Related materials 1–20 of 163 returned; pass offset 20 for the next page.",
+      });
+    });
+
+    it("names 'get' in the limit and offset descriptions and declares the paging fields", () => {
+      const properties = (
+        z.toJSONSchema(crsReportsTool.input, { io: 'input' }) as {
+          properties: Record<string, { description?: string }>;
+        }
+      ).properties;
+      expect(properties.limit?.description).toContain("related materials on 'get'");
+      expect(properties.offset?.description).toContain("related materials on 'get'");
+      expect(crsReportsTool.description).toContain('relatedMaterialsNextOffset');
+
+      const paged = { id: 'R46406', relatedMaterialsCount: 163, relatedMaterialsNextOffset: null };
+      expect(crsReportsTool.output.parse({ report: paged })).toEqual({ report: paged });
+      expect(() =>
+        crsReportsTool.output.parse({ report: { id: 'R46406', relatedMaterialsCount: -1 } }),
+      ).toThrow();
+    });
+
+    it('rejects a limit above 250 at the schema', () => {
+      expect(
+        crsReportsTool.input.safeParse({ operation: 'get', reportNumber: 'R46406', limit: 251 })
+          .success,
+      ).toBe(false);
+    });
+
+    it("leaves 'list' paging the reports and 'content' reading the document", async () => {
+      mockApi.listCrsReports.mockResolvedValue({
+        data: [{ id: 'R46406' }],
+        pagination: { count: 900, nextOffset: 45 },
+      });
+      const list = await runToolContract(crsReportsTool, {
+        operation: 'list',
+        limit: 5,
+        offset: 40,
+      });
+      expect(mockApi.listCrsReports).toHaveBeenCalledWith(
+        { limit: 5, offset: 40 },
+        expect.anything(),
+      );
+      expect(list.structuredContent).toMatchObject({
+        data: [{ id: 'R46406' }],
+        pagination: { count: 900, nextOffset: 45 },
+      });
+      expect(list.structuredContent).not.toHaveProperty('notice');
+    });
+
+    it('pages the list the service deduplicated, through the real service', async () => {
+      const actual = await vi.importActual<
+        typeof import('@/services/congress-api/congress-api-service.js')
+      >('@/services/congress-api/congress-api-service.js');
+      const unique = materials(163).map(({ url, ...row }) => ({ ...row, URL: url }));
+      /** R46406's repeats: five rows whose URL an earlier row already carries. */
+      const raw = [...unique.slice(0, 100), ...unique.slice(0, 5), ...unique.slice(100)];
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () =>
+          Response.json({
+            CRSReport: { id: 'R46406', title: 'Voter Registration', relatedMaterials: raw },
+          }),
+        ),
+      );
+      try {
+        vi.mocked(getCongressApi).mockReturnValue(new actual.CongressApiService());
+        const result = await get({ offset: 160 });
+        expect(reportOf(result)).toMatchObject({
+          relatedMaterials: materials(163).slice(160),
+          relatedMaterialsCount: 163,
+          relatedMaterialsNextOffset: null,
+        });
+      } finally {
+        vi.unstubAllGlobals();
+      }
     });
   });
 });

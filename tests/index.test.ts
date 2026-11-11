@@ -3,6 +3,7 @@
  * @module tests/index.test
  */
 import type { CoreServices, createApp } from '@cyanheads/mcp-ts-core';
+import { conflict, serviceUnavailable } from '@cyanheads/mcp-ts-core/errors';
 import { requestContextService } from '@cyanheads/mcp-ts-core/utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -101,6 +102,62 @@ describe('application lifecycle', () => {
     settle?.();
     await Promise.all([refresh, shutdown]);
     expect(state.close).toHaveBeenCalledOnce();
+  });
+  describe('scheduled refresh outcomes', () => {
+    /** Set up an enabled mirror with a refresh schedule and return the scheduled job. */
+    async function scheduledJob(): Promise<(jobCtx: unknown) => Promise<void>> {
+      state.config.mirrorEnabled = true;
+      state.config.mirrorRefreshCron = '0 * * * *';
+      await state.app?.setup?.(core);
+      return state.schedule.mock.calls[0]?.[2];
+    }
+
+    it('resolves when the refresh completes', async () => {
+      const job = await scheduledJob();
+      state.runSync.mockResolvedValue({ recordsApplied: 3, total: 10 });
+      await expect(job(requestContextService.createRequestContext())).resolves.toBeUndefined();
+      expect(state.runSync).toHaveBeenCalledWith(expect.objectContaining({ mode: 'refresh' }));
+    });
+
+    it('rejects when the refresh fails for any other reason', async () => {
+      const job = await scheduledJob();
+      const failure = serviceUnavailable('Congress.gov returned an unexpected error (HTTP 503).');
+      state.runSync.mockRejectedValue(failure);
+      await expect(job(requestContextService.createRequestContext())).rejects.toBe(failure);
+    });
+
+    it('skips a run another process or instance holds the sync lease for', async () => {
+      const job = await scheduledJob();
+      state.runSync.mockRejectedValue(
+        conflict('Mirror sync is already in progress in another process or instance.', {
+          reason: 'sync_locked',
+        }),
+      );
+      await expect(job(requestContextService.createRequestContext())).resolves.toBeUndefined();
+    });
+
+    it('rejects a lost lease rather than skipping it', async () => {
+      const job = await scheduledJob();
+      const lost = conflict('Mirror sync lost its lease to another process or instance.', {
+        reason: 'sync_lease_lost',
+      });
+      state.runSync.mockRejectedValue(lost);
+      await expect(job(requestContextService.createRequestContext())).rejects.toBe(lost);
+    });
+
+    it('resolves when shutdown stops the refresh it started', async () => {
+      const job = await scheduledJob();
+      state.runSync.mockImplementation(
+        ({ signal }: { signal: AbortSignal }) =>
+          new Promise((_resolve, reject) => {
+            signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+          }),
+      );
+      const refresh = job(requestContextService.createRequestContext());
+      await state.app?.teardown?.(core);
+      await expect(refresh).resolves.toBeUndefined();
+      expect(state.close).toHaveBeenCalledOnce();
+    });
   });
   it('leaves the disabled mirror alone during shutdown', async () => {
     await state.app?.teardown?.(core);

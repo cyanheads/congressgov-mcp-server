@@ -25,16 +25,14 @@ const SYNTHESIS = `Synthesize findings into:
 - **Outlook** — What is the likely trajectory for this policy area?`;
 
 /** Discovery plan when the local bill-search mirror is on and search_bills is registered. */
-function mirrorPlan(topic: string): string {
-  return `Keyword search over the local bill mirror is the one topical entry point — the Congress.gov API has no keyword search, so every other tool browses by congress, date, chamber, or identifier.
+const MIRROR_PLAN = `Keyword search over the local bill mirror is the one topical entry point — the Congress.gov API has no keyword search, so every other tool browses by congress, date, chamber, or identifier.
 
-1. **Find candidate bills** — Call congressgov_search_bills with "${topic}" as the query. It matches bill titles and CRS summary text over a bounded congress window; it does not match policy area, full bill text, CRS reports, or the Congressional Record. Narrow with congress, billType, or originChamber when the result set is broad; use fewer or broader keywords when it is empty.
+1. **Find candidate bills** — Call congressgov_search_bills with the topic's keywords as the query, unquoted: quotation marks match the exact phrase only. It matches bill titles and CRS summary text over a bounded congress window; it does not match policy area, full bill text, CRS reports, or the Congressional Record. Narrow with congress, billType, or originChamber when the result set is broad; use fewer or broader keywords when it is empty.
 2. **Read each candidate** — Each hit carries congress, billType, and billNumber. Pass them to congressgov_bill_lookup with operation='get', then 'summaries', 'subjects', 'actions', 'cosponsors', and 'related' for substance, status, and companion bills.
 3. **Follow the sponsors** — Take a bioguideId from the bill's sponsors or its 'cosponsors' rows and call congressgov_member_lookup with operation='get' for the profile or 'sponsored' for the rest of that member's portfolio.
 4. **Follow the committees** — Call congressgov_bill_lookup with operation='committees' for the committees a bill was referred to, or congressgov_committee_lookup with operation='list' and a filter matching a committee *name* ("armed services", "energy") — not the topic string — then its 'bills' and 'reports' operations on the resulting system code.
 
 Report the boundary along with the findings: the search covers bill titles and summaries only, so silence from it is not evidence that no CRS analysis or floor debate exists.`;
-}
 
 /** Discovery plan when the mirror is off — no registered tool accepts a topic. */
 const NO_MIRROR_PLAN = `This deployment cannot search by topic. The Congress.gov API has no keyword search, and this server's optional local bill-search index is turned off (an operator enables it with CONGRESS_MIRROR_ENABLED=true), so no registered tool accepts a topic string. congressgov_crs_reports, congressgov_bill_summaries, and congressgov_daily_record browse by congress, date, or identifier only — scanning them for a topic means reading thousands of unrelated rows.
@@ -68,7 +66,7 @@ export const legislativeResearchPrompt = prompt('congressgov_legislative_researc
       ? `Focus on the ${congressOrdinal(args.congress)} Congress.`
       : 'Start with the current congress (use the congress://current resource to find the number).';
 
-    const plan = getServerConfig().mirrorEnabled ? mirrorPlan(args.topic) : NO_MIRROR_PLAN;
+    const plan = getServerConfig().mirrorEnabled ? MIRROR_PLAN : NO_MIRROR_PLAN;
 
     return [
       {

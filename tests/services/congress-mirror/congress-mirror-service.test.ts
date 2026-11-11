@@ -6,21 +6,37 @@
  * into one row per bill, verifies FTS hits over both title and summary (including
  * a title-only bill with a null summary), and covers the summaries date window,
  * the bill walk (cursor days and halved windows, never an offset), refresh, the
- * refresh checkpoint and the congresses it covers, the mirrored-congress read, and
- * the store-spec migrations.
+ * refresh checkpoint and the congresses it covers, the mirrored-congress read, the
+ * store-spec migrations, and, through the real `CongressApiService` over a stubbed
+ * `fetch`, the 30 s attempt of a request with no call and the run that resumes an
+ * interrupted one from its cursor.
  * @module tests/services/congress-mirror/congress-mirror-service
  */
 
 import { existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { JsonRpcErrorCode, type McpError } from '@cyanheads/mcp-ts-core/errors';
 import { sqliteMirrorStore } from '@cyanheads/mcp-ts-core/mirror';
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('@/config/server-config.js', () => ({
+  getServerConfig: () => ({ apiKey: 'test-api-key', baseUrl: 'https://api.congress.gov/v3' }),
+}));
+
+import { CongressApiService } from '@/services/congress-api/congress-api-service.js';
 import { CongressMirrorService } from '@/services/congress-mirror/congress-mirror-service.js';
 import { createCongressBillIngester, type MirrorApi } from '@/services/congress-mirror/ingest.js';
 import { billStoreSpec } from '@/services/congress-mirror/schema.js';
-import { type FakeBill, fakeBills, listBillsPage, plusSeconds } from './fake-bill-list.js';
+import { jsonResponse, track, useFakeClock } from '../../helpers/budget-fixtures.js';
+import {
+  type FakeBill,
+  fakeBills,
+  halvedBodyResponse,
+  listBillsPage,
+  plusSeconds,
+} from './fake-bill-list.js';
 
 type ListBillsParams = Parameters<MirrorApi['listBills']>[0];
 type ListSummariesParams = Parameters<MirrorApi['listSummaries']>[0];
@@ -248,13 +264,400 @@ describe('CongressMirrorService', () => {
     expect(page.items).toHaveLength(0);
   });
 
-  it('treats a punctuation-only query as no match, not a SQLite error', async () => {
+  it('rejects a punctuation-only query as invalid_query, not a SQLite error', async () => {
     await service.mirrorInstance.runSync({ mode: 'init', signal: AbortSignal.timeout(60_000) });
     const ctx = createMockContext();
-    // A raw pass-through of "-" would raise an FTS5 syntax error; tokenize+quote avoids it.
-    const page = await service.search({ query: ' - ', limit: 20, offset: 0 }, ctx);
-    expect(page.total).toBe(0);
-    expect(page.items).toHaveLength(0);
+    // A raw pass-through of "-" would raise an FTS5 syntax error; the translation drops it and has no term left.
+    await expect(service.search({ query: ' - ', limit: 20, offset: 0 }, ctx)).rejects.toMatchObject(
+      {
+        code: JsonRpcErrorCode.ValidationError,
+        data: { reason: 'invalid_query' },
+        message: expect.stringMatching(/^The query has no term to search for\./),
+      },
+    );
+  });
+
+  describe('query grammar (#116)', () => {
+    /**
+     * Words each row carries, for reading the expected sets: W wildfire, S smoke,
+     * D drought, X "smoke exposure" as adjacent words.
+     */
+    const GRAMMAR_ROWS: ReadonlyArray<readonly [title: string, summary: string]> = [
+      [
+        'Smoke Exposure Crop Insurance Act',
+        'Covers crops damaged by wildfire smoke. It does not cover drought or flood losses.',
+      ], // 1: W S D X
+      ['Wildfire Response Act', 'Funds wildfire suppression or prevention grants.'], // 2: W
+      ['Drought Relief Act', 'Aid for farmers hit by drought or extreme heat.'], // 3: D
+      ['Wildfire and Drought Resilience Act', 'Grants for wildfire and drought planning.'], // 4: W D
+      [
+        'Wildfire Smoke Monitoring Act',
+        'Monitors smoke exposure from wildfire; does not apply to prescribed burns.',
+      ], // 5: W S X
+      ['Forest Health Act', 'Thinning to reduce wildfire risk, not a substitute for suppression.'], // 6: W
+      [
+        'Clean Air Act Amendments',
+        'Regulates smoke from industrial sources or vehicles and limits exposure of workers.',
+      ], // 7: S
+      ['Wildfire Smoke Research Act', 'Studies wildfire smoke and its health effects.'], // 8: W S
+      ['Oil and Gas Leasing Act', 'Oil &amp; gas leases on federal lands.'], // 9
+      ['Nonprofit Integrity Act', 'Amends section 501(c)(3) of the Internal Revenue Code.'], // 10
+      ['Export-Control Reform Act', 'Café owners and semiconductor rules.'], // 11
+      ['Solar Energy Act', 'Solar or wind credits.'], // 12
+      ['Wind Power Act', 'Solar and wind farms.'], // 13
+    ];
+    const GRAMMAR_BILLS: FakeBill[] = GRAMMAR_ROWS.map(([title], i) => ({
+      congress: 119,
+      type: 'hr',
+      number: i + 1,
+      title,
+      originChamber: 'House',
+      updatedAt: `2026-02-${String(i + 1).padStart(2, '0')}T12:00:00Z`,
+    }));
+    const GRAMMAR_SUMMARIES: Row[] = GRAMMAR_ROWS.map(([, summary], i) => ({
+      bill: { congress: 119, type: 'hr', number: i + 1 },
+      text: `<p>${summary}</p>`,
+      updateDate: '2026-03-01T00:00:00Z',
+    }));
+
+    /** The bill numbers a query matches, ascending, with the characters it ignored and the exclusions it used. */
+    async function matches(
+      query: string,
+    ): Promise<{ numbers: number[]; unmatched: unknown; exclusions: unknown }> {
+      const page = await service.search({ query, limit: 100, offset: 0 }, createMockContext());
+      expect(page.items).toHaveLength(page.total);
+      return {
+        numbers: page.items.map((item) => item.billNumber).sort((a, b) => a - b),
+        unmatched: (page as { unmatched?: unknown }).unmatched,
+        exclusions: (page as { exclusions?: unknown }).exclusions,
+      };
+    }
+
+    /** The bill numbers a query matches, ascending. */
+    const numbers = async (query: string) => (await matches(query)).numbers;
+
+    beforeEach(async () => {
+      api = makeApi(GRAMMAR_BILLS, GRAMMAR_SUMMARIES);
+      await service.mirrorInstance.runSync({ mode: 'init', signal: AbortSignal.timeout(60_000) });
+    });
+
+    it('holds the expected base sets', async () => {
+      expect(await numbers('wildfire')).toEqual([1, 2, 4, 5, 6, 8]);
+      expect(await numbers('smoke')).toEqual([1, 5, 7, 8]);
+      expect(await numbers('drought')).toEqual([1, 3, 4]);
+      expect(await numbers('wildfire smoke')).toEqual([1, 5, 8]);
+      expect(await numbers('wildfire drought')).toEqual([1, 4]);
+    });
+
+    /** Characterization: inputs whose matches the grammar must leave as they were. */
+    it.each([
+      { query: 'export-control', expected: [11] },
+      { query: '501(c)(3)', expected: [10] },
+      { query: 'solar or wind', expected: [12] },
+      { query: 'wildfire not smoke', expected: [1, 5] },
+      { query: 'wildfire and drought', expected: [4] },
+      { query: '"OR" solar', expected: [12] },
+      { query: 'cafe', expected: [11] },
+      { query: 'café', expected: [11] },
+      { query: 'title:wildfire', expected: [] },
+      { query: 'NEAR(wildfire smoke)', expected: [] },
+    ])('keeps $query matching what it matched before', async ({ query, expected }) => {
+      expect(await numbers(query)).toEqual(expected);
+    });
+
+    it('unions OR alternatives: wildfire + drought − both', async () => {
+      expect(await numbers('wildfire OR drought')).toEqual([1, 2, 3, 4, 5, 6, 8]);
+    });
+
+    it.each([
+      'wildfire -smoke',
+      '-smoke wildfire',
+      'wildfire NOT smoke',
+      'NOT smoke wildfire',
+      'wildfire AND NOT smoke',
+    ])('excludes with %o: wildfire − wildfire smoke, none of them smoke rows', async (query) => {
+      const found = await numbers(query);
+      expect(found).toEqual([2, 4, 6]);
+      const smoke = await numbers('smoke');
+      expect(found.filter((n) => smoke.includes(n))).toEqual([]);
+    });
+
+    it('runs a group after a term, joined with an explicit AND', async () => {
+      expect(await numbers('wildfire (drought OR smoke)')).toEqual([1, 4, 5, 8]);
+      expect(await numbers('(drought OR smoke) wildfire')).toEqual([1, 4, 5, 8]);
+    });
+
+    it('applies an exclusion to its whole group', async () => {
+      expect(await numbers('wildfire OR drought -smoke')).toEqual([2, 3, 4, 6]);
+      expect(await numbers('wildfire -(smoke OR drought)')).toEqual([2, 6]);
+    });
+
+    it('matches a quoted phrase only as adjacent words', async () => {
+      expect(await numbers('smoke exposure')).toEqual([1, 5, 7]);
+      expect(await numbers('"smoke exposure"')).toEqual([1, 5]);
+      expect(await numbers('-"smoke exposure" smoke')).toEqual([7, 8]);
+    });
+
+    it('matches word* as a prefix', async () => {
+      expect(await numbers('wild*')).toEqual([1, 2, 4, 5, 6, 8]);
+      expect(await numbers('wild')).toEqual([]);
+    });
+
+    it('drops a token with no letter or digit', async () => {
+      expect(await numbers('oil & gas')).toEqual(await numbers('oil gas'));
+      expect(await numbers('oil & gas')).toEqual([9]);
+      expect(await numbers('wildfire - smoke')).toEqual([1, 5, 8]);
+    });
+
+    it.each([
+      { query: 'wildfire (smoke', same: 'wildfire smoke', unmatched: ['('] },
+      { query: 'wildfire smoke)', same: 'wildfire smoke', unmatched: [')'] },
+      { query: '"smoke exposure', same: 'smoke exposure', unmatched: ['"'] },
+      { query: '("smoke exposure', same: 'smoke exposure', unmatched: ['(', '"'] },
+    ])(
+      'ignores the unmatched character in $query and reports it',
+      async ({ query, same, unmatched }) => {
+        const found = await matches(query);
+        expect(found.numbers).toEqual(await numbers(same));
+        expect(found.unmatched).toEqual(unmatched);
+      },
+    );
+
+    it('reports no unmatched character for a balanced query', async () => {
+      expect((await matches('wildfire (smoke OR "crop insurance")')).unmatched).toEqual([]);
+    });
+
+    it.each([
+      { query: 'wildfire NOT smoke', expected: [2, 4, 6], exclusions: ['NOT'] },
+      { query: 'wildfire -smoke', expected: [2, 4, 6], exclusions: ['-'] },
+      { query: 'wildfire -smoke NOT drought', expected: [2, 6], exclusions: ['-', 'NOT'] },
+      { query: 'wildfire NOT (smoke -drought)', expected: [1, 2, 4, 6], exclusions: ['NOT', '-'] },
+      { query: 'wildfire not smoke', expected: [1, 5], exclusions: [] },
+      { query: 'wildfire OR "smoke exposure" wild*', expected: [1, 2, 4, 5, 6, 8], exclusions: [] },
+    ])(
+      'pages $query beside the exclusions it used, $exclusions',
+      async ({ query, expected, exclusions }) => {
+        const found = await matches(query);
+        expect(found.numbers).toEqual(expected);
+        expect(found.exclusions).toEqual(exclusions);
+      },
+    );
+
+    it.each([
+      { query: '-smoke', token: '-smoke' },
+      { query: 'NOT smoke', token: 'NOT smoke' },
+      { query: 'OR', token: 'OR' },
+      { query: 'wildfire NOT', token: 'NOT' },
+      { query: 'wildfire OR', token: 'OR' },
+      { query: 'OR wildfire', token: 'OR' },
+      { query: 'wildfire OR -smoke', token: 'OR' },
+      { query: 'wildfire (-smoke)', token: '-smoke' },
+    ])(
+      'rejects $query as invalid_query naming $token, before MATCH runs',
+      async ({ query, token }) => {
+        const match = vi.spyOn(service.mirrorInstance, 'query');
+        const rejection = service.search({ query, limit: 20, offset: 0 }, createMockContext());
+        await expect(rejection).rejects.toMatchObject({
+          code: JsonRpcErrorCode.ValidationError,
+          data: { reason: 'invalid_query', retryable: false },
+        });
+        const error = (await rejection.catch((e: unknown) => e)) as McpError;
+        expect(error.message).toContain(token);
+        expect(error.data).not.toHaveProperty('field');
+        expect(match).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each([
+      ['NUL', '\u0000'],
+      ['a C0 control', '\u0001'],
+      ['a unit separator', '\u001f'],
+      ['DEL', '\u007f'],
+      ['a C1 control', '\u0085'],
+      ['a lone high surrogate', '\ud800'],
+      ['a lone low surrogate', '\udc00'],
+      ['a line separator', ' '],
+    ])('reads %s between words as a separator', async (_label, separator) => {
+      expect(await numbers(`wildfire${separator}smoke`)).toEqual([1, 5, 8]);
+      expect(await numbers(`"smoke${separator}exposure"`)).toEqual([1, 5]);
+    });
+
+    it('keeps a surrogate pair inside its word', async () => {
+      /** U+20000, a letter outside the BMP: one token with the word, so nothing matches. */
+      expect(await numbers('wildfire𠀀')).toEqual([]);
+      expect(await numbers('wildfire 𠀀 smoke')).toEqual([]);
+      expect(await numbers('wildfire 🔥 smoke')).toEqual([1, 5, 8]);
+    });
+
+    /** `outcome` of one search: undefined when it resolved or failed `invalid_query`, else what it threw. */
+    async function outcome(query: string): Promise<string | undefined> {
+      try {
+        await service.search({ query, limit: 5, offset: 0 }, createMockContext());
+        return undefined;
+      } catch (error) {
+        const failure = error as McpError;
+        if (
+          failure.code === JsonRpcErrorCode.ValidationError &&
+          failure.data?.reason === 'invalid_query'
+        ) {
+          return undefined;
+        }
+        return `${JSON.stringify(query)} → ${failure.name}: ${failure.message}`;
+      }
+    }
+
+    /** Mulberry32 — a seeded generator, so a failing input reproduces from the seed. */
+    function seeded(seed: number): () => number {
+      let state = seed >>> 0;
+      return () => {
+        state = (state + 0x6d2b79f5) >>> 0;
+        let t = Math.imul(state ^ (state >>> 15), 1 | state);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return ((t ^ (t >>> 14)) >>> 0) / 4_294_967_296;
+      };
+    }
+
+    /** Pieces the generated queries are built from: terms, operators, FTS5 syntax, Unicode, and controls. */
+    const PIECES = [
+      ...'wildfire smoke drought exposure wild or not and AND OR NOT NEAR NEAR( title: summary: {title} : ^ + - -- * ( ) " "" [ ] { } , . & § \' \\ / @ # café 半導体 ß ١٢٣ 501(c)(3) export-control wild* -smoke -( (- COVID-19'.split(
+        ' ',
+      ),
+      ...'"smoke exposure"| |  |\t|\n|\r\n|\u0000|\u0001|\u001f|\u007f|\u0085| |​| |﻿|\ud800|\udfff|🔥|x́|'.split(
+        '|',
+      ),
+    ];
+
+    /** Inputs at the edges: empty, operator-only, quote and parenthesis runs, and long queries. */
+    const EDGES = [
+      ...'| |NOT|AND|OR|NOT NOT|NOT (|()|(())|-()|-""|""*|*|**|wild**|"wild"*|{title}: wildfire|wildfire:|NEAR("wildfire" "smoke", 2)|wildfire NOT "" smoke|wildfire OR ()|(wildfire) OR (-smoke)|NOT -smoke wildfire|wildfire NOT -(smoke|-(wildfire'.split(
+        '|',
+      ),
+      `${'wildfire OR '.repeat(2_000)}smoke`,
+      `${'-x '.repeat(2_000)}wildfire`,
+      'a '.repeat(20_000),
+      '('.repeat(50_000),
+      ')'.repeat(50_000),
+      '"'.repeat(50_001),
+      '"'.repeat(50_000),
+      '-('.repeat(20_000),
+      `${'\u0000'.repeat(1_000)}wildfire`,
+      `${'('.repeat(10)}wildfire${')'.repeat(10)}`,
+      `${'('.repeat(11)}wildfire${')'.repeat(11)}`,
+      `${'(a '.repeat(10_000)}wildfire${')'.repeat(10_000)}`,
+    ];
+
+    it('translates every input or fails invalid_query, never reaching SQLite as an FTS5 error (#40)', async () => {
+      const random = seeded(116);
+      const pick = () => PIECES[Math.floor(random() * PIECES.length)] as string;
+      const generated = Array.from({ length: 3_000 }, () =>
+        Array.from({ length: Math.floor(random() * 24) }, () =>
+          random() < 0.1 ? String.fromCharCode(Math.floor(random() * 0x10000)) : pick(),
+        ).join(random() < 0.5 ? ' ' : ''),
+      );
+      const failures: string[] = [];
+      for (const query of [...PIECES, ...EDGES, ...generated]) {
+        const failure = await outcome(query);
+        if (failure) failures.push(failure);
+      }
+      expect(failures).toEqual([]);
+    }, 60_000);
+
+    /** Building blocks of the long chains: terms, phrases, prefixes, exclusions, and small groups. */
+    const LINKS = [
+      'wildfire',
+      'smoke',
+      '"smoke exposure"',
+      'wild*',
+      '-heat',
+      'NOT heat',
+      '(drought OR smoke)',
+      '(wildfire -heat)',
+      '-(heat flood)',
+      'café',
+    ];
+
+    it('translates long chains of every joiner or fails invalid_query, never reaching SQLite as an FTS5 error', async () => {
+      const random = seeded(1_160);
+      const pick = <T>(items: readonly T[]) => items[Math.floor(random() * items.length)] as T;
+      const terms = (count: number, term: (i: number) => string) =>
+        Array.from({ length: count }, (_, i) => term(i));
+      const generated = Array.from({ length: 16 }, () => {
+        const fixed = pick([' ', ' AND ', ' OR ']);
+        const mixed = random() < 0.5;
+        let query = 'wildfire';
+        for (let i = 200 + Math.floor(random() * 800); i > 0; i--) {
+          query += `${mixed ? pick([' ', ' AND ', ' OR ']) : fixed}${random() < 0.3 ? `w${i}` : pick(LINKS)}`;
+        }
+        return query;
+      });
+      /** Each runs past FTS5's expression depth limit (256), so a chain translated as nested operators rather than one flat one would fail. */
+      const chains = [
+        terms(1_000, (i) => `w${i}`).join(' '),
+        `${terms(1_000, (i) => `w${i}`).join(' OR ')} OR wildfire`,
+        terms(1_000, (i) => `"a${i} b${i}"`).join(' '),
+        terms(1_000, (i) => `p${i}*`).join(' OR '),
+        `wildfire ${terms(1_000, (i) => `-x${i}`).join(' ')}`,
+        `wildfire ${terms(1_000, (i) => `NOT x${i}`).join(' ')}`,
+        terms(500, (i) => `(wildfire -x${i})`).join(' '),
+        terms(500, (i) => `(a${i} b${i})`).join(' OR '),
+        ...generated,
+      ];
+      const failures: string[] = [];
+      for (const query of chains) {
+        const failure = await outcome(query);
+        if (failure) failures.push(failure.slice(0, 300));
+      }
+      expect(failures).toEqual([]);
+      expect(await numbers(`${terms(1_000, () => 'wildfire').join(' ')} -smoke`)).toEqual([
+        2, 4, 6,
+      ]);
+    }, 120_000);
+
+    it('answers nesting that leaves the result unchanged at any depth, as the keyword translation did', async () => {
+      expect(await numbers(`${'('.repeat(12)}wildfire${')'.repeat(12)}`)).toEqual([
+        1, 2, 4, 5, 6, 8,
+      ]);
+      const twelve =
+        'wildfire (smoke (crop (insurance (act (covers (crops (damaged (drought (flood (losses (exposure (cover))))))))))))';
+      expect(await numbers(twelve)).toEqual([1]);
+      expect(await numbers(twelve)).toEqual(await numbers(twelve.replace(/[()]/g, '')));
+      expect(await numbers(`${'('.repeat(5_000)}drought${')'.repeat(5_000)}`)).toEqual([1, 3, 4]);
+      expect(await numbers(`wildfire -${'('.repeat(20)}smoke exposure${')'.repeat(20)}`)).toEqual(
+        await numbers('wildfire -(smoke exposure)'),
+      );
+    });
+
+    /** `template` with `C` replaced by the next level, `depth` times, around a group that holds OR. */
+    function nest(depth: number, template: string): string {
+      let query = 'wildfire OR drought';
+      for (let level = 0; level < depth; level++) query = template.replace('C', `(${query})`);
+      return query;
+    }
+
+    it.each([
+      'C OR a',
+      'a OR b C',
+      'a OR b c C -x',
+      'a b OR c C -x',
+      'a OR b OR c -x -C',
+      'a OR b -C',
+      'a -x -y C',
+      'a OR ((C))',
+      'a OR (b C)',
+    ])('runs %o nested 10 counted levels deep and rejects an 11th', async (template) => {
+      const deepest = await service.search(
+        { query: nest(10, template), limit: 5, offset: 0 },
+        createMockContext(),
+      );
+      expect(deepest.total).toBeGreaterThanOrEqual(0);
+      await expect(
+        service.search({ query: nest(11, template), limit: 5, offset: 0 }, createMockContext()),
+      ).rejects.toMatchObject({
+        data: { reason: 'invalid_query' },
+        message:
+          'The query nests groups that hold OR or an exclusion, or are excluded, more than 10 levels deep. Flatten some of those groups.',
+      });
+    });
   });
 
   it("requests every summaries page from its congress's first day, with no end, on init and refresh", async () => {
@@ -787,6 +1190,464 @@ describe('CongressMirrorService', () => {
 
       await openService([117]);
       expect(await service.mirroredCongresses()).toEqual([118, 119]);
+    });
+  });
+
+  /**
+   * The walk through the real `CongressApiService` over a stubbed `fetch`, where
+   * one named request answers a 200 whose body stops halfway: until the attempt
+   * aborts (a stall), or for 20 s. Congress 119 holds 900 bills, 150 a day over
+   * 2025-03-03..08; 118 holds 300, 100 a day over 2024-05-01..03. Runs are driven
+   * on a fake clock one second at a time, with a real macrotask between steps for
+   * the stream and SQLite work.
+   */
+  describe('resumable bill walk over the real service (#106)', () => {
+    const SUMMARIES_119 = ['summaries/119 offset 0', 'summaries/119 offset 250'];
+    const WALK_118 = [
+      'summaries/118 offset 0',
+      'bill/118 after 2022-12-31T23:59:59Z',
+      'bill/118 after 2024-05-02T23:59:59Z',
+    ];
+    /** An uninterrupted init: 6 + 2 bill pages, 1,200 bills. */
+    const INIT_REQUESTS = [
+      ...SUMMARIES_119,
+      'bill/119 after 2024-12-31T23:59:59Z',
+      'bill/119 after 2025-03-03T23:59:59Z',
+      'bill/119 after 2025-03-04T23:59:59Z',
+      'bill/119 after 2025-03-05T23:59:59Z',
+      'bill/119 after 2025-03-06T23:59:59Z',
+      'bill/119 after 2025-03-07T23:59:59Z',
+      ...WALK_118,
+    ];
+    const INIT_CHECKPOINT = '2025-03-08|119,118';
+    /** An uninterrupted refresh after `moveBills`. */
+    const REFRESH_REQUESTS = [
+      ...SUMMARIES_119,
+      'bill/119 after 2025-03-07T23:59:59Z',
+      'bill/119 after 2025-03-31T23:59:59Z',
+      'bill/119 after 2025-04-01T23:59:59Z',
+      'bill/119 after 2025-04-02T23:59:59Z',
+      'bill/119 after 2025-04-03T23:59:59Z',
+      'summaries/118 offset 0',
+      'bill/118 after 2025-03-07T23:59:59Z',
+    ];
+
+    /** The upstream's data, read on every request, so a test can edit it between runs. */
+    let bills: FakeBill[];
+    let summaries: Row[];
+    /** The current run's requests, in order. */
+    let requests: string[];
+    /** The request answered with a half body: stalled until abort, or paused `pauseMs`. */
+    let slow: { pauseMs?: number; request: string } | undefined;
+
+    /** `count` bills from `firstNumber`, `perDay` a day from `firstDay`, one a minute from 00:00:00Z. */
+    const daily = (
+      congress: number,
+      count: number,
+      firstNumber: number,
+      perDay: number,
+      firstDay: string,
+    ): FakeBill[] =>
+      fakeBills(congress, count, firstNumber, (i) =>
+        plusSeconds(`${firstDay}T00:00:00Z`, Math.floor(i / perDay) * 86_400 + (i % perDay) * 60),
+      );
+
+    /** A CRS summary for every `every`-th bill of `list`. */
+    const summariesOf = (list: FakeBill[], every: number): Row[] =>
+      list
+        .filter((_, i) => i % every === 0)
+        .map((bill) => ({
+          bill: { congress: bill.congress, type: bill.type, number: bill.number },
+          text: `<p>Summary of bill ${bill.number}.</p>`,
+          updateDate: '2025-03-10T00:00:00Z',
+        }));
+
+    /** `next` while rows remain past this page, as Congress.gov's pagination carries it. */
+    const pagination = (url: URL, count: number, offset: number, limit: number) => ({
+      count,
+      ...(offset + limit < count
+        ? { next: `${url.origin}${url.pathname}?offset=${offset + limit}` }
+        : {}),
+    });
+
+    /**
+     * api.congress.gov over `bills` and `summaries`, recording each request as
+     * `bill/119 after <from>[ before <to>]` or `summaries/119 offset <n>`. The
+     * summaries list holds every summary updated since `fromDateTime`, newest first.
+     */
+    function upstream(url: string | URL, init?: RequestInit): Promise<Response> {
+      const parsed = new URL(String(url));
+      const query = parsed.searchParams;
+      const [, , resource, segment] = parsed.pathname.split('/');
+      const congress = Number(segment);
+      const offset = Number(query.get('offset') ?? 0);
+      const limit = Number(query.get('limit') ?? 20);
+      let request: string;
+      let body: Record<string, unknown>;
+      if (resource === 'bill') {
+        const from = query.get('fromDateTime') ?? undefined;
+        const to = query.get('toDateTime') ?? undefined;
+        request = `bill/${congress} after ${from}${to ? ` before ${to}` : ''}${offset ? ` offset ${offset}` : ''}`;
+        const page = listBillsPage(bills, {
+          congress,
+          sort: query.get('sort') ?? undefined,
+          limit,
+          offset,
+          fromDateTime: from,
+          toDateTime: to,
+        });
+        body = {
+          bills: page.data,
+          pagination: pagination(parsed, page.pagination.count, offset, limit),
+        };
+      } else if (resource === 'summaries') {
+        request = `summaries/${congress} offset ${offset}`;
+        const from = query.get('fromDateTime');
+        const rows = from
+          ? summaries
+              .filter((s) => (s.bill as Row).congress === congress && String(s.updateDate) >= from)
+              .sort((a, b) => String(b.updateDate).localeCompare(String(a.updateDate)))
+          : [];
+        body = {
+          summaries: rows.slice(offset, offset + limit),
+          pagination: pagination(parsed, rows.length, offset, limit),
+        };
+      } else {
+        return Promise.reject(new Error(`unexpected request ${parsed.pathname}`));
+      }
+      requests.push(request);
+      return Promise.resolve(
+        slow?.request === request
+          ? halvedBodyResponse(JSON.stringify(body), init?.signal, slow.pauseMs)
+          : jsonResponse(body),
+      );
+    }
+
+    /** Reopen the store over `congresses` through a real `CongressApiService`, opened on the real clock. */
+    async function openReal(congresses: number[]): Promise<void> {
+      vi.useRealTimers();
+      await service.mirrorInstance.close();
+      const congressApi = new CongressApiService();
+      service = new CongressMirrorService({
+        mirrorPath: dbPath,
+        congresses,
+        getApi: () => congressApi,
+      });
+      await service.mirrorInstance.status();
+      useFakeClock();
+    }
+
+    /** Run one sync to its end, a fake second at a time, with the requests it made. */
+    async function runToEnd(mode: 'init' | 'refresh') {
+      requests = [];
+      const startedAt = Date.now();
+      const run = track(
+        service.mirrorInstance.runSync({ mode, signal: new AbortController().signal }),
+      );
+      for (let step = 0; run.state.settledAt === undefined && step < 600; step++) {
+        await vi.advanceTimersByTimeAsync(1_000);
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      expect(run.state.settledAt, `the ${mode} settled`).toBeDefined();
+      return {
+        ...run.state,
+        elapsedMs: (run.state.settledAt as number) - startedAt,
+        requests,
+      };
+    }
+
+    /** The run failure a stalled request ends in: three 30 s attempts. */
+    function expectStalled(error: unknown): void {
+      expect(error).toMatchObject({
+        code: JsonRpcErrorCode.Timeout,
+        data: { reason: 'upstream_timeout', retryAttempts: 3 },
+      });
+      expect((error as McpError).message).toBe(
+        'Congress.gov did not complete the request within the 30000-millisecond deadline. (failed after 3 attempts)',
+      );
+    }
+
+    /** Every stored bill id, sorted, and how many rows carry a summary. */
+    async function stored(): Promise<{ ids: string[]; summarized: number }> {
+      const db = await service.mirrorInstance.raw();
+      const rows = db
+        .prepare<{ billId: string; summary: string | null }>('SELECT billId, summary FROM bills')
+        .all();
+      return {
+        ids: rows.map((row) => row.billId).sort(),
+        summarized: rows.filter((row) => row.summary !== null).length,
+      };
+    }
+
+    const idsOf = (list: FakeBill[]) =>
+      list.map((bill) => `${bill.congress}/${bill.type}/${bill.number}`).sort();
+
+    /** After an init: 119's bills 10000–10599 move to 2025-04-01..04 (150 a day), 118's 20000–20049 to 2025-04-02. */
+    function moveBills(): FakeBill[] {
+      const moved: FakeBill[] = [];
+      for (const bill of bills) {
+        const n = Number(bill.number);
+        if (bill.congress === 119 && n < 10_600) {
+          const i = n - 10_000;
+          bill.updatedAt = plusSeconds(
+            '2025-04-01T00:00:00Z',
+            Math.floor(i / 150) * 86_400 + (i % 150) * 60,
+          );
+        } else if (bill.congress === 118 && n < 20_050) {
+          bill.updatedAt = plusSeconds('2025-04-02T06:00:00Z', (n - 20_000) * 60);
+        } else {
+          continue;
+        }
+        bill.title = `Moved ${n}`;
+        moved.push(bill);
+      }
+      return moved;
+    }
+
+    beforeEach(async () => {
+      const congress119 = daily(119, 900, 10_000, 150, '2025-03-03');
+      const congress118 = daily(118, 300, 20_000, 100, '2024-05-01');
+      bills = [...congress119, ...congress118];
+      summaries = [...summariesOf(congress119, 3), ...summariesOf(congress118, 10)];
+      requests = [];
+      slow = undefined;
+      vi.stubGlobal('fetch', upstream);
+      await openReal([119, 118]);
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    });
+
+    it.each([
+      { stalled: 'bill/119 after 2024-12-31T23:59:59Z', committed: 0, resumed: INIT_REQUESTS },
+      {
+        stalled: 'bill/119 after 2025-03-05T23:59:59Z',
+        committed: 300,
+        resumed: [
+          ...SUMMARIES_119,
+          'bill/119 after 2025-03-04T23:59:59Z',
+          'bill/119 after 2025-03-05T23:59:59Z',
+          'bill/119 after 2025-03-06T23:59:59Z',
+          'bill/119 after 2025-03-07T23:59:59Z',
+          ...WALK_118,
+        ],
+      },
+      {
+        stalled: 'summaries/118 offset 0',
+        committed: 750,
+        resumed: [...SUMMARIES_119, 'bill/119 after 2025-03-07T23:59:59Z', ...WALK_118],
+      },
+      {
+        stalled: 'bill/118 after 2022-12-31T23:59:59Z',
+        committed: 750,
+        resumed: [...SUMMARIES_119, 'bill/119 after 2025-03-07T23:59:59Z', ...WALK_118],
+      },
+      { stalled: 'bill/118 after 2024-05-02T23:59:59Z', committed: 900, resumed: WALK_118 },
+    ])(
+      'resumes an init stalled at $stalled without re-requesting a committed page',
+      async ({ stalled, committed, resumed }) => {
+        slow = { request: stalled };
+        const failed = await runToEnd('init');
+        expectStalled(failed.error);
+        expect(failed.requests).toEqual([
+          ...INIT_REQUESTS.slice(0, INIT_REQUESTS.indexOf(stalled)),
+          stalled,
+          stalled,
+          stalled,
+        ]);
+        expect((await stored()).ids).toHaveLength(committed);
+        const afterFailure = await service.mirrorInstance.status();
+        expect(afterFailure).toMatchObject({ status: 'error', ready: false });
+        expect(afterFailure.checkpoint).toBeUndefined();
+
+        slow = undefined;
+        const run = await runToEnd('init');
+        expect(run.error).toBeUndefined();
+        expect(run.requests).toEqual(resumed);
+        expect(run.value?.recordsApplied).toBe(1200 - committed);
+        expect(await service.mirrorInstance.status()).toMatchObject({
+          status: 'complete',
+          ready: true,
+          checkpoint: INIT_CHECKPOINT,
+          total: 1200,
+        });
+        expect(await stored()).toEqual({ ids: idsOf(bills), summarized: 330 });
+      },
+    );
+
+    it('keeps the stored checkpoint when a refresh stalls partway, and its resume re-requests no committed page', async () => {
+      expect((await runToEnd('init')).requests).toEqual(INIT_REQUESTS);
+      const moved = moveBills();
+      const stalled = 'bill/119 after 2025-04-02T23:59:59Z';
+      slow = { request: stalled };
+      const failed = await runToEnd('refresh');
+      expectStalled(failed.error);
+      expect(failed.requests).toEqual([
+        ...REFRESH_REQUESTS.slice(0, REFRESH_REQUESTS.indexOf(stalled)),
+        stalled,
+        stalled,
+        stalled,
+      ]);
+      expect(await service.mirrorInstance.status()).toMatchObject({
+        status: 'error',
+        ready: true,
+        checkpoint: INIT_CHECKPOINT,
+      });
+
+      slow = undefined;
+      const run = await runToEnd('refresh');
+      expect(run.error).toBeUndefined();
+      /** The 03-08 and 04-01 pages were committed before the stall; the 04-02 page was held. */
+      expect(run.requests).toEqual([
+        ...SUMMARIES_119,
+        'bill/119 after 2025-04-01T23:59:59Z',
+        'bill/119 after 2025-04-02T23:59:59Z',
+        'bill/119 after 2025-04-03T23:59:59Z',
+        'summaries/118 offset 0',
+        'bill/118 after 2025-03-07T23:59:59Z',
+      ]);
+      /** 119's 04-02, 04-03, and 04-04 bills and 118's 50 moved ones. */
+      expect(run.value?.recordsApplied).toBe(500);
+      expect(await service.mirrorInstance.status()).toMatchObject({
+        status: 'complete',
+        checkpoint: '2025-04-04|119,118',
+        total: 1200,
+      });
+      const titles = await service.mirrorInstance.getByIds(idsOf(moved));
+      expect(titles.filter((row) => !String(row.title).startsWith('Moved '))).toEqual([]);
+      expect(titles).toHaveLength(650);
+    });
+
+    it.each([
+      { mode: 'init' as const, paused: 'bill/119 after 2025-03-04T23:59:59Z' },
+      { mode: 'refresh' as const, paused: 'bill/119 after 2025-04-01T23:59:59Z' },
+    ])(
+      'completes the $mode in one run when a page pauses 20 s mid-body',
+      async ({ mode, paused }) => {
+        if (mode === 'refresh') {
+          await runToEnd('init');
+          moveBills();
+        }
+        slow = { request: paused, pauseMs: 20_000 };
+        const run = await runToEnd(mode);
+
+        expect(run.error).toBeUndefined();
+        expect(run.requests).toEqual(mode === 'init' ? INIT_REQUESTS : REFRESH_REQUESTS);
+        expect(run.elapsedMs).toBeGreaterThanOrEqual(20_000);
+        expect((await service.mirrorInstance.status()).checkpoint).toBe(
+          mode === 'init' ? INIT_CHECKPOINT : '2025-04-04|119,118',
+        );
+      },
+    );
+
+    it.each([
+      { form: 'not JSON', cursor: 'not json' },
+      {
+        form: 'another version',
+        cursor: JSON.stringify({
+          v: 2,
+          startedOn: '2025-03-09',
+          through: '2025-03-08',
+          done: [119],
+          walking: { congress: 118, day: '2024-05-03' },
+        }),
+      },
+    ])('walks an init from the start when the stored cursor is $form', async ({ cursor }) => {
+      await service.mirrorInstance.store.writeState({ status: 'error', mode: 'init', cursor });
+      const run = await runToEnd('init');
+
+      expect(run.error).toBeUndefined();
+      expect(run.requests).toEqual(INIT_REQUESTS);
+      expect(run.value?.recordsApplied).toBe(1200);
+      expect((await service.mirrorInstance.status()).checkpoint).toBe(INIT_CHECKPOINT);
+    });
+
+    it('walks only the configured congresses when the cursor names one no longer configured', async () => {
+      slow = { request: 'bill/119 after 2025-03-05T23:59:59Z' };
+      expectStalled((await runToEnd('init')).error);
+
+      slow = undefined;
+      await openReal([118]);
+      const run = await runToEnd('init');
+      expect(run.error).toBeUndefined();
+      expect(run.requests).toEqual(WALK_118);
+      expect(run.value?.recordsApplied).toBe(300);
+      /** The highest list date the cursor carried, from the 119 pages committed before the stall. */
+      expect((await service.mirrorInstance.status()).checkpoint).toBe('2025-03-04|118');
+    });
+
+    it('caps the checkpoint date at the day the interrupted run began, so the next refresh re-reads a congress the resume skipped', async () => {
+      vi.setSystemTime(new Date('2025-03-09T12:00:00Z'));
+      slow = { request: 'bill/118 after 2024-05-02T23:59:59Z' };
+      expectStalled((await runToEnd('init')).error);
+
+      /** After the run began, a 119 bill (walked already) updates on 03-10 and a 118 bill (still to walk) on 03-11. */
+      const hr10000 = bills.find((bill) => bill.number === 10_000) as FakeBill;
+      hr10000.updatedAt = '2025-03-10T08:00:00Z';
+      hr10000.title = 'Bumped 10000';
+      (bills.find((bill) => bill.number === 20_000) as FakeBill).updatedAt = '2025-03-11T09:00:00Z';
+      vi.setSystemTime(new Date('2025-03-11T12:00:00Z'));
+      slow = undefined;
+      const resumed = await runToEnd('init');
+      expect(resumed.requests).toEqual(WALK_118);
+      expect((await service.mirrorInstance.status()).checkpoint).toBe('2025-03-09|119,118');
+
+      const refresh = await runToEnd('refresh');
+      expect(refresh.requests).toEqual([
+        ...SUMMARIES_119,
+        'bill/119 after 2025-03-08T23:59:59Z',
+        'summaries/118 offset 0',
+        'bill/118 after 2025-03-08T23:59:59Z',
+      ]);
+      expect((await service.mirrorInstance.getByIds(['119/hr/10000']))[0]?.title).toBe(
+        'Bumped 10000',
+      );
+      expect((await service.mirrorInstance.status()).checkpoint).toBe('2025-03-11|119,118');
+    });
+
+    it('reads a day walked in halved windows again when the run resumes inside it', async () => {
+      bills = [
+        ...fakeBills(119, 150, 30_000, (i) => plusSeconds('2025-03-03T00:00:00Z', i * 60)),
+        ...fakeBills(119, 150, 30_150, (i) => plusSeconds('2025-03-03T12:00:00Z', i * 60)),
+        ...fakeBills(119, 100, 30_300, (i) => plusSeconds('2025-03-04T00:00:00Z', i * 60)),
+      ];
+      summaries = summariesOf(bills, 3);
+      await openReal([119]);
+      const day = [
+        'bill/119 after 2025-03-02T23:59:59Z before 2025-03-04T00:00:00Z',
+        'bill/119 after 2025-03-02T23:59:59Z before 2025-03-03T12:00:00Z',
+        'bill/119 after 2025-03-03T11:59:59Z before 2025-03-04T00:00:00Z',
+      ];
+      const stalled = 'bill/119 after 2025-03-03T23:59:59Z';
+      slow = { request: stalled };
+      const failed = await runToEnd('init');
+      expectStalled(failed.error);
+      expect(failed.requests).toEqual([
+        'summaries/119 offset 0',
+        'bill/119 after 2024-12-31T23:59:59Z',
+        ...day,
+        stalled,
+        stalled,
+        stalled,
+      ]);
+      /** The morning window was committed; the afternoon one was held for the next page. */
+      expect((await stored()).ids).toHaveLength(150);
+
+      slow = undefined;
+      const run = await runToEnd('init');
+      expect(run.error).toBeUndefined();
+      /** The cursor holds the day, not a window inside it: the whole day is read again. */
+      expect(run.requests).toEqual([
+        'summaries/119 offset 0',
+        'bill/119 after 2025-03-02T23:59:59Z',
+        ...day,
+        stalled,
+      ]);
+      expect(run.value?.recordsApplied).toBe(400);
+      expect((await service.mirrorInstance.status()).checkpoint).toBe('2025-03-04|119');
+      expect(await stored()).toEqual({ ids: idsOf(bills), summarized: 134 });
     });
   });
 });

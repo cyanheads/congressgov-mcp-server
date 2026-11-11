@@ -5,7 +5,7 @@
  *
  * MCP SDK clients give up on a request after 60 seconds by default. A call can
  * chain several upstream requests — a lookup before a document fetch, a roster
- * paged four times before the request it resolves, a first page and then a
+ * paged two deep before the request it resolves, a first page and then a
  * parallel stage — and each request runs its own retry ladder, so per-attempt
  * timeouts bound neither the ladder nor the chain: a stalled upstream could run
  * a call past the client's patience, which then sees its own timeout instead of

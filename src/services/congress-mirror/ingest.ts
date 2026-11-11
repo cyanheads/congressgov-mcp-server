@@ -27,9 +27,16 @@
  * to it. It is persisted only once the whole walk finishes. A refresh re-walks each
  * covered congress from the start of the checkpoint day and any other configured
  * congress from its own start; the upsert makes the overlap harmless.
+ *
+ * Every page also carries a cursor (see `WalkCursorSchema`): where the walk stood
+ * after that page's rows. The framework stores it with each page, so a run of the
+ * same mode that follows a failed or stopped one resumes there instead of starting
+ * over: it skips the congresses walked to their end and continues the one in
+ * progress from its walk day.
  * @module services/congress-mirror/ingest
  */
 
+import { z } from '@cyanheads/mcp-ts-core';
 import type {
   MirrorRow,
   SyncContext,
@@ -51,6 +58,28 @@ const LIST_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 /** `YYYY-MM-DD|ccc,ccc` — see `formatCheckpoint`. */
 const CHECKPOINT = /^(\d{4}-\d{2}-\d{2})\|(\d{3}(?:,\d{3})*)$/;
+
+/**
+ * The resume cursor, stored as JSON: where the walk stood after the rows of the
+ * page it rides on. A day is never later than a list date the walk has seen, so a
+ * bill updated after the run stopped always sorts past the position it resumes from.
+ */
+const WalkCursorSchema = z.object({
+  /** Bumped when the shape changes; a cursor of another version is not resumed. */
+  v: z.literal(1),
+  /** UTC date the interrupted run began. The checkpoint date never passes it. */
+  startedOn: z.string().regex(LIST_DATE),
+  /** Highest list date the walks had seen. */
+  through: z.string().regex(LIST_DATE),
+  /** Congresses whose bill walk reached the end of their list. */
+  done: z.array(z.number().int().positive()),
+  /** The congress walk in progress and the UTC day it resumes from; absent between congresses. */
+  walking: z
+    .object({ congress: z.number().int().positive(), day: z.string().regex(LIST_DATE) })
+    .optional(),
+});
+
+type WalkCursor = z.infer<typeof WalkCursorSchema>;
 
 /** The two service methods the ingester needs — injectable so tests can mock the API. */
 export type MirrorApi = Pick<CongressApiService, 'listBills' | 'listSummaries'>;
@@ -145,12 +174,51 @@ function parseCheckpoint(checkpoint: string): { congresses: number[]; date: stri
   return { date: match[1], congresses: match[2].split(',').map(Number) };
 }
 
+function formatCursor({ startedOn, through, done, walking }: Omit<WalkCursor, 'v'>): string {
+  const cursor: WalkCursor = { v: 1, startedOn, through, done, ...(walking ? { walking } : {}) };
+  return JSON.stringify(cursor);
+}
+
+/**
+ * The cursor an interrupted run of this mode stored. One this version cannot read
+ * — malformed, or another version's shape — is dropped and the walk starts as a
+ * fresh run of its mode: the framework hands every later run of the mode the same
+ * cursor, so failing on it would fail them all.
+ */
+function readCursor(cursor: string | undefined): WalkCursor | undefined {
+  if (cursor === undefined) return;
+  let json: unknown;
+  try {
+    json = JSON.parse(cursor);
+  } catch {
+    // Not JSON: the schema check below rejects it with every other unreadable form.
+  }
+  const parsed = WalkCursorSchema.safeParse(json);
+  if (parsed.success) return parsed.data;
+  logger.warning(
+    'The stored bill mirror cursor is not a form this version reads, so the walk starts as a fresh run of its mode instead of resuming.',
+  );
+  return;
+}
+
+/** Today's UTC date, `YYYY-MM-DD`. */
+function utcToday(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
 /**
  * One bill-list request: offset 0, a full page, oldest first, between exclusive
  * whole-second bounds (`to` omitted for an open end). Answers with that page's
  * rows and the window's total count.
  */
 type ListWindow = (from: number, to?: number) => Promise<{ count: number; rows: ApiRecord[] }>;
+
+/** One stretch of the bill walk: its rows, and the UTC day the walk resumes from after them. */
+interface WalkStep {
+  /** Absent once the list has been read to its end. */
+  next?: string;
+  rows: ApiRecord[];
+}
 
 /**
  * Walk a congress's bill list from the start of `startDay` to its end, yielding
@@ -166,28 +234,33 @@ type ListWindow = (from: number, to?: number) => Promise<{ count: number; rows: 
  *   start — so keep those and move the cursor to that date.
  * - A full page of one date walks that day as halved windows (`walkWindow`), then
  *   moves the cursor to the next day.
+ *
+ * Each step names the day a walk resumes from after its rows: the cursor day the
+ * next request starts from, or, inside a halved day, that day itself, so a resumed
+ * walk reads the whole day again rather than trusting a window position.
  */
 async function* walkBills(
   list: ListWindow,
   congress: number,
   startDay: string,
   signal: AbortSignal,
-): AsyncGenerator<ApiRecord[]> {
+): AsyncGenerator<WalkStep> {
   let cursor = dayStart(startDay);
   while (!signal.aborted) {
     const { rows, count } = await list(cursor - 1);
     if (count <= PAGE_SIZE) {
-      yield rows;
+      yield { rows };
       return;
     }
     const first = listDate(rows[0]);
     const last = listDate(rows.at(-1));
     if (first === last) {
       const day = dayStart(last);
-      yield* walkWindow(list, congress, day - 1, day + DAY_SECONDS, signal);
+      const windows = walkWindow(list, congress, day - 1, day + DAY_SECONDS, signal);
+      for await (const windowRows of windows) yield { rows: windowRows, next: last };
       cursor = day + DAY_SECONDS;
     } else {
-      yield rows.filter((row) => listDate(row) < last);
+      yield { rows: rows.filter((row) => listDate(row) < last), next: last };
       cursor = dayStart(last);
     }
   }
@@ -302,7 +375,16 @@ function toBillRow(
  * past the unvisited updates of a later congress, and the next refresh would skip
  * them. It names the configured congresses, plus those the stored checkpoint
  * covered when its date has not moved, so a congress added to the configuration
- * is walked from its start until a run completes with it.
+ * is walked from its start until a run completes with it. Its date is the highest
+ * list date seen, but never later than the UTC day the run began: a resumed run
+ * skips the congresses walked before the interruption, and bills of theirs
+ * updated since must stay ahead of the next refresh.
+ *
+ * Each page carries the cursor of its own rows, read when the page was fetched.
+ * A run handed the cursor of an interrupted run of its mode skips the congresses
+ * that cursor lists as walked, rebuilds the summary map of the one in progress
+ * and walks it from its cursor day, and walks the rest as an uninterrupted run
+ * would.
  *
  * @param getApi - Accessor for the Congress API service (injectable for tests).
  * @param congresses - Congress numbers to mirror.
@@ -311,27 +393,46 @@ export function createCongressBillIngester(
   getApi: () => MirrorApi,
   congresses: number[],
 ): SyncGenerator {
-  return async function* sync({ mode, checkpoint, signal }: SyncContext): AsyncGenerator<SyncPage> {
+  return async function* sync({
+    mode,
+    cursor,
+    checkpoint,
+    signal,
+  }: SyncContext): AsyncGenerator<SyncPage> {
     const api = getApi();
     const stored = checkpoint === undefined ? undefined : parseCheckpoint(checkpoint);
+    const resumed = readCursor(cursor);
+    const startedOn = resumed?.startedOn ?? utcToday();
+    const done = new Set(resumed?.done);
     let through = stored?.date;
+    if (resumed && (through === undefined || resumed.through > through)) through = resumed.through;
     // Each page is yielded one fetch late, so the last one can carry the checkpoint.
-    let held: MirrorRow[] | undefined;
+    let held: { cursor: string; records: MirrorRow[] } | undefined;
     logger.info(
       `Congress bill mirror sync starting (mode=${mode}, congresses=${congresses.join(',')}${
         checkpoint ? `, checkpoint=${checkpoint}` : ''
       })`,
     );
+    if (resumed) {
+      const walking = resumed.walking;
+      logger.info(
+        `Resuming the interrupted ${mode} begun ${startedOn}: walked ${[...done].join(',') || 'none'}${
+          walking ? `; congress ${walking.congress} resumes from ${walking.day}` : ''
+        }`,
+      );
+    }
 
     for (const congress of congresses) {
       if (signal.aborted) return;
+      if (done.has(congress)) continue;
       const summaries = await buildSummaryMap(api, congress, signal);
       logger.info(`Congress ${congress}: ${summaries.size} summaries loaded`);
 
       const startDay =
-        mode === 'refresh' && stored?.congresses.includes(congress)
+        (resumed?.walking?.congress === congress ? resumed.walking.day : undefined) ??
+        (mode === 'refresh' && stored?.congresses.includes(congress)
           ? stored.date
-          : congressStartDay(congress);
+          : congressStartDay(congress));
       let requests = 0;
       const list: ListWindow = async (from, to) => {
         requests += 1;
@@ -346,7 +447,7 @@ export function createCongressBillIngester(
       };
 
       let billsMirrored = 0;
-      for await (const rows of walkBills(list, congress, startDay, signal)) {
+      for await (const { rows, next } of walkBills(list, congress, startDay, signal)) {
         const records: MirrorRow[] = [];
         for (const raw of rows) {
           const date = listDate(raw);
@@ -354,20 +455,39 @@ export function createCongressBillIngester(
           const record = toBillRow(raw, congress, summaries);
           if (record) records.push(record);
         }
-        if (records.length === 0) continue;
+        if (next === undefined) done.add(congress);
+        // No list row seen yet, so nothing is held and there is no position to keep.
+        if (through === undefined) continue;
+        const position = formatCursor({
+          startedOn,
+          through,
+          done: [...done],
+          ...(next === undefined ? {} : { walking: { congress, day: next } }),
+        });
+        if (records.length === 0) {
+          // Nothing lies between the held page's rows and this position.
+          if (held) held.cursor = position;
+          continue;
+        }
         billsMirrored += records.length;
-        if (held) yield { records: held };
-        held = records;
+        if (held) yield held;
+        held = { records, cursor: position };
       }
       logger.info(
         `Congress ${congress}: ${billsMirrored} bills mirrored from ${startDay} in ${requests} bill-list requests`,
       );
     }
     if (signal.aborted || through === undefined) return;
+    let date = through;
+    if (startedOn < date) date = startedOn;
     const coveredNow = new Set(congresses);
-    if (stored && through === stored.date) {
+    if (stored && date === stored.date) {
       for (const congress of stored.congresses) coveredNow.add(congress);
     }
-    yield { records: held ?? [], checkpoint: formatCheckpoint(through, coveredNow) };
+    yield {
+      records: held?.records ?? [],
+      checkpoint: formatCheckpoint(date, coveredNow),
+      cursor: formatCursor({ startedOn, through, done: [...done] }),
+    };
   };
 }
