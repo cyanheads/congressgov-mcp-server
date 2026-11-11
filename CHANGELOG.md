@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.10.1](changelog/0.10.x/0.10.1.md) — 2026-11-11
+
+Committee codes resolve from the House, Senate, and joint committee lists; congressgov_search_bills reads AND, OR, NOT, -word, phrase, prefix, and group syntax; CRS related materials page by limit and offset; and mirror init and refresh resume after an interruption.
+
 ## [0.10.0](changelog/0.10.x/0.10.0.md) — 2026-11-03 · ⚠️ Breaking
 
 Adds congressgov_amendment_lookup, CRS report content, committee report parts, roll call member filters, and Voteview-served Senate votes when senate.gov refuses the LIS feed. Breaking: list refuses unused identities; nomination, CRS, and committee inputs reject malformed forms.
